@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -9,7 +9,7 @@ use bytes::Bytes;
 use foci_tune::capture::Capture;
 use foci_tune::capture_read::read_capture;
 use foci_tune::live::{LiveState, TraceMode};
-use foci_tune::trace::{FrameSource, PumpEnd, pump_source};
+use foci_tune::trace::{FrameSource, PumpEnd, pump_source, serials_to_open};
 use tokio::sync::broadcast;
 
 const SERIAL: &str = "2600abcd";
@@ -88,7 +88,7 @@ fn metadata_then_two_control_states_fill_both_channels() {
 
     let board = &live.boards[SERIAL];
     assert_eq!(board.metadata.as_ref().unwrap().serial, SERIAL);
-    assert_eq!(board.trace_mode, TraceMode::Critical);
+    assert_eq!(board.trace_mode, TraceMode::Streaming);
     assert_eq!(board.protocol_version, Some(25));
     assert_eq!(board.channels[&0].velocity_p, 841);
     assert_eq!(board.channels[&1].velocity_p, 900);
@@ -284,4 +284,123 @@ fn capture_round_trips_through_the_capture_reader() {
         .collect();
     let expected: Vec<&[u8]> = frames.iter().map(Vec::as_slice).collect();
     assert_eq!(read_frames, expected);
+}
+
+fn critical_on(channel: u8, seq: u32, ts: u64) -> Vec<u8> {
+    frame(1, &[0u8; 88], channel, seq, ts)
+}
+
+#[test]
+fn cadence_is_per_channel_not_summed_across_channels() {
+    let mut live = LiveState::default();
+    let now = Instant::now();
+    live.ingest(SERIAL, &frame(5, &metadata_payload(1000), 0, 0, 0), now);
+
+    for k in 0..1000u32 {
+        let ts = 1_000_000 + u64::from(k) * 260_000;
+        live.ingest(SERIAL, &critical_on(0, k, ts), now);
+        live.ingest(SERIAL, &critical_on(1, k, ts + 1000), now);
+    }
+
+    let hz = live.boards[SERIAL].critical_hz_measured;
+    assert!((hz - 1000.0).abs() <= 1.0, "measured {hz}");
+}
+
+#[test]
+fn cadence_decays_to_zero_when_critical_frames_stop() {
+    let mut live = LiveState::default();
+    let now = Instant::now();
+    live.ingest(SERIAL, &frame(5, &metadata_payload(1000), 0, 0, 0), now);
+    for k in 0..1000u32 {
+        live.ingest(
+            SERIAL,
+            &critical(k, 1_000_000 + u64::from(k) * 260_000),
+            now,
+        );
+    }
+    assert!(live.boards[SERIAL].critical_hz_measured > 900.0);
+
+    let end = 1_000_000 + 999 * 260_000u64;
+    live.ingest(SERIAL, &frame(2, &[0u8; 16], 0, 1, end + 300_000_000), now);
+
+    assert_eq!(live.boards[SERIAL].critical_hz_measured, 0.0);
+}
+
+#[test]
+fn metadata_frame_clears_the_cadence_window() {
+    let mut live = LiveState::default();
+    let now = Instant::now();
+    live.ingest(SERIAL, &frame(5, &metadata_payload(1000), 0, 0, 0), now);
+    for k in 0..100u32 {
+        live.ingest(
+            SERIAL,
+            &critical(k, 1_000_000 + u64::from(k) * 260_000),
+            now,
+        );
+    }
+
+    live.ingest(
+        SERIAL,
+        &frame(5, &metadata_payload(0), 0, 1, 30_000_000),
+        now,
+    );
+
+    assert_eq!(live.boards[SERIAL].critical_hz_measured, 0.0);
+    assert_eq!(live.boards[SERIAL].trace_mode, TraceMode::Dormant);
+}
+
+#[test]
+fn critical_frames_without_metadata_leave_no_cadence() {
+    let mut live = LiveState::default();
+    let now = Instant::now();
+
+    for k in 0..5000u32 {
+        live.ingest(SERIAL, &critical(k, u64::from(k) * 260_000), now);
+    }
+
+    assert_eq!(live.boards[SERIAL].critical_hz_measured, 0.0);
+    live.ingest(SERIAL, &frame(5, &metadata_payload(1000), 0, 0, 0), now);
+    live.ingest(SERIAL, &critical(1, 1_000_000), now);
+    assert_eq!(live.boards[SERIAL].critical_hz_measured, 0.0);
+}
+
+#[test]
+fn boot_id_change_resets_trace_mode_to_unknown() {
+    let mut live = LiveState::default();
+    let now = Instant::now();
+    live.ingest(SERIAL, &frame(5, &metadata_payload(0), 0, 1, 1), now);
+    assert_eq!(live.boards[SERIAL].trace_mode, TraceMode::Dormant);
+    let mut rebooted = frame(10, &control_state_payload(6), 1, 1, 1);
+    rebooted[24..28].copy_from_slice(&99u32.to_le_bytes());
+
+    live.ingest(SERIAL, &rebooted, now);
+
+    assert_eq!(live.boards[SERIAL].trace_mode, TraceMode::Unknown);
+}
+
+#[test]
+fn capture_baseline_ignores_control_state_before_metadata() {
+    let path = temp_path("trace_capture_baseline.cap.zst");
+    let mut capture = Capture::start(&path, SERIAL).unwrap();
+    capture.push(&frame(10, &control_state_payload(111), 0, 1, 1));
+    capture.push(&frame(5, &metadata_payload(1000), 0, 2, 2));
+    capture.push(&frame(10, &control_state_payload(222), 0, 3, 3));
+    capture.push(&frame(10, &control_state_payload(333), 0, 4, 4));
+
+    let summary = capture.finish().unwrap();
+
+    assert_eq!(summary.frames, 4);
+    assert_eq!(summary.first_control_state.len(), 1);
+    assert_eq!(summary.first_control_state[&0].velocity_p, 222);
+}
+
+#[test]
+fn rescan_opens_every_candidate_not_already_active() {
+    let candidates: Vec<String> = ["A", "B", "C", "C"].map(String::from).to_vec();
+    let active: HashSet<String> = HashSet::from(["A".to_owned()]);
+
+    let wanted = serials_to_open(&candidates, &active);
+
+    assert_eq!(wanted, vec!["B".to_owned(), "C".to_owned()]);
+    assert!(serials_to_open(&candidates[..1], &active).is_empty());
 }

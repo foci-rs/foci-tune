@@ -25,6 +25,7 @@ tracing-subscriber = "0.3.23"
 rand = "0.10.3"
 futures-util = "0.3.34"
 bytes = "1.11.1"
+nusb = "0.2.3"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use foci_trace::protocol::FrameAssembler;
-use foci_trace::usb::{OpenTraceDevice, find_trace_devices};
+use foci_trace::usb::{
+    OpenTraceDevice, TRACE_INTERFACE_CLASS, TRACE_PRODUCT_ID, TRACE_VENDOR_ID, find_trace_devices,
+};
+use nusb::MaybeFuture;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
@@ -122,14 +125,23 @@ pub async fn run_trace_reader(
     let active: Arc<Mutex<HashSet<String>>> = Arc::default();
     let mut backoff = BACKOFF_START;
     while !stop.load(Ordering::Relaxed) {
-        let filter = scan_filter(&live, &active);
-        let found = match filter {
-            Some(filter) => tokio::task::spawn_blocking(move || find_trace_devices(&filter))
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r.map_err(|e| e.to_string())),
-            None => Ok(Vec::new()),
-        };
+        let active_now = active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let found = tokio::task::spawn_blocking(move || {
+            let wanted = serials_to_open(
+                &candidate_serials().map_err(|e| e.to_string())?,
+                &active_now,
+            );
+            if wanted.is_empty() {
+                return Ok(Vec::new());
+            }
+            find_trace_devices(&wanted).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
         match found {
             Ok(devices) if !devices.is_empty() => {
                 backoff = BACKOFF_START;
@@ -147,22 +159,31 @@ pub async fn run_trace_reader(
     }
 }
 
-/// Serial filter for the next scan, `None` when there is nothing to look for.
-///
-/// Opening claims the interface, so a scan must not touch boards already being read:
-/// with none active everything is scanned, otherwise only boards known and closed.
-fn scan_filter(live: &Mutex<LiveState>, active: &Mutex<HashSet<String>>) -> Option<Vec<String>> {
-    let active = active.lock().unwrap_or_else(PoisonError::into_inner);
-    if active.is_empty() {
-        return Some(Vec::new());
-    }
-    let closed: Vec<String> = lock(live)
-        .boards
+/// Serials to open on a rescan: every candidate not currently being read, so a board that
+/// was lost and a board never seen before are treated alike.
+pub fn serials_to_open(candidates: &[String], active: &HashSet<String>) -> Vec<String> {
+    let mut wanted: Vec<String> = candidates
         .iter()
-        .filter(|(serial, board)| !board.open && !active.contains(*serial))
-        .map(|(serial, _)| serial.clone())
+        .filter(|serial| !active.contains(*serial))
+        .cloned()
         .collect();
-    (!closed.is_empty()).then_some(closed)
+    wanted.sort();
+    wanted.dedup();
+    wanted
+}
+
+/// Serials of attached FOCI trace devices, listed without claiming any interface.
+fn candidate_serials() -> Result<Vec<String>, nusb::Error> {
+    Ok(nusb::list_devices()
+        .wait()?
+        .filter(|d| {
+            d.vendor_id() == TRACE_VENDOR_ID
+                && d.product_id() == TRACE_PRODUCT_ID
+                && d.product_string().unwrap_or_default().starts_with("FOCI ")
+                && d.interfaces().any(|i| i.class() == TRACE_INTERFACE_CLASS)
+        })
+        .map(|d| d.serial_number().unwrap_or_default().to_owned())
+        .collect())
 }
 
 fn spawn_reader(

@@ -46,7 +46,7 @@ pub struct CaptureSummary {
     pub frame_bytes: u64,
     /// Size of the compressed file.
     pub file_bytes: u64,
-    /// First control state seen per channel (source index).
+    /// First control state per channel (source index) pushed after a metadata frame.
     pub first_control_state: HashMap<u8, ControlState>,
 }
 
@@ -60,6 +60,7 @@ pub struct Capture {
     worker: JoinHandle<io::Result<()>>,
     frames: u64,
     frame_bytes: u64,
+    seen_metadata: bool,
     first_control_state: HashMap<u8, ControlState>,
 }
 
@@ -90,22 +91,31 @@ impl Capture {
             worker,
             frames: 0,
             frame_bytes: 0,
+            seen_metadata: false,
             first_control_state: HashMap::new(),
         })
     }
 
     /// Appends one assembled frame. A write failure ends the writer and is reported by
     /// [`Capture::finish`].
+    ///
+    /// Blocks while the writer queue is full, so it must not be called from an async worker
+    /// thread. The first control state per channel is recorded only for frames pushed after a
+    /// metadata frame.
     pub fn push(&mut self, frame: &[u8]) {
         if self.frames_tx.send(frame.to_vec()).is_err() {
             return;
         }
         self.frames += 1;
         self.frame_bytes += frame.len() as u64;
-        if let Ok(Frame::ControlState(h, state)) = decode_frame(frame) {
-            self.first_control_state
-                .entry(h.source_index)
-                .or_insert(state);
+        match decode_frame(frame) {
+            Ok(Frame::Metadata(..)) => self.seen_metadata = true,
+            Ok(Frame::ControlState(h, state)) if self.seen_metadata => {
+                self.first_control_state
+                    .entry(h.source_index)
+                    .or_insert(state);
+            }
+            _ => {}
         }
     }
 

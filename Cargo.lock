@@ -469,6 +469,7 @@ dependencies = [
  "foci-trace",
  "foci-tune-analysis",
  "futures-util",
+ "nusb",
  "predicates",
  "rand 0.10.3",
  "reqwest",

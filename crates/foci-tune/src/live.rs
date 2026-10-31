@@ -9,15 +9,20 @@ use foci_tune_analysis::protocol::{
 
 const CADENCE_WINDOW_S: f64 = 1.0;
 
-/// Trace mode a board reports in its metadata.
+/// Trace mode inferred from a board's metadata, which reports a critical rate but not the
+/// mode itself.
+///
+/// `Streaming` covers both the critical and the diagnostic mode, which share a rate. A caller
+/// restoring a board's prior mode may do so only when it was a known `Dormant`; `Streaming`
+/// and `Unknown` are left alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraceMode {
-    /// No metadata seen yet.
+    /// No metadata seen yet, or the board rebooted since the last one.
     Unknown,
-    /// Critical frames are not being emitted.
+    /// The critical rate is 0: no critical frames are emitted.
     Dormant,
-    /// Critical frames are being emitted.
-    Critical,
+    /// A nonzero critical rate: critical or diagnostic mode.
+    Streaming,
 }
 
 /// Everything known about one board's trace stream.
@@ -29,7 +34,8 @@ pub struct BoardLive {
     pub protocol_version: Option<u8>,
     /// Trace mode derived from the latest metadata.
     pub trace_mode: TraceMode,
-    /// Critical frame rate over the last second of MCU time, 0 when unmeasurable.
+    /// Highest per-channel critical frame rate over the last second of MCU time (Hz per
+    /// channel), 0 when unmeasurable or dormant.
     pub critical_hz_measured: f64,
     /// Latest control state per channel (the frame's source index).
     pub channels: HashMap<u8, ControlState>,
@@ -46,7 +52,7 @@ pub struct BoardLive {
     /// Frames that could not be decoded for a reason other than a protocol mismatch.
     pub undecodable_frames: u64,
     unusable_reason: Option<String>,
-    critical_ticks: VecDeque<u64>,
+    critical_ticks: HashMap<u8, VecDeque<u64>>,
 }
 
 impl BoardLive {
@@ -64,7 +70,7 @@ impl BoardLive {
             boot_changes: 0,
             undecodable_frames: 0,
             unusable_reason: None,
-            critical_ticks: VecDeque::new(),
+            critical_ticks: HashMap::new(),
         }
     }
 
@@ -77,34 +83,47 @@ impl BoardLive {
         self.channels.clear();
         self.critical_ticks.clear();
         self.critical_hz_measured = 0.0;
+        self.trace_mode = TraceMode::Unknown;
     }
 
-    fn note_critical(&mut self, ticks: u64) {
-        if self.critical_ticks.back().is_some_and(|&last| ticks < last) {
-            self.critical_ticks.clear();
+    fn note_critical(&mut self, channel: u8, ticks: u64) {
+        if self.metadata.is_none() {
+            return;
         }
-        self.critical_ticks.push_back(ticks);
-        let Some(clock_freq) = self.metadata.as_ref().map(|m| f64::from(m.clock_freq)) else {
+        let window = self.critical_ticks.entry(channel).or_default();
+        if window.back().is_some_and(|&last| ticks < last) {
+            window.clear();
+        }
+        window.push_back(ticks);
+    }
+
+    fn refresh_cadence(&mut self, now_ticks: u64) {
+        let Some(clock_freq) = self
+            .metadata
+            .as_ref()
+            .map(|m| f64::from(m.clock_freq))
+            .filter(|&f| f > 0.0)
+        else {
             self.critical_hz_measured = 0.0;
             return;
         };
-        let window = (clock_freq * CADENCE_WINDOW_S) as u64;
-        while self
-            .critical_ticks
-            .front()
-            .is_some_and(|&first| ticks - first > window)
-        {
-            self.critical_ticks.pop_front();
+        let span_limit = (clock_freq * CADENCE_WINDOW_S) as u64;
+        let mut best = 0.0f64;
+        for window in self.critical_ticks.values_mut() {
+            while window
+                .front()
+                .is_some_and(|&first| now_ticks.saturating_sub(first) > span_limit)
+            {
+                window.pop_front();
+            }
+            if let (Some(&first), Some(&last)) = (window.front(), window.back()) {
+                let span_s = (last - first) as f64 / clock_freq;
+                if window.len() > 1 && span_s > 0.0 {
+                    best = best.max((window.len() - 1) as f64 / span_s);
+                }
+            }
         }
-        let (Some(&first), count) = (self.critical_ticks.front(), self.critical_ticks.len()) else {
-            return;
-        };
-        let span_s = (ticks - first) as f64 / clock_freq;
-        self.critical_hz_measured = if count > 1 && span_s > 0.0 {
-            (count - 1) as f64 / span_s
-        } else {
-            0.0
-        };
+        self.critical_hz_measured = best;
     }
 }
 
@@ -170,20 +189,24 @@ impl LiveState {
         }
         board.boot_id = Some(header.boot_id);
         board.last_sequence = Some(header.sequence);
+        let ticks = header.timestamp_ticks;
         match decoded {
             Frame::Metadata(_, metadata) => {
                 board.trace_mode = if metadata.critical_hz == 0 {
                     TraceMode::Dormant
                 } else {
-                    TraceMode::Critical
+                    TraceMode::Streaming
                 };
+                board.critical_ticks.clear();
+                board.critical_hz_measured = 0.0;
                 board.metadata = Some(metadata);
             }
             Frame::ControlState(h, state) => {
                 board.channels.insert(h.source_index, state);
             }
-            Frame::Critical(h, _) => board.note_critical(h.timestamp_ticks),
+            Frame::Critical(h, _) => board.note_critical(h.source_index, h.timestamp_ticks),
             Frame::Other(_) => {}
         }
+        board.refresh_cadence(ticks);
     }
 }
