@@ -10,7 +10,16 @@ rustup target add armv7-unknown-linux-musleabihf aarch64-unknown-linux-musl x86_
 cargo build --release --target aarch64-unknown-linux-musl
 ```
 
-Pure-Rust dependencies only; musl targets link with `rust-lld`.
+Prerequisites: Node 22 (the web UI is built and embedded during `cargo build`) and a C compiler
+for the target, because `ring` (via rustls) compiles C and assembly. Cross builds need the
+matching cross compiler and a `CC_<target>` variable naming it:
+
+```sh
+sudo apt-get install -y gcc-aarch64-linux-gnu    # armv7: gcc-arm-linux-gnueabihf; x86_64: musl-tools
+export CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc
+```
+
+`.github/workflows/ci.yml` shows the exact setup for all three targets.
 
 ### foci-trace
 
@@ -53,6 +62,37 @@ pushed.
 foci-tune --moonraker-url http://127.0.0.1:7125 --listen 0.0.0.0:7130
 foci-tune --check
 ```
+
+## Install
+
+The service drives printer motion. The UI requires the operator to start every run, and Kill is
+the red button; keep the printer in view during a run.
+
+Release binaries are named `foci-tune-<target>`; install the one for the Pi's architecture as
+`foci-tune`.
+
+```sh
+sudo install -m 0755 foci-tune-aarch64-unknown-linux-musl /usr/local/bin/foci-tune
+sudo cp 99-foci-trace.rules /etc/udev/rules.d/
+sudo cp foci-tune.service /etc/systemd/system/
+sudo usermod -aG plugdev pi    # if pi is not already in plugdev; log in again afterwards
+sudo udevadm control --reload && sudo udevadm trigger
+sudo systemctl daemon-reload
+sudo systemctl enable --now foci-tune
+```
+
+The rule gives the `plugdev` group access to the FOCI trace USB device (vendor `1d50`, product
+`614e`). The unit runs as `pi` after `moonraker.service`, with the Moonraker URL and listen
+address as explicit flags in `ExecStart`; add `--api-key` there if Moonraker needs one. The UI
+is on port 7130 of the Pi. Sessions are stored in the `foci-results` directory inside
+Moonraker's `config` root, so `pi` must be able to write there.
+
+`foci-tune --check` loads the embedded web assets and exits 0, or non-zero for a build without
+them. The unit runs it before each start.
+
+`foci-tune verify-archive --kind <probe|tracking|standstill> <capture>...` runs an analysis over
+archived capture files (plain or zstd) and compares the result with the reference table, for
+manual checks of analysis changes.
 
 ## License
 

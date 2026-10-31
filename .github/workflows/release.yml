@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: armv7-unknown-linux-musleabihf
+            cc: arm-linux-gnueabihf-gcc
+            apt: gcc-arm-linux-gnueabihf
+          - target: aarch64-unknown-linux-musl
+            cc: aarch64-linux-gnu-gcc
+            apt: gcc-aarch64-linux-gnu
+          - target: x86_64-unknown-linux-musl
+            cc: gcc
+            apt: musl-tools
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@1.92
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+      - name: Build release binary
+        run: |
+          export "CC_$(echo '${{ matrix.target }}' | tr - _)=${{ matrix.cc }}"
+          cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foci-tune-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/foci-tune
+
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: armv7 under qemu
+        run: |
+          chmod +x artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune
+          qemu-arm-static artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune --check
+      - name: aarch64 under qemu
+        run: |
+          chmod +x artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune
+          qemu-aarch64-static artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune --check
+      - name: x86_64 native
+        run: |
+          chmod +x artifacts/foci-tune-x86_64-unknown-linux-musl/foci-tune
+          artifacts/foci-tune-x86_64-unknown-linux-musl/foci-tune --check
+
+  publish:
+    needs: smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir dist
+          for target in armv7-unknown-linux-musleabihf aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            cp "artifacts/foci-tune-${target}/foci-tune" "dist/foci-tune-${target}"
+          done
+          cp deploy/99-foci-trace.rules deploy/foci-tune.service dist/
+          gh release create "$TAG" dist/* --title "$TAG" --generate-notes
