@@ -1,11 +1,19 @@
-//! Tracking-error metrics for a plain move, following the reference script.
+//! Tracking-error metrics for a plain move. Cruise mean, standard deviation and p99 follow the
+//! reference script; reversals come from the commanded path instead of its measured velocity.
 
 use crate::signals::ChannelSeries;
 use crate::units::Regime;
 
 const MOVING_RPM: f64 = 10.0;
 const CRUISE_BAND: f64 = 0.05;
-const REVERSAL_HALF_WINDOW: usize = 30;
+/// A new commanded direction must hold this many samples to count as a reversal, so a
+/// single-count step back is not one.
+const REVERSAL_MIN_RUN: usize = 20;
+/// Samples searched for the peak error before a commanded reversal.
+const REVERSAL_PEAK_BEFORE: usize = 30;
+/// Samples searched after it, more than before: the error peaks tens of milliseconds after the
+/// commanded reversal.
+const REVERSAL_PEAK_AFTER: usize = 60;
 
 /// Tracking-error summary of one channel over a move.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,9 +24,9 @@ pub struct TrackingMetrics {
     pub sd_um: f64,
     /// 99th percentile of `|error|` over moving samples, in micrometres.
     pub p99_um: f64,
-    /// Mean over reversals of the peak `|error|` near each reversal; NaN with no reversals.
+    /// Mean over commanded reversals of the peak `|error|` near each; NaN with no reversals.
     pub reversal_peak_um: f64,
-    /// Number of velocity sign reversals.
+    /// Number of commanded direction reversals.
     pub reversal_count: usize,
     /// Number of moving samples.
     pub moving_samples: usize,
@@ -41,20 +49,42 @@ fn percentile(xs: &[f64], q: f64) -> f64 {
     sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo as f64)
 }
 
-fn sign(x: f64) -> i8 {
-    if x > 0.0 {
-        1
-    } else if x < 0.0 {
-        -1
-    } else {
-        0
+/// Indices of the turning points of the commanded path: the last sample before the first step
+/// of a new direction that then holds for [`REVERSAL_MIN_RUN`] samples. Holds carry the previous
+/// direction forward.
+///
+/// The measured velocity cannot find them: at 1 kHz one encoder count is a velocity quantum of
+/// about 10 mm/s, so near a reversal it holds runs of zeros and flips sign on single counts.
+fn commanded_reversals(step: &[i32]) -> Vec<usize> {
+    let mut reversals = Vec::new();
+    let mut direction = 0;
+    let mut candidate: Option<usize> = None;
+    for k in 1..step.len() {
+        let s = step[k].wrapping_sub(step[k - 1]).signum();
+        if s == direction {
+            candidate = None;
+        } else if s != 0 {
+            if direction == 0 {
+                direction = s;
+            } else if candidate.is_none() {
+                candidate = Some(k);
+            }
+        }
+        if let Some(first) = candidate.filter(|&first| k + 1 - first >= REVERSAL_MIN_RUN) {
+            reversals.push(first - 1);
+            direction = -direction;
+            candidate = None;
+        }
     }
+    reversals
 }
 
 /// Computes tracking metrics for one channel.
 ///
 /// Moving samples exceed 10 rpm; cruise samples are moving samples within 5% of the 75th
-/// percentile of moving speed. With no moving samples the statistics are NaN.
+/// percentile of moving speed. With no moving samples the statistics are NaN. The reversal
+/// peak is the largest `|error|` from [`REVERSAL_PEAK_BEFORE`] samples before each commanded
+/// reversal to [`REVERSAL_PEAK_AFTER`] after it.
 pub fn tracking_metrics(s: &ChannelSeries, regime: &Regime) -> TrackingMetrics {
     let rpm_scale = 60.0 / regime.motor_rotation_distance_mm;
     let moving: Vec<usize> = (0..s.velocity_mm_s.len())
@@ -74,17 +104,13 @@ pub fn tracking_metrics(s: &ChannelSeries, regime: &Regime) -> TrackingMetrics {
     let mu = mean(&errors);
     let sd_um = (errors.iter().map(|e| (e - mu).powi(2)).sum::<f64>() / errors.len() as f64).sqrt();
 
-    let n = s.velocity_mm_s.len();
-    let peaks: Vec<f64> = (1..n)
-        .filter(|&k| {
-            let (a, b) = (sign(s.velocity_mm_s[k - 1]), sign(s.velocity_mm_s[k]));
-            a != 0 && b != 0 && a != b
-        })
-        .map(|k| {
-            let i = k - 1;
-            let lo = i.saturating_sub(REVERSAL_HALF_WINDOW);
-            let hi = (i + REVERSAL_HALF_WINDOW).min(n);
-            s.position_error_um[lo..hi]
+    let n = s.position_error_um.len();
+    let peaks: Vec<f64> = commanded_reversals(&s.step_position)
+        .into_iter()
+        .map(|i| {
+            let lo = i.saturating_sub(REVERSAL_PEAK_BEFORE);
+            let hi = (i + REVERSAL_PEAK_AFTER).min(n);
+            s.position_error_um[lo.min(hi)..hi]
                 .iter()
                 .fold(0.0_f64, |m, e| m.max(e.abs()))
         })

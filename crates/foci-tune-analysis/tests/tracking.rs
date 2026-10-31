@@ -41,23 +41,6 @@ fn cruise_sd_and_p99_match_hand_values() {
 }
 
 #[test]
-fn reversal_peak_is_the_mean_of_per_reversal_maxima() {
-    let mut v = vec![50.0; 60];
-    v.extend(vec![-50.0; 80]);
-    v.extend(vec![50.0; 60]);
-    let mut e = vec![0.0; 200];
-    e[60] = -50.0;
-    e[140] = 150.0;
-    let m = tracking_metrics(&series(v, e), &regime());
-    assert_eq!(m.reversal_count, 2);
-    assert!(
-        (m.reversal_peak_um - 100.0).abs() < 1e-9,
-        "{}",
-        m.reversal_peak_um
-    );
-}
-
-#[test]
 fn low_speed_samples_are_not_moving() {
     let mut v = vec![50.0; 10];
     v.extend(vec![40.0 * 5.0 / 60.0; 10]);
@@ -166,4 +149,93 @@ fn leading_and_trailing_rests_are_not_blocks() {
     let s = commanded(&[Piece::Hold(200), Piece::Move(1000, 50.0), Piece::Hold(900)]);
 
     assert_eq!(split_speed_segments(&s, 0.4), vec![(200, 1200)]);
+}
+
+const COUNT_UNITS: f64 = 65536.0 / 4096.0;
+
+/// Commanded positions in mm at 1 kHz for `strokes` alternating strokes, each accelerating to
+/// 50 mm/s over 100 samples, cruising 400 and decelerating over 100; the sample index of each
+/// turning point comes with them.
+fn stroke_path(strokes: usize) -> (Vec<f64>, Vec<usize>) {
+    let profile: Vec<f64> = (0..600)
+        .map(|k| match k {
+            0..100 => 50.0 * k as f64 / 100.0,
+            100..500 => 50.0,
+            _ => 50.0 * (600 - k) as f64 / 100.0,
+        })
+        .collect();
+    let (mut mm, mut at, mut turns) = (Vec::new(), 0.0, Vec::new());
+    for stroke in 0..strokes {
+        let dir = if stroke % 2 == 0 { 1.0 } else { -1.0 };
+        for v in &profile {
+            at += dir * v / 1000.0;
+            mm.push(at);
+        }
+        turns.push(mm.len() - 1);
+    }
+    turns.pop();
+    (mm, turns)
+}
+
+/// A series over `mm`: the measured position lags the command by 5 samples, is quantised to
+/// encoder counts and gains one count on alternate samples while slower than 15 mm/s, so the
+/// finite-difference velocity holds runs of zeros and flips sign near every reversal.
+fn quantised(mm: &[f64], error_um: Vec<f64>) -> ChannelSeries {
+    let step: Vec<i32> = mm
+        .iter()
+        .map(|p| (p * UNITS_PER_MM).round() as i32)
+        .collect();
+    let tmc: Vec<i32> = (0..mm.len())
+        .map(|k| {
+            let lagged = mm[k.saturating_sub(5)];
+            let slow = k > 0 && (mm[k] - mm[k - 1]).abs() * 1000.0 < 15.0;
+            let counts = (lagged * UNITS_PER_MM / COUNT_UNITS).round()
+                + f64::from(u8::from(slow && k % 2 == 1));
+            (counts * COUNT_UNITS).round() as i32
+        })
+        .collect();
+    let velocity = (0..tmc.len())
+        .map(|k| match k {
+            0 => 0.0,
+            _ => f64::from(tmc[k] - tmc[k - 1]) / UNITS_PER_MM * 1000.0,
+        })
+        .collect();
+    ChannelSeries {
+        t_s: (0..mm.len()).map(|k| k as f64 * 1e-3).collect(),
+        position_error_um: error_um,
+        step_position: step,
+        tmc_position: tmc,
+        velocity_mm_s: velocity,
+        ..ChannelSeries::default()
+    }
+}
+
+#[test]
+fn reversals_come_from_the_commanded_path_despite_velocity_quantisation() {
+    let (mut mm, turns) = stroke_path(4);
+    mm[250] -= 2.0 / UNITS_PER_MM;
+    let mut error = vec![10.0; mm.len()];
+    for (&turn, peak) in turns.iter().zip([80.0, 120.0, 100.0]) {
+        error[turn + 25] = peak;
+    }
+
+    let m = tracking_metrics(&quantised(&mm, error), &regime());
+
+    assert_eq!(m.reversal_count, 3);
+    assert!(
+        (m.reversal_peak_um - 100.0).abs() < 1e-9,
+        "{}",
+        m.reversal_peak_um
+    );
+}
+
+#[test]
+fn a_monotonic_move_has_no_reversal() {
+    let (mm, _) = stroke_path(1);
+    let error = vec![10.0; mm.len()];
+
+    let m = tracking_metrics(&quantised(&mm, error), &regime());
+
+    assert_eq!(m.reversal_count, 0);
+    assert!(m.reversal_peak_um.is_nan());
 }
