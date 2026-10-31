@@ -2,4 +2,5 @@
 
 pub mod capture_read;
 pub mod moonraker;
+pub mod steppers;
 pub mod verify;
