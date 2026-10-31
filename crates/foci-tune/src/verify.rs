@@ -184,7 +184,7 @@ enum LoadError {
 
 /// Relabels a protocol 24 critical or metadata frame as protocol 25.
 ///
-/// The archive predates protocol 25, whose only change is the new control-state frame;
+/// Archived captures predate protocol 25, whose only change is the new control-state frame;
 /// critical and metadata payloads are byte-identical across the two. Other frames pass
 /// through untouched and fail the version check as before.
 fn as_protocol_25(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
@@ -206,10 +206,38 @@ struct Loaded {
     series: ChannelSeries,
     regime: Regime,
     packed_torque_target: Vec<i32>,
+    protocol_24: bool,
+}
+
+/// Torque series a standstill comparison measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TorqueSource {
+    /// `interim_pidin_target_torque`, the signal the analysis binds.
+    PidinTarget,
+    /// Signed upper half of `interim_pid_torque_target_actual`, the signal `standstill.py`
+    /// measured; protocol 24 captures carry no PID-input torque.
+    PackedTarget,
+}
+
+impl TorqueSource {
+    fn for_capture(loaded: &Loaded) -> Self {
+        if loaded.protocol_24 {
+            Self::PackedTarget
+        } else {
+            Self::PidinTarget
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::PidinTarget => "interim_pidin_target_torque",
+            Self::PackedTarget => "interim_pid_torque_target_actual>>16",
+        }
+    }
 }
 
 /// Signed upper half of the critical frame's `interim_pid_torque_target_actual`, the
-/// torque the standstill reference script measured; printed beside the spec's torque.
+/// torque the standstill reference script measured.
 fn packed_torque_target(frame: &[u8]) -> i32 {
     let at = FRAME_HEADER_LEN + PACKED_TORQUE_OFFSET;
     frame
@@ -223,6 +251,7 @@ fn packed_torque_target(frame: &[u8]) -> i32 {
 fn load(path: &Path) -> Result<Loaded, LoadError> {
     let capture = read_capture(path)?;
     let mut rows = Vec::new();
+    let mut protocol_24 = false;
     let mut control: Option<ControlState> = None;
     let mut metadata: Option<Metadata> = None;
     let embedded = capture
@@ -231,6 +260,7 @@ fn load(path: &Path) -> Result<Loaded, LoadError> {
         .filter_map(|r| r.device_table_metadata());
     let frames = capture.firmware_frames().map(|r| r.payload.as_slice());
     for bytes in embedded.chain(frames) {
+        protocol_24 |= bytes.get(4) == Some(&ARCHIVE_PROTOCOL_VERSION);
         match decode_frame(&as_protocol_25(bytes)) {
             Ok(Frame::Critical(h, c)) if h.source_index == CHANNEL => {
                 rows.push((h, c, packed_torque_target(bytes)));
@@ -264,6 +294,7 @@ fn load(path: &Path) -> Result<Loaded, LoadError> {
         series,
         regime,
         packed_torque_target,
+        protocol_24,
     })
 }
 
@@ -349,14 +380,14 @@ fn verify_probe(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Result<
     };
     let m = probe_metrics(&loaded.series);
     let mut line = Line::new(reference.prefix);
-    match &m.velocity {
+    match &meter_velocity_fit(loaded) {
         Ok(f) => {
             line.check("vel_hz", f.damped_hz, reference.vel_hz, Tol::Rel(0.02), 2);
             line.check("vel_zeta", f.zeta, reference.vel_zeta, Tol::Abs(0.01), 4);
         }
         Err(e) => {
             line.note(&format!(
-                "vel fit failed ({e}) (ref {:.2}Hz z={:.4})",
+                "meter-vel fit failed ({e}) (ref {:.2}Hz z={:.4})",
                 reference.vel_hz, reference.vel_zeta
             ));
             line.breaches.push("vel_fit".to_owned());
@@ -379,28 +410,24 @@ fn verify_probe(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Result<
     line.note(&format!("| trq {}", describe_fit(&m.torque)));
     line.note(&format!("| perr {}", describe_fit(&m.position_error)));
     line.note(&format!(
-        "| meter-vel {}",
-        describe_fit(&meter_velocity_fit(loaded))
-    ));
-    let packed = probe_metrics(&with_packed_torque(loaded));
-    line.note(&format!(
-        "| packed-trq {} psd {:.2}Hz",
-        describe_fit(&packed.torque),
-        packed.torque_psd_peak_hz
+        "| info, not gated: fd-vel {}",
+        describe_fit(&m.velocity)
     ));
     line.finish(out).map(Some)
 }
 
-/// The series with its torque replaced by the packed torque target, for diagnostics.
-fn with_packed_torque(loaded: &Loaded) -> ChannelSeries {
-    ChannelSeries {
-        torque: loaded.packed_torque_target.clone(),
-        ..loaded.series.clone()
+/// The series with its torque taken from `source`.
+fn with_torque(loaded: &Loaded, source: TorqueSource) -> ChannelSeries {
+    match source {
+        TorqueSource::PidinTarget => loaded.series.clone(),
+        TorqueSource::PackedTarget => ChannelSeries {
+            torque: loaded.packed_torque_target.clone(),
+            ..loaded.series.clone()
+        },
     }
 }
 
-/// The same fit run on the chip's `pid_velocity_actual`, the signal the reference
-/// script fitted; printed for comparison, never compared.
+/// The damping fit of the chip's `pid_velocity_actual`, the signal `fit.py` fitted.
 fn meter_velocity_fit(loaded: &Loaded) -> Result<DampedFit, FitError> {
     let meter: Vec<f64> = loaded
         .criticals
@@ -448,20 +475,16 @@ fn verify_standstill(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Re
     if !matches_prefix(name, STANDSTILL_PREFIX) {
         return Ok(None);
     }
+    let source = TorqueSource::for_capture(loaded);
     let m = standstill_metrics(
-        &loaded.series,
-        &loaded.regime,
-        STANDSTILL_SETTLE,
-        STANDSTILL_MIN_LEN,
-    );
-    let packed = standstill_metrics(
-        &with_packed_torque(loaded),
+        &with_torque(loaded, source),
         &loaded.regime,
         STANDSTILL_SETTLE,
         STANDSTILL_MIN_LEN,
     );
     let um_per_unit = ROTATION_DISTANCE_MM / POSITION_UNITS_PER_REV * 1000.0;
     let mut line = Line::new(STANDSTILL_PREFIX);
+    line.note(&format!("torque source {}", source.label()));
     line.check(
         "rests",
         m.rests.len() as f64,
@@ -469,7 +492,7 @@ fn verify_standstill(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Re
         Tol::Abs(0.0),
         0,
     );
-    for ((rest, reference), packed) in m.rests.iter().zip(&STANDSTILL).zip(&packed.rests) {
+    for (rest, reference) in m.rests.iter().zip(&STANDSTILL) {
         let k = rest.index;
         line.text.push_str("\n   ");
         line.check(
@@ -493,7 +516,6 @@ fn verify_standstill(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Re
             Tol::Abs(0.0),
             0,
         );
-        line.note(&format!("| packed_torque_sd {:.3}", packed.torque_sd));
     }
     line.finish(out).map(Some)
 }
