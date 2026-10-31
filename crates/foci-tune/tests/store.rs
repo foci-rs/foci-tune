@@ -4,8 +4,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use foci_tune::capture::Capture;
 use foci_tune::model::{
     CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, Gains, Metrics,
-    ProbeRecord, Run, RunId, RunRegime, RunRequest, RunState, Session, SessionId, TrackingRecord,
-    Verification, VerificationCheck,
+    ProbeRecord, Run, RunId, RunRegime, RunRequest, RunState, SERIES_FORMAT_VERSION, Session,
+    SessionId, TrackingRecord, Verification, VerificationCheck,
 };
 use foci_tune::pattern::Pattern;
 use foci_tune::stimulus::RunKind;
@@ -309,11 +309,47 @@ fn metadata_payload() -> Vec<u8> {
 }
 
 fn critical_payload(position: i32, error: i32) -> Vec<u8> {
+    probe_payload(position, error, 0, 0)
+}
+
+fn probe_payload(position: i32, error: i32, ff: i32, torque: i32) -> Vec<u8> {
     let mut p = vec![0u8; 88];
     p[0..4].copy_from_slice(&position.to_le_bytes());
     p[4..8].copy_from_slice(&position.to_le_bytes());
     p[8..12].copy_from_slice(&error.to_le_bytes());
+    p[20..24].copy_from_slice(&ff.to_le_bytes());
+    p[60..64].copy_from_slice(&torque.to_le_bytes());
     p
+}
+
+/// A probe capture: feedforward toggling between 1000 and 1300 every 150 samples, and a
+/// 150 Hz, zeta 0.1 velocity ring after every toggle on a 100 mm/s cruise.
+fn write_probe_capture(path: &Path, edges: usize) {
+    let units_per_mm = 65536.0 / 40.0;
+    let w = std::f64::consts::TAU * 150.0;
+    let zeta: f64 = 0.1;
+    let wd = w * (1.0 - zeta * zeta).sqrt();
+    let len = 100 + 150 * edges + 150;
+    let mut cap = Capture::start(path, "SER").unwrap();
+    cap.push(&frame(5, &metadata_payload(), 0, 0, 0));
+    let mut position = 0.0;
+    for n in 0..len {
+        let level = (0..edges).filter(|k| 100 + 150 * k <= n).count();
+        let ring: f64 = (0..level)
+            .map(|k| {
+                let t = (n - (100 + 150 * k)) as f64 * 1e-3;
+                let step = if k % 2 == 0 { 300.0 } else { -300.0 };
+                step * 0.1 * (-zeta * w * t).exp() * (wd * t).cos()
+            })
+            .sum();
+        position += (100.0 + ring) * 1e-3 * units_per_mm;
+        let ff = if level % 2 == 0 { 1000 } else { 1300 };
+        let torque = (50.0 * (std::f64::consts::TAU * 200.0 * n as f64 * 1e-3).sin()) as i32;
+        let ts = n as u64 * u64::from(CLOCK / 1000);
+        let payload = probe_payload(position.round() as i32, 0, ff, torque);
+        cap.push(&frame(1, &payload, 0, n as u32 + 1, ts));
+    }
+    cap.finish().unwrap();
 }
 
 fn write_synthetic_capture(path: &Path, criticals: u32) {
@@ -339,8 +375,12 @@ fn series_regenerates_from_the_capture_when_missing() {
     assert!(!series_path.exists());
     let series = store.series(&sid, &rid).unwrap();
     assert!(series_path.exists(), "regenerated series is persisted");
-    assert_eq!(series.format_version, FORMAT_VERSION);
+    assert_eq!(series.format_version, SERIES_FORMAT_VERSION);
     assert_eq!(series.channels.len(), 1);
+    assert!(
+        series.channels[0].probe.is_none(),
+        "a tracking run has no ensembles"
+    );
     let ch = &series.channels[0];
     assert_eq!(ch.channel, 0);
     assert_eq!(ch.t_s.len(), 200usize.div_ceil(series.decimation as usize));
@@ -351,6 +391,72 @@ fn series_regenerates_from_the_capture_when_missing() {
 
     let again = store.series(&sid, &rid).unwrap();
     assert_eq!(again, series);
+}
+
+#[test]
+fn a_series_of_an_older_format_regenerates_with_ensembles_fits_and_psd() {
+    let (_d, store) = store();
+    let sid = store.new_session(&session()).unwrap();
+    let rid = RunId::generate(UNIX_EPOCH + Duration::from_secs(1_793_382_400));
+    let mut record = run(&sid, &rid);
+    record.request.kind = RunKind::Probe {
+        speed_mm_s: 100.0,
+        high_gain: 1.3,
+        segments_between_toggles: 3,
+        strokes: 8,
+    };
+    store.write_run(&sid, &record).unwrap();
+    write_probe_capture(&store.capture_path(&sid, &rid), 20);
+    let series_path = store.capture_path(&sid, &rid).with_file_name("series.json");
+    std::fs::write(
+        &series_path,
+        r#"{"format_version":1,"decimation":10,"channels":[{"channel":0,"t_s":[0.0],
+            "position_error_um":[0.0],"velocity_mm_s":[0.0],"torque":[0.0],"ff_offset":[0.0]}]}"#,
+    )
+    .unwrap();
+
+    let series = store.series(&sid, &rid).unwrap();
+
+    assert_eq!(series.format_version, SERIES_FORMAT_VERSION);
+    assert!(series.channels[0].t_s.len() > 1, "rebuilt from the capture");
+    let probe = series.channels[0].probe.as_ref().expect("probe ensembles");
+    assert_eq!(probe.velocity.edges, 20);
+    assert_eq!(probe.t_s.len(), probe.velocity.mean.len());
+    assert!((probe.t_s[1] - 1e-3).abs() < 1e-9);
+    let fit = probe.velocity.fit.as_ref().expect("the ring fits");
+    assert_eq!(fit.len(), probe.velocity.mean.len());
+    assert!(
+        fit[0].is_none() && fit[1].is_none(),
+        "outside the fit range"
+    );
+    for (k, (m, f)) in probe
+        .velocity
+        .mean
+        .iter()
+        .zip(fit)
+        .enumerate()
+        .take(55)
+        .skip(2)
+    {
+        let (m, f) = (m.unwrap(), f.unwrap());
+        assert!((m - f).abs() < 0.02, "sample {k}: mean {m} fit {f}");
+    }
+    let psd = series.channels[0].torque_psd.as_ref().expect("torque psd");
+    assert_eq!(psd.freq_hz.len(), psd.power.len());
+    let (peak, _) = psd
+        .freq_hz
+        .iter()
+        .zip(&psd.power)
+        .filter(|(f, _)| **f > 60.0)
+        .max_by(|a, b| a.1.unwrap_or(0.0).total_cmp(&b.1.unwrap_or(0.0)))
+        .unwrap();
+    assert!((peak - 200.0).abs() <= 4.0, "{peak}");
+    let text = std::fs::read_to_string(&series_path).unwrap();
+    assert!(!text.contains("NaN") && !text.contains("inf"));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["format_version"],
+        2
+    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use foci_tune_analysis::probe::{POST, ensemble, locate_edges, probe_metrics};
+use foci_tune_analysis::probe::{POST, ensemble, locate_edges, probe_ensembles, probe_metrics};
 use foci_tune_analysis::signals::ChannelSeries;
 
 struct Gaussian(u64);
@@ -99,4 +99,30 @@ fn empty_and_nan_series_do_not_panic() {
     let e = ensemble(&vec![f64::NAN; ff.len()], &ff, &locate_edges(&ff));
     assert_eq!(e.edges, 2);
     assert!(e.stderr_at_peak.is_nan());
+}
+
+#[test]
+fn probe_ensembles_are_the_ensembles_the_metrics_fit() {
+    let ff = levels(&[(1000, 100), (1300, 100), (1000, 100)]);
+    let n = ff.len();
+    let s = ChannelSeries {
+        t_s: (0..n).map(|k| k as f64 * 0.002).collect(),
+        velocity_mm_s: ff.iter().map(|&v| f64::from(v) * 0.1).collect(),
+        torque: ff.iter().map(|&v| v / 10).collect(),
+        position_error_um: vec![0.0; n],
+        ff_offset: ff.clone(),
+        ..ChannelSeries::default()
+    };
+
+    let e = probe_ensembles(&s);
+
+    assert!((e.dt_s - 0.002).abs() < 1e-12, "{}", e.dt_s);
+    assert_eq!(e.velocity.edges, 2);
+    assert_eq!(
+        e.velocity,
+        ensemble(&s.velocity_mm_s, &ff, &locate_edges(&ff))
+    );
+    assert!(e.velocity.mean.iter().all(|&v| (v - 0.1).abs() < 1e-12));
+    assert_eq!(e.torque.edges, 2);
+    assert_eq!(probe_metrics(&s).edges, e.velocity.edges);
 }

@@ -18,8 +18,12 @@ use serde::{Deserialize, Serialize};
 use crate::pattern::Pattern;
 use crate::stimulus::RunKind;
 
-/// `format_version` written into every persisted document.
+/// `format_version` written into `session.json` and `run.json`.
 pub const FORMAT_VERSION: u32 = 1;
+
+/// `format_version` written into `series.json`; a stored series of another version is rebuilt
+/// from the capture.
+pub const SERIES_FORMAT_VERSION: u32 = 2;
 
 const ID_SUFFIX_LEN: usize = 4;
 const ID_SUFFIX_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
@@ -753,12 +757,52 @@ pub struct ChannelPlot {
     pub torque: Vec<Option<f64>>,
     /// Feedforward offset, raw.
     pub ff_offset: Vec<Option<f64>>,
+    /// Step-response ensembles and their fits, for probe runs.
+    #[serde(default)]
+    pub probe: Option<ProbePlot>,
+    /// Welch spectrum of the detrended torque, for probe runs long enough to have one.
+    #[serde(default)]
+    pub torque_psd: Option<PsdPlot>,
+}
+
+/// One signal's ensemble-mean step response and its fitted curve.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnsemblePlot {
+    /// Edges averaged.
+    pub edges: usize,
+    /// Mean response normalised by the feedforward step, one value per [`ProbePlot::t_s`].
+    pub mean: Vec<Option<f64>>,
+    /// The fitted model at the same instants, `None` outside the fit range; absent when the
+    /// fit failed.
+    pub fit: Option<Vec<Option<f64>>>,
+}
+
+/// The step-response ensembles of one channel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProbePlot {
+    /// Seconds after the edge.
+    pub t_s: Vec<f64>,
+    /// Velocity response.
+    pub velocity: EnsemblePlot,
+    /// Target-torque response.
+    pub torque: EnsemblePlot,
+    /// Position-error response.
+    pub position_error: EnsemblePlot,
+}
+
+/// A power spectrum; `None` marks a non-finite bin.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PsdPlot {
+    /// Bin frequencies in Hz.
+    pub freq_hz: Vec<f64>,
+    /// Mean power per bin.
+    pub power: Vec<Option<f64>>,
 }
 
 /// `series.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Series {
-    /// [`FORMAT_VERSION`].
+    /// [`SERIES_FORMAT_VERSION`].
     pub format_version: u32,
     /// Every `decimation`-th frame is kept.
     pub decimation: u32,

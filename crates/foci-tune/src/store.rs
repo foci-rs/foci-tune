@@ -8,15 +8,21 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use foci_tune_analysis::fit::fit_damped;
+use foci_tune_analysis::probe::{Ensemble, FIT_RANGE, probe_ensembles, torque_psd};
 use foci_tune_analysis::protocol::{Critical, Frame, FrameHeader, decode_frame};
-use foci_tune_analysis::signals::channel_series;
+use foci_tune_analysis::signals::{ChannelSeries, channel_series};
 use foci_tune_analysis::units::Regime;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::capture_read::read_capture;
 pub use crate::model::new_id;
-use crate::model::{ChannelPlot, FORMAT_VERSION, Run, RunId, RunState, Series, Session, SessionId};
+use crate::model::{
+    ChannelPlot, EnsemblePlot, FitOutcome, ProbePlot, PsdPlot, Run, RunId, RunState,
+    SERIES_FORMAT_VERSION, Series, Session, SessionId,
+};
+use crate::stimulus::RunKind;
 
 const SESSIONS_DIR: &str = "sessions";
 const SESSION_FILE: &str = "session.json";
@@ -243,7 +249,7 @@ impl Store {
     pub fn series(&self, session: &SessionId, run: &RunId) -> Result<Series, StoreError> {
         let dir = self.run_dir(session, run);
         match read_json::<Series>(&dir.join(SERIES_FILE)) {
-            Ok(s) if s.format_version == FORMAT_VERSION => return Ok(s),
+            Ok(s) if s.format_version == SERIES_FORMAT_VERSION => return Ok(s),
             Ok(_) | Err(StoreError::Json(_)) => {}
             Err(StoreError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
@@ -252,7 +258,11 @@ impl Store {
         let regime = record.regime.as_ref().ok_or_else(|| {
             StoreError::Capture("run.json records no regime to rebuild the series from".into())
         })?;
-        let series = build_series(&self.capture_path(session, run), &Regime::from(regime))?;
+        let series = build_series(
+            &self.capture_path(session, run),
+            &Regime::from(regime),
+            &record.request.kind,
+        )?;
         self.write_series(session, run, &series)?;
         Ok(series)
     }
@@ -301,13 +311,46 @@ fn plot(v: &[f64], step: usize) -> Vec<Option<f64>> {
         .collect()
 }
 
+fn ensemble_plot(e: &Ensemble, dt_s: f64) -> EnsemblePlot {
+    let result = fit_damped(&e.mean, dt_s);
+    let fit = match FitOutcome::from(&result) {
+        FitOutcome::Fit { .. } => result.ok(),
+        FitOutcome::Failed { .. } => None,
+    };
+    EnsemblePlot {
+        edges: e.edges,
+        mean: plot(&e.mean, 1),
+        fit: fit.map(|f| {
+            (0..e.mean.len())
+                .map(|k| {
+                    let v = f.value_at(k as f64 * dt_s);
+                    ((FIT_RANGE.0..FIT_RANGE.1).contains(&k) && v.is_finite()).then_some(v)
+                })
+                .collect()
+        }),
+    }
+}
+
+fn probe_plot(s: &ChannelSeries) -> ProbePlot {
+    let e = probe_ensembles(s);
+    ProbePlot {
+        t_s: (0..e.velocity.mean.len())
+            .map(|k| k as f64 * e.dt_s)
+            .collect(),
+        velocity: ensemble_plot(&e.velocity, e.dt_s),
+        torque: ensemble_plot(&e.torque, e.dt_s),
+        position_error: ensemble_plot(&e.position_error, e.dt_s),
+    }
+}
+
 /// Decodes the capture at `path` and builds the decimated series for every channel that has
-/// critical frames.
+/// critical frames; probe runs also get the step-response ensembles, their fitted curves and
+/// the torque spectrum.
 ///
 /// # Errors
 /// [`StoreError::Capture`] when the file cannot be read or decompressed or holds no decodable
 /// critical frame.
-pub fn build_series(path: &Path, regime: &Regime) -> Result<Series, StoreError> {
+pub fn build_series(path: &Path, regime: &Regime, kind: &RunKind) -> Result<Series, StoreError> {
     let capture = read_capture(path).map_err(|e| StoreError::Capture(e.to_string()))?;
     let mut by_channel: BTreeMap<u8, Vec<(FrameHeader, Critical)>> = BTreeMap::new();
     for record in capture.firmware_frames() {
@@ -328,6 +371,7 @@ pub fn build_series(path: &Path, regime: &Regime) -> Result<Series, StoreError> 
             let s = channel_series(&frames, regime);
             let torque: Vec<f64> = s.torque.iter().map(|&v| f64::from(v)).collect();
             let ff: Vec<f64> = s.ff_offset.iter().map(|&v| f64::from(v)).collect();
+            let probe = matches!(kind, RunKind::Probe { .. });
             ChannelPlot {
                 channel,
                 t_s: plot(&s.t_s, step),
@@ -335,11 +379,16 @@ pub fn build_series(path: &Path, regime: &Regime) -> Result<Series, StoreError> 
                 velocity_mm_s: plot(&s.velocity_mm_s, step),
                 torque: plot(&torque, step),
                 ff_offset: plot(&ff, step),
+                probe: probe.then(|| probe_plot(&s)),
+                torque_psd: probe.then(|| torque_psd(&s)).flatten().map(|p| PsdPlot {
+                    power: plot(&p.power, 1),
+                    freq_hz: p.freq_hz,
+                }),
             }
         })
         .collect();
     Ok(Series {
-        format_version: FORMAT_VERSION,
+        format_version: SERIES_FORMAT_VERSION,
         decimation: SERIES_DECIMATION,
         channels,
     })

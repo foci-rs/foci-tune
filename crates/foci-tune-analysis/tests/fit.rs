@@ -62,3 +62,19 @@ fn short_or_nan_input_fails_without_panicking() {
     assert!(fit_damped(&[0.1; 20], DT).is_err());
     assert!(fit_damped(&[f64::NAN; 60], DT).is_err());
 }
+
+#[test]
+fn fitted_curve_is_the_curve_the_residual_is_reported_for() {
+    let mean = damped(150.0, 0.06, 0.3, 0.2, 0.05, 0.02);
+
+    let fit = fit_damped(&mean, DT).expect("clean damped cosine fits");
+
+    let squares: Vec<f64> = (2..55)
+        .map(|k| (fit.value_at(k as f64 * DT) - mean[k]).powi(2))
+        .collect();
+    let rms = (squares.iter().sum::<f64>() / squares.len() as f64).sqrt();
+    assert!(
+        (rms - fit.residual_rms).abs() < 1e-6 * fit.residual_rms.max(1e-9),
+        "{rms} vs {fit:?}"
+    );
+}

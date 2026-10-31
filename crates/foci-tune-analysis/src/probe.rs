@@ -1,7 +1,7 @@
 //! Feedforward-step probe: edge location, ensemble response and per-signal fits.
 
 use crate::fit::{DampedFit, FitError, fit_damped};
-use crate::psd::{moving_mean_detrend, welch_peak_hz};
+use crate::psd::{Psd, moving_mean_detrend, welch_peak_hz, welch_psd};
 use crate::signals::ChannelSeries;
 
 /// Samples before an edge used for the flatness check and the baseline.
@@ -134,29 +134,53 @@ fn sample_period_s(t_s: &[f64]) -> f64 {
         .unwrap_or(FALLBACK_DT_S)
 }
 
+/// The three ensemble responses of one channel and their sample period.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeEnsembles {
+    /// Median sample period in seconds.
+    pub dt_s: f64,
+    /// Velocity response.
+    pub velocity: Ensemble,
+    /// Target-torque response.
+    pub torque: Ensemble,
+    /// Position-error response.
+    pub position_error: Ensemble,
+}
+
+/// Locates feedforward edges in `s` and averages the velocity, torque and position-error
+/// responses over them.
+pub fn probe_ensembles(s: &ChannelSeries) -> ProbeEnsembles {
+    let edges = locate_edges(&s.ff_offset);
+    let torque: Vec<f64> = s.torque.iter().map(|&v| f64::from(v)).collect();
+    ProbeEnsembles {
+        dt_s: sample_period_s(&s.t_s),
+        velocity: ensemble(&s.velocity_mm_s, &s.ff_offset, &edges),
+        torque: ensemble(&torque, &s.ff_offset, &edges),
+        position_error: ensemble(&s.position_error_um, &s.ff_offset, &edges),
+    }
+}
+
+fn detrended_torque(s: &ChannelSeries) -> Vec<f64> {
+    let torque: Vec<f64> = s.torque.iter().map(|&v| f64::from(v)).collect();
+    moving_mean_detrend(&torque, DETREND_WINDOW)
+}
+
+/// Welch spectrum of the detrended torque, the spectrum whose in-band peak
+/// [`ProbeMetrics::torque_psd_peak_hz`] reports; `None` when too short.
+pub fn torque_psd(s: &ChannelSeries) -> Option<Psd> {
+    welch_psd(&detrended_torque(s), PSD_FS_HZ)
+}
+
 /// Locates feedforward edges in `s` and fits the velocity, torque and position-error
 /// ensembles, plus the torque PSD peak.
 pub fn probe_metrics(s: &ChannelSeries) -> ProbeMetrics {
-    let edges = locate_edges(&s.ff_offset);
-    let dt_s = sample_period_s(&s.t_s);
-    let torque: Vec<f64> = s.torque.iter().map(|&v| f64::from(v)).collect();
-    let fit = |signal: &[f64]| {
-        let e = ensemble(signal, &s.ff_offset, &edges);
-        (fit_damped(&e.mean, dt_s), e)
-    };
-    let (velocity, velocity_ensemble) = fit(&s.velocity_mm_s);
-    let (torque_fit, _) = fit(&torque);
-    let (position_error, _) = fit(&s.position_error_um);
+    let e = probe_ensembles(s);
     ProbeMetrics {
-        velocity,
-        torque: torque_fit,
-        position_error,
-        edges: velocity_ensemble.edges,
-        stderr_at_peak: velocity_ensemble.stderr_at_peak,
-        torque_psd_peak_hz: welch_peak_hz(
-            &moving_mean_detrend(&torque, DETREND_WINDOW),
-            PSD_FS_HZ,
-            PSD_BAND_HZ,
-        ),
+        velocity: fit_damped(&e.velocity.mean, e.dt_s),
+        torque: fit_damped(&e.torque.mean, e.dt_s),
+        position_error: fit_damped(&e.position_error.mean, e.dt_s),
+        edges: e.velocity.edges,
+        stderr_at_peak: e.velocity.stderr_at_peak,
+        torque_psd_peak_hz: welch_peak_hz(&detrended_torque(s), PSD_FS_HZ, PSD_BAND_HZ),
     }
 }

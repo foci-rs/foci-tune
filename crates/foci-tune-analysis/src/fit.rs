@@ -47,6 +47,22 @@ pub enum FitError {
     SingularJacobian,
 }
 
+impl DampedFit {
+    /// The fitted model at `t_s` seconds after the edge.
+    pub fn value_at(&self, t_s: f64) -> f64 {
+        let w = TAU * self.damped_hz / (1.0 - self.zeta * self.zeta).sqrt();
+        let p = Vector6::new(
+            self.amplitude,
+            self.zeta,
+            w,
+            self.phase,
+            self.offset,
+            self.tau_s,
+        );
+        model(&p, t_s)
+    }
+}
+
 fn model(p: &Vector6<f64>, t: f64) -> f64 {
     let (a, z, w, phi, b, tau) = (p[0], p[1], p[2], p[3], p[4], p[5]);
     let wd = w * (1.0 - z * z).max(1e-6).sqrt();

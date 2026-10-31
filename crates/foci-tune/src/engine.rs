@@ -1223,9 +1223,11 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         self.set_state(RunState::Analyzing);
         if let Some(regime) = regime {
             let path = summary.path.clone();
-            let series =
-                tokio::task::spawn_blocking(move || build_series(&path, &Regime::from(&regime)))
-                    .await;
+            let kind = req.kind.clone();
+            let series = tokio::task::spawn_blocking(move || {
+                build_series(&path, &Regime::from(&regime), &kind)
+            })
+            .await;
             let written = match series {
                 Ok(Ok(series)) => {
                     let id = lock(&self.inner).current.as_ref().map(|c| c.run.id.clone());

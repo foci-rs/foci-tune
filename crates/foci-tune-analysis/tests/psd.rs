@@ -1,6 +1,6 @@
 use core::f64::consts::TAU;
 
-use foci_tune_analysis::psd::welch_peak_hz;
+use foci_tune_analysis::psd::{welch_peak_hz, welch_psd};
 
 struct Gaussian(u64);
 
@@ -47,4 +47,28 @@ fn welch_peak_ties_resolve_to_the_lowest_bin_in_band() {
     let peak = welch_peak_hz(&flat, 1000.0, (60.0, 490.0));
 
     assert_eq!(peak, 62.5);
+}
+
+#[test]
+fn welch_psd_bins_are_the_spectrum_the_peak_search_reads() {
+    let fs = 1000.0;
+    let mut rng = Gaussian(7);
+    let x: Vec<f64> = (0..4096)
+        .map(|k| (TAU * 200.0 * k as f64 / fs).sin() + 0.5 * rng.sample())
+        .collect();
+
+    let psd = welch_psd(&x, fs).expect("long enough");
+
+    assert_eq!(psd.freq_hz.len(), psd.power.len());
+    assert_eq!(psd.freq_hz.len(), 129);
+    assert_eq!(psd.freq_hz[1], fs / 256.0);
+    let (k, _) = psd
+        .power
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| psd.freq_hz[*k] > 60.0 && psd.freq_hz[*k] < 490.0)
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap();
+    assert_eq!(psd.freq_hz[k], welch_peak_hz(&x, fs, (60.0, 490.0)));
+    assert!(welch_psd(&x[..100], fs).is_none());
 }
