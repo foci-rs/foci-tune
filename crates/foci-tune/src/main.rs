@@ -25,6 +25,11 @@ struct Cli {
     #[arg(long)]
     check: bool,
 
+    /// Serve against a simulated printer and board instead of Moonraker and USB.
+    #[cfg(debug_assertions)]
+    #[arg(long)]
+    fake: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -81,6 +86,16 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
+            #[cfg(debug_assertions)]
+            if cli.fake {
+                return match runtime.block_on(foci_tune::devfake::serve_fake(cli.listen)) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        ExitCode::FAILURE
+                    }
+                };
+            }
             let config = ServeConfig {
                 moonraker_url: cli.moonraker_url,
                 api_key: cli.api_key,

@@ -6,6 +6,8 @@ pub mod assets;
 pub mod capture;
 pub mod capture_read;
 pub mod config_block;
+#[cfg(debug_assertions)]
+pub mod devfake;
 pub mod engine;
 pub mod live;
 pub mod model;

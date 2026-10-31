@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bytes::Bytes;
 use tokio::sync::broadcast;
 
 use crate::api::{Api, router};
@@ -105,6 +106,21 @@ async fn shutdown_signal() {
 /// [`ServeError`] when Moonraker reports no config root, the data directory is not writable,
 /// the address cannot be bound, or the server fails.
 pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
+    serve_with(config, |live, frames, stop| {
+        tokio::spawn(run_trace_reader(live, frames, stop))
+    })
+    .await
+}
+
+/// [`serve`] with the trace reader started by `start_reader` instead of the USB reader.
+pub async fn serve_with(
+    config: ServeConfig,
+    start_reader: impl FnOnce(
+        Arc<Mutex<LiveState>>,
+        broadcast::Sender<(String, Bytes)>,
+        Arc<AtomicBool>,
+    ) -> tokio::task::JoinHandle<()>,
+) -> Result<(), ServeError> {
     let moonraker = Arc::new(MoonrakerClient::connect(ClientConfig::new(
         config.moonraker_url,
         config.api_key,
@@ -114,7 +130,7 @@ pub async fn serve(config: ServeConfig) -> Result<(), ServeError> {
     let live = Arc::new(Mutex::new(LiveState::default()));
     let (frames, _) = broadcast::channel(FRAME_CAPACITY);
     let stop = Arc::new(AtomicBool::new(false));
-    let reader = tokio::spawn(run_trace_reader(live.clone(), frames.clone(), stop.clone()));
+    let reader = start_reader(live.clone(), frames.clone(), stop.clone());
     let engine = Engine::start(
         moonraker.clone(),
         live.clone(),
