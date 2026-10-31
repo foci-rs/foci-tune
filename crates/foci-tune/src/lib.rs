@@ -4,6 +4,7 @@
 pub mod assets;
 pub mod capture;
 pub mod capture_read;
+pub mod config_block;
 pub mod engine;
 pub mod live;
 pub mod model;
