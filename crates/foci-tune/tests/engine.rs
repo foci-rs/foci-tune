@@ -1056,3 +1056,37 @@ async fn runs_left_in_flight_by_a_crash_are_reconciled_to_failed() {
     assert_eq!(rig.run(&killing.id).state, RunState::KillUnconfirmed);
     assert_eq!(rig.run(&id), done);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stepper_table_is_read_once_and_again_after_klipper_reports_ready() {
+    let rig = rig().await;
+    let before = rig.engine.steppers().await.unwrap();
+    rig.engine.steppers().await.unwrap();
+    assert_eq!(rig.fake.settings_queries(), 1);
+    let mut changed = settings(true);
+    changed["stepper_x"]["rotation_distance"] = json!(32.0);
+    rig.fake.set_settings(changed);
+    assert_eq!(
+        rig.engine.steppers().await.unwrap(),
+        before,
+        "cached until ready"
+    );
+
+    rig.fake.push("notify_klippy_disconnected", json!([]));
+    rig.fake.push("notify_klippy_ready", json!([]));
+
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let x = rig.engine.steppers().await.unwrap();
+        if x.iter()
+            .any(|s| s.name == "stepper_x" && s.motor_rotation_distance_mm == 32.0)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "table not re-read after klipper ready"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}

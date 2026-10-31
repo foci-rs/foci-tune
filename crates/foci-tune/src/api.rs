@@ -6,8 +6,9 @@
 //! field on a 400.
 
 use std::io;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
@@ -22,7 +23,8 @@ use foci_tune_analysis::units::POSITION_UNITS_PER_REV;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
+use tokio::time::MissedTickBehavior;
 
 use crate::assets;
 use crate::config_block;
@@ -34,11 +36,16 @@ use crate::model::{
 };
 use crate::moonraker::{KlippyState, MoonrakerApi};
 use crate::pattern::{Pattern, PatternError, propose_pattern};
-use crate::steppers::{BedLimits, Stepper, derive_steppers};
+use crate::steppers::{BedLimits, Stepper};
 use crate::stimulus::{RunKind, StimulusError, compose};
 use crate::store::{SessionSummary, Store, StoreError};
 use crate::ws;
 
+const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+/// A snapshot that differs only in free space or measured cadence is republished at most
+/// this often.
+const VOLATILE_PERIOD: Duration = Duration::from_secs(5);
 const TRACE_MODES: [&str; 3] = ["dormant", "critical", "diagnostic"];
 const DEFAULT_REPEATS: u32 = 2;
 const DEFAULT_FLOOR: f64 = 0.05;
@@ -67,6 +74,39 @@ impl<M> Clone for Api<M> {
             frames: self.frames.clone(),
             store: self.store.clone(),
         }
+    }
+}
+
+/// The latest printer snapshot, `None` until the first one is built.
+pub type PrinterFeed = watch::Receiver<Option<Arc<PrinterView>>>;
+
+/// Router state: the shared handles plus the printer snapshot feed.
+pub struct App<M> {
+    api: Api<M>,
+    printer: PrinterFeed,
+}
+
+impl<M> Clone for App<M> {
+    fn clone(&self) -> Self {
+        Self {
+            api: self.api.clone(),
+            printer: self.printer.clone(),
+        }
+    }
+}
+
+impl<M> Deref for App<M> {
+    type Target = Api<M>;
+
+    fn deref(&self) -> &Api<M> {
+        &self.api
+    }
+}
+
+impl<M> App<M> {
+    /// A receiver of the shared printer snapshot.
+    pub fn printer_feed(&self) -> PrinterFeed {
+        self.printer.clone()
     }
 }
 
@@ -607,27 +647,13 @@ struct Prepared {
 }
 
 impl<M: MoonrakerApi + 'static> Api<M> {
-    fn open_serials(&self) -> Vec<String> {
-        lock(&self.live)
-            .boards
-            .iter()
-            .filter(|(_, b)| b.open)
-            .map(|(serial, _)| serial.clone())
-            .collect()
-    }
-
-    async fn steppers(&self) -> Result<Vec<Stepper>, String> {
-        let settings = self.moonraker.settings().await.map_err(|e| e.to_string())?;
-        Ok(derive_steppers(&settings, &self.open_serials()))
-    }
-
     /// Builds the printer snapshot: Moonraker state, the stepper table, live boards,
     /// preconditions per stepper and the engine state.
     pub async fn printer_view(&self) -> PrinterView {
         let printer = self.moonraker.state().borrow().clone();
-        let (steppers, settings_error) = match self.steppers().await {
+        let (steppers, settings_error) = match self.engine.steppers().await {
             Ok(s) => (s, None),
-            Err(e) => (Vec::new(), Some(e)),
+            Err(e) => (Vec::new(), Some(e.to_string())),
         };
         let limits = BedLimits::from_steppers(&steppers);
         let mut preconditions = Vec::new();
@@ -737,10 +763,7 @@ impl<M: MoonrakerApi + 'static> Api<M> {
     /// Checks the preconditions and the stimulus, then finds or creates the session.
     async fn prepare(&self, input: &RunInput, ladder: Option<&LadderDef>) -> ApiResult<Prepared> {
         self.engine.check(&input.stepper).await?;
-        let steppers = self
-            .steppers()
-            .await
-            .map_err(|_| ApiError::from(Precondition::KlippyNotReady))?;
+        let steppers = self.engine.steppers().await?;
         let stepper = steppers
             .iter()
             .find(|s| s.name == input.stepper)
@@ -867,7 +890,12 @@ impl<M: MoonrakerApi + 'static> Api<M> {
 /// The router: the API under `/api`, the event stream at `/api/events`, and the embedded UI
 /// for every other path, with `index.html` for paths that are not files so client-side routes
 /// load.
+///
+/// Spawns the one task that builds the printer snapshot for every event-stream client, so it
+/// must be called inside a tokio runtime.
 pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
+    let feed = spawn_printer_feed(api.clone());
+    let app = App { api, printer: feed };
     Router::new()
         .route("/api/printer", get(printer::<M>))
         .route("/api/trace-mode", post(trace_mode::<M>))
@@ -885,15 +913,60 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         .route("/api/firmware-restart", post(firmware_restart::<M>))
         .route("/api/events", get(ws::events::<M>))
         .fallback(static_or_index)
-        .with_state(api)
+        .with_state(app)
 }
 
-async fn printer<M: MoonrakerApi + 'static>(State(api): State<Api<M>>) -> Json<PrinterView> {
+/// The snapshot with the fields that change on every build cleared, for change detection.
+fn stable_part(view: &PrinterView) -> PrinterView {
+    let mut stable = view.clone();
+    stable.free_bytes = None;
+    for board in &mut stable.boards {
+        board.critical_hz_measured = 0.0;
+    }
+    stable
+}
+
+/// Rebuilds the printer snapshot once a second, each build bounded so a hung Moonraker only
+/// delays the snapshot, and publishes it when it changed: at once for a change other than free
+/// space or cadence, at most every [`VOLATILE_PERIOD`] for those.
+fn spawn_printer_feed<M: MoonrakerApi + 'static>(api: Api<M>) -> PrinterFeed {
+    let (tx, rx) = watch::channel(None);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(SNAPSHOT_PERIOD);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut published: Option<(PrinterView, PrinterView, tokio::time::Instant)> = None;
+        loop {
+            tick.tick().await;
+            if tx.is_closed() {
+                return;
+            }
+            let Ok(view) = tokio::time::timeout(SNAPSHOT_TIMEOUT, api.printer_view()).await else {
+                tracing::warn!("printer snapshot took longer than {SNAPSHOT_TIMEOUT:?}");
+                continue;
+            };
+            let stable = stable_part(&view);
+            let now = tokio::time::Instant::now();
+            let publish = match &published {
+                None => true,
+                Some((full, key, at)) => {
+                    *key != stable || (*full != view && now - *at >= VOLATILE_PERIOD)
+                }
+            };
+            if publish {
+                tx.send_replace(Some(Arc::new(view.clone())));
+                published = Some((view, stable, now));
+            }
+        }
+    });
+    rx
+}
+
+async fn printer<M: MoonrakerApi + 'static>(State(api): State<App<M>>) -> Json<PrinterView> {
     Json(api.printer_view().await)
 }
 
 async fn create_run<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     body: Result<Json<Value>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
     let input = parse_run(&json_body(body)?)?;
@@ -913,7 +986,7 @@ async fn create_run<M: MoonrakerApi + 'static>(
 }
 
 async fn create_ladder<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     body: Result<Json<Value>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
     let body = json_body(body)?;
@@ -935,14 +1008,14 @@ async fn create_ladder<M: MoonrakerApi + 'static>(
 }
 
 async fn read_run<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Run>> {
     Ok(Json(api.read_run(&run_id(&id)?).await?))
 }
 
 async fn series<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
     let run = run_id(&id)?;
@@ -953,7 +1026,7 @@ async fn series<M: MoonrakerApi + 'static>(
 }
 
 async fn capture<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
     let run = run_id(&id)?;
@@ -980,7 +1053,7 @@ async fn capture<M: MoonrakerApi + 'static>(
 }
 
 async fn config_block_text<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Response> {
     let run = api.read_run(&run_id(&id)?).await?;
@@ -992,7 +1065,7 @@ async fn config_block_text<M: MoonrakerApi + 'static>(
 }
 
 async fn abort<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let run = run_id(&id)?;
@@ -1008,13 +1081,13 @@ async fn abort<M: MoonrakerApi + 'static>(
     Ok(Json(json!({"run": run, "aborted": status.queue})))
 }
 
-async fn kill<M: MoonrakerApi + 'static>(State(api): State<Api<M>>) -> Json<Value> {
+async fn kill<M: MoonrakerApi + 'static>(State(api): State<App<M>>) -> Json<Value> {
     let outcome = api.engine.kill().await;
     Json(json!({"run": outcome.run, "state": outcome.state.name()}))
 }
 
 async fn sessions<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
 ) -> ApiResult<Json<Vec<SessionView>>> {
     let store = api.store.clone();
     let scanned = blocking(move || store.scan()).await?.map_err(io_error)?;
@@ -1022,7 +1095,7 @@ async fn sessions<M: MoonrakerApi + 'static>(
 }
 
 async fn session<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<SessionView>> {
     let id = session_id(&id)?;
@@ -1036,7 +1109,7 @@ async fn session<M: MoonrakerApi + 'static>(
 }
 
 async fn revert<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let id = session_id(&id)?;
@@ -1058,7 +1131,7 @@ async fn revert<M: MoonrakerApi + 'static>(
 }
 
 async fn firmware_restart<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
 ) -> ApiResult<Json<Value>> {
     api.moonraker
         .firmware_restart()
@@ -1068,7 +1141,7 @@ async fn firmware_restart<M: MoonrakerApi + 'static>(
 }
 
 async fn trace_mode<M: MoonrakerApi + 'static>(
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
     body: Result<Json<Value>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
     let body = json_body(body)?;
@@ -1083,10 +1156,7 @@ async fn trace_mode<M: MoonrakerApi + 'static>(
     if !api.engine.is_idle() {
         return Err(Precondition::Busy.into());
     }
-    let steppers = api
-        .steppers()
-        .await
-        .map_err(|_| ApiError::from(Precondition::KlippyNotReady))?;
+    let steppers = api.engine.steppers().await?;
     let stepper = steppers.iter().find(|s| s.serial == board).ok_or_else(|| {
         ApiError::new(
             StatusCode::NOT_FOUND,

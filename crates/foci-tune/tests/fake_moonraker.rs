@@ -46,6 +46,7 @@ struct Inner {
     estop_delay: Duration,
     estop_shutdown: Option<Duration>,
     settings_delay: Duration,
+    settings_queries: u32,
     config_root: String,
 }
 
@@ -134,7 +135,11 @@ async fn query(
     Query(params): Query<serde_json::Map<String, Value>>,
 ) -> Response {
     if params.contains_key("configfile") {
-        let delay = shared.inner.lock().unwrap().settings_delay;
+        let delay = {
+            let mut inner = shared.inner.lock().unwrap();
+            inner.settings_queries += 1;
+            inner.settings_delay
+        };
         tokio::time::sleep(delay).await;
     }
     http_reply(shared.call("printer.objects.query", &Value::Object(params)))
@@ -267,6 +272,7 @@ impl FakeMoonraker {
                 estop_delay: Duration::ZERO,
                 estop_shutdown: None,
                 settings_delay: Duration::ZERO,
+                settings_queries: 0,
                 config_root: "/home/pi/printer_data/config".to_owned(),
             }),
             refuse_ws: AtomicBool::new(false),
@@ -340,6 +346,11 @@ impl FakeMoonraker {
         inner.estop_status = status;
         inner.estop_delay = delay;
         inner.estop_shutdown = shutdown;
+    }
+
+    /// How many `configfile.settings` queries have arrived, answered or not.
+    pub fn settings_queries(&self) -> u32 {
+        self.shared.inner.lock().unwrap().settings_queries
     }
 
     /// Delays every `configfile.settings` query by `delay`.

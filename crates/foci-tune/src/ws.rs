@@ -1,9 +1,9 @@
 //! The event stream at `/api/events`.
 //!
 //! Server messages are JSON objects tagged by `type`:
-//! - `printer`: the [`PrinterView`], on connect, on every Moonraker state change and once a
-//!   second while it differs from the last one sent. Control state per channel travels inside
-//!   it (`boards[].channels`).
+//! - `printer`: the [`PrinterView`], the latest shared snapshot on connect, then every time
+//!   the snapshot task publishes a new one (at most once a second). Control state per channel
+//!   travels inside it (`boards[].channels`).
 //! - `run_state`: `{session, run, state, reason?}` for every run state change.
 //! - `run_result`: `{session, run}` with the stored record once a run reaches its final state.
 //! - `queue`: `{runs}`, the queued run ids in order.
@@ -17,6 +17,7 @@
 //! Client messages: `{"subscribe": "live"}` and `{"unsubscribe": "live"}`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::State;
@@ -28,14 +29,13 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 
-use crate::api::{Api, PrinterView};
+use crate::api::{App, PrinterView};
 use crate::engine::EngineEvent;
 use crate::model::{Run, RunId, RunState, SessionId};
 use crate::moonraker::MoonrakerApi;
 
-const PRINTER_REFRESH: Duration = Duration::from_secs(1);
 const LIVE_PERIOD: Duration = Duration::from_millis(50);
 const RECORDING_RECHECK: Duration = Duration::from_millis(10);
 const LIVE: &str = "live";
@@ -75,7 +75,7 @@ pub struct LiveBatch {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// Printer snapshot.
-    Printer(Box<PrinterView>),
+    Printer(Arc<PrinterView>),
     /// A run changed state.
     RunState {
         /// Owning session.
@@ -141,7 +141,7 @@ impl From<EngineEvent> for ServerMessage {
 /// `GET /api/events`: upgrades to the event stream.
 pub async fn events<M: MoonrakerApi + 'static>(
     ws: WebSocketUpgrade,
-    State(api): State<Api<M>>,
+    State(api): State<App<M>>,
 ) -> Response {
     ws.on_upgrade(move |socket| connection(socket, api))
 }
@@ -200,27 +200,6 @@ async fn send(socket: &mut WebSocket, message: &ServerMessage) -> bool {
     socket.send(Message::Text(text.into())).await.is_ok()
 }
 
-/// Sends the printer snapshot when it differs from the last one sent.
-async fn send_printer<M: MoonrakerApi + 'static>(
-    socket: &mut WebSocket,
-    api: &Api<M>,
-    last: &mut Option<String>,
-) -> bool {
-    let message = ServerMessage::Printer(Box::new(api.printer_view().await));
-    let Ok(text) = serde_json::to_string(&message) else {
-        return true;
-    };
-    if last.as_deref() == Some(text.as_str()) {
-        return true;
-    }
-    let ok = socket
-        .send(Message::Text(text.clone().into()))
-        .await
-        .is_ok();
-    *last = Some(text);
-    ok
-}
-
 enum Request {
     Subscribe,
     Unsubscribe,
@@ -244,13 +223,13 @@ async fn next_frame(live: &mut Option<LiveFeed>) -> Result<(String, Bytes), Recv
     }
 }
 
-async fn connection<M: MoonrakerApi + 'static>(mut socket: WebSocket, api: Api<M>) {
+async fn connection<M: MoonrakerApi + 'static>(mut socket: WebSocket, api: App<M>) {
     let mut events = api.engine.events();
-    let mut printer_state = api.moonraker.state();
-    let mut moonraker_alive = true;
-    let mut refresh = tokio::time::interval(PRINTER_REFRESH);
+    let mut printer = api.printer_feed();
+    printer.mark_changed();
+    let mut printer_alive = true;
     let mut flush = tokio::time::interval(LIVE_PERIOD);
-    let mut last_printer = None;
+    flush.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut live: Option<LiveFeed> = None;
     loop {
         let ok = tokio::select! {
@@ -279,11 +258,14 @@ async fn connection<M: MoonrakerApi + 'static>(mut socket: WebSocket, api: Api<M
                 }
                 Err(RecvError::Closed) => return,
             },
-            changed = printer_state.changed(), if moonraker_alive => {
-                moonraker_alive = changed.is_ok();
-                send_printer(&mut socket, &api, &mut last_printer).await
+            changed = printer.changed(), if printer_alive => {
+                printer_alive = changed.is_ok();
+                let snapshot = printer.borrow_and_update().clone();
+                match snapshot {
+                    Some(view) => send(&mut socket, &ServerMessage::Printer(view)).await,
+                    None => true,
+                }
             }
-            _ = refresh.tick() => send_printer(&mut socket, &api, &mut last_printer).await,
             frame = next_frame(&mut live) => match frame {
                 Ok((serial, frame)) => {
                     if let Some(feed) = live.as_mut() {

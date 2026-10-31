@@ -19,6 +19,7 @@ use foci_tune_analysis::ladder::{
 use foci_tune_analysis::protocol::{ControlState, Frame, PROTOCOL_VERSION, decode_frame};
 use foci_tune_analysis::signals::{i_gain_param, p_gain_param};
 use foci_tune_analysis::units::Regime;
+use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::task::JoinHandle;
@@ -438,6 +439,13 @@ fn reconcile(store: &Store) -> io::Result<Vec<(SessionId, Run)>> {
     Ok(reconciled)
 }
 
+/// Klipper's `configfile.settings`, read once and kept until Klipper reports ready again.
+#[derive(Default)]
+struct SettingsCache {
+    value: Option<Arc<Value>>,
+    generation: u64,
+}
+
 struct Shared<M> {
     moonraker: Arc<M>,
     live: Arc<Mutex<LiveState>>,
@@ -450,6 +458,7 @@ struct Shared<M> {
     kill_requested: watch::Sender<u64>,
     kill_resolved: watch::Sender<u64>,
     next_ladder: AtomicU64,
+    settings: Mutex<SettingsCache>,
 }
 
 /// The run engine. Dropping it stops its tasks; a run in flight is abandoned.
@@ -502,6 +511,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             kill_requested: watch::channel(0).0,
             kill_resolved: watch::channel(0).0,
             next_ladder: AtomicU64::new(0),
+            settings: Mutex::default(),
         });
         let worker = tokio::spawn(shared.clone().work());
         let watcher = tokio::spawn(shared.clone().watch_klippy());
@@ -624,6 +634,21 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             }
         }
         self.shared.check_run(stepper).await.map(|_| ())
+    }
+
+    /// Forgets the stepper table, so the next use reads `configfile.settings` again. The
+    /// engine does this itself whenever Klipper reports ready.
+    pub fn refresh_steppers(&self) {
+        self.shared.invalidate_settings();
+    }
+
+    /// The stepper table from the cached settings and the trace interfaces open now.
+    ///
+    /// # Errors
+    /// [`Precondition::KlippyNotReady`] when the settings cannot be read.
+    pub async fn steppers(&self) -> Result<Vec<Stepper>, Precondition> {
+        let settings = self.shared.settings().await?;
+        Ok(derive_steppers(&settings, &self.shared.open_serials()))
     }
 
     /// The run in flight, the queue and any unconfirmed kill.
@@ -844,31 +869,54 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         Ok(())
     }
 
+    fn invalidate_settings(&self) {
+        let mut cache = lock(&self.settings);
+        cache.value = None;
+        cache.generation += 1;
+    }
+
+    async fn settings(&self) -> Result<Arc<Value>, Precondition> {
+        let generation = {
+            let cache = lock(&self.settings);
+            if let Some(value) = &cache.value {
+                return Ok(value.clone());
+            }
+            cache.generation
+        };
+        let value = Arc::new(
+            self.moonraker
+                .settings()
+                .await
+                .map_err(|_| Precondition::KlippyNotReady)?,
+        );
+        let mut cache = lock(&self.settings);
+        if cache.generation == generation {
+            cache.value = Some(value.clone());
+        }
+        Ok(value)
+    }
+
+    fn open_serials(&self) -> Vec<String> {
+        lock(&self.live)
+            .boards
+            .iter()
+            .filter(|(_, b)| b.open)
+            .map(|(serial, _)| serial.clone())
+            .collect()
+    }
+
     async fn resolve(&self, stepper: &str) -> Result<Resolved, Precondition> {
         let printer = self.moonraker.state().borrow().clone();
         if printer.klippy != KlippyState::Ready {
             return Err(Precondition::KlippyNotReady);
         }
-        let settings = self
-            .moonraker
-            .settings()
-            .await
-            .map_err(|_| Precondition::KlippyNotReady)?;
-        let (open, protocol) = {
-            let live = lock(&self.live);
-            let open: Vec<String> = live
-                .boards
-                .iter()
-                .filter(|(_, b)| b.open)
-                .map(|(serial, _)| serial.clone())
-                .collect();
-            let protocol: HashMap<String, Option<u8>> = live
-                .boards
-                .iter()
-                .map(|(serial, b)| (serial.clone(), b.protocol_version))
-                .collect();
-            (open, protocol)
-        };
+        let settings = self.settings().await?;
+        let open = self.open_serials();
+        let protocol: HashMap<String, Option<u8>> = lock(&self.live)
+            .boards
+            .iter()
+            .map(|(serial, b)| (serial.clone(), b.protocol_version))
+            .collect();
         let steppers = derive_steppers(&settings, &open);
         let found = steppers
             .iter()
@@ -1578,9 +1626,16 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     async fn watch_klippy(self: Arc<Self>) {
         let mut state = self.moonraker.state();
         let mut restarts = self.moonraker.klippy_restarts();
+        let mut was_ready = state.borrow().klippy == KlippyState::Ready;
+        let mut seen_restarts = *restarts.borrow();
         loop {
             let klippy = state.borrow_and_update().klippy;
             let count = *restarts.borrow_and_update();
+            let ready = klippy == KlippyState::Ready;
+            if (ready && !was_ready) || count != seen_restarts {
+                self.invalidate_settings();
+            }
+            (was_ready, seen_restarts) = (ready, count);
             self.observe_klippy(klippy, count);
             tokio::select! {
                 changed = state.changed() => if changed.is_err() { return },
@@ -1741,6 +1796,7 @@ mod tests {
             kill_requested: watch::channel(0).0,
             kill_resolved: watch::channel(0).0,
             next_ladder: AtomicU64::new(0),
+            settings: Mutex::default(),
         };
         (shared, stub, dir)
     }

@@ -252,6 +252,7 @@ async fn preconditions_map_to_409_with_their_display_text() {
     let mut settings_without_ppr = rig_settings();
     settings_without_ppr["foci stepper_z"] = json!({"identified_r_count_milli": 700});
     rig.fake.set_settings(settings_without_ppr);
+    rig.engine.refresh_steppers();
     let mut z = tracking_body();
     z["stepper"] = json!("stepper_z");
     let reply = post(&app, "/api/runs", z).await;
@@ -627,6 +628,7 @@ async fn unsupported_kinematics_is_refused_before_anything_is_queued() {
     let mut delta = rig_settings();
     delta["printer"]["kinematics"] = json!("delta");
     rig.fake.set_settings(delta);
+    rig.engine.refresh_steppers();
     let app = app(&rig);
 
     let reply = post(&app, "/api/runs", tracking_body()).await;
@@ -817,5 +819,100 @@ async fn the_event_stream_sends_printer_results_and_live_only_when_subscribed() 
     assert!(n > 0);
     assert_eq!(ch0["position_error"].as_array().unwrap().len(), n);
     assert_eq!(ch0["torque"].as_array().unwrap().len(), n);
+    server.abort();
+}
+
+async fn serve_app(app: &Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = app.clone();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, task)
+}
+
+async fn connect(addr: std::net::SocketAddr) -> Socket {
+    tokio_tungstenite::connect_async(format!("ws://{addr}/api/events"))
+        .await
+        .unwrap()
+        .0
+}
+
+async fn next_of_type(ws: &mut Socket, kind: &str, within: Duration) -> Option<Value> {
+    let deadline = Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let m = next_message(ws, left).await?;
+        if m["type"] == kind {
+            return Some(m);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn printer_snapshots_are_shared_and_the_stepper_table_is_read_once() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let (addr, server) = serve_app(&app).await;
+    let mut clients = Vec::new();
+    for _ in 0..3 {
+        clients.push(connect(addr).await);
+    }
+
+    for ws in &mut clients {
+        let printer = next_of_type(ws, "printer", WAIT)
+            .await
+            .expect("printer on connect");
+        assert_eq!(
+            find(&printer["steppers"], "name", "stepper_x")["serial"],
+            SERIAL_A
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+
+    let queries = rig.fake.settings_queries();
+    assert!(
+        (1..=2).contains(&queries),
+        "{queries} settings queries for 3 clients"
+    );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hung_settings_query_does_not_delay_run_events() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let (addr, server) = serve_app(&app).await;
+    let gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let (_, run) = submit(&app, tracking_body()).await;
+    rig.wait_moving(&mut events, &RunId::parse(&run).unwrap())
+        .await;
+    let mut ws = connect(addr).await;
+    next_of_type(&mut ws, "printer", WAIT)
+        .await
+        .expect("printer on connect");
+    rig.fake.delay_settings(Duration::from_secs(30));
+    rig.engine.refresh_steppers();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    let killer = {
+        let engine = rig.engine.clone();
+        tokio::spawn(async move { engine.kill().await })
+    };
+    let killing = loop {
+        let m = next_of_type(&mut ws, "run_state", Duration::from_secs(1))
+            .await
+            .expect("run_state within a second while settings hang");
+        if m["run"] == run.as_str() && m["state"] == "killing" {
+            break m;
+        }
+    };
+
+    assert_eq!(killing["state"], "killing");
+    killer.await.unwrap();
+    rig.a.sim(|s| s.gate = None);
+    gate.notify_one();
     server.abort();
 }

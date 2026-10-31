@@ -11,6 +11,11 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Message, http::HeaderValue};
 
+/// Bound on establishing a connection to Moonraker.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bound on a whole request, except G-code scripts, which return only when motion ends.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Failure talking to Moonraker.
 #[derive(Debug, thiserror::Error)]
 pub enum MoonrakerError {
@@ -176,7 +181,10 @@ impl MoonrakerClient {
             restarts_tx,
         ));
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .build()
+                .unwrap_or_default(),
             base,
             api_key: config.api_key,
             state,
@@ -208,7 +216,11 @@ impl MoonrakerClient {
     }
 
     async fn action(&self, path: &str) -> Result<()> {
-        Self::result(self.request(reqwest::Method::POST, path)).await?;
+        Self::result(
+            self.request(reqwest::Method::POST, path)
+                .timeout(REQUEST_TIMEOUT),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -221,7 +233,11 @@ impl Drop for MoonrakerClient {
 
 impl MoonrakerApi for MoonrakerClient {
     async fn config_root(&self) -> Result<PathBuf> {
-        let roots = Self::result(self.request(reqwest::Method::GET, "/server/files/roots")).await?;
+        let roots = Self::result(
+            self.request(reqwest::Method::GET, "/server/files/roots")
+                .timeout(REQUEST_TIMEOUT),
+        )
+        .await?;
         roots
             .as_array()
             .into_iter()
@@ -235,7 +251,8 @@ impl MoonrakerApi for MoonrakerClient {
     async fn settings(&self) -> Result<Value> {
         let reply = Self::result(
             self.request(reqwest::Method::GET, "/printer/objects/query")
-                .query(&[("configfile", "settings")]),
+                .query(&[("configfile", "settings")])
+                .timeout(REQUEST_TIMEOUT),
         )
         .await?;
         let settings = reply["status"]["configfile"]["settings"].clone();
