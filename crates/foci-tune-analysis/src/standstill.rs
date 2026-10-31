@@ -6,7 +6,7 @@ use crate::units::Regime;
 /// Dither metrics for one standstill span.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestMetrics {
-    /// Index of the constant-position span within the capture, counting every span.
+    /// Position of this rest among the qualifying rests, counting from 0.
     pub index: usize,
     /// Samples remaining after the settle prefix is dropped.
     pub samples: usize,
@@ -43,15 +43,13 @@ pub fn standstill_metrics(
         .min(s.position_error_um.len());
     let mut rests = Vec::new();
     let mut start = 0;
-    let mut index = 0;
     for i in 1..=n {
         if i < n && s.step_position[i] == s.step_position[start] {
             continue;
         }
         if i - start >= settle + min_len {
-            rests.push(measure(s, index, start + settle, i));
+            rests.push(measure(s, rests.len(), start + settle, i));
         }
-        index += 1;
         start = i;
     }
     let worst_torque_sd = rests.iter().map(|r| r.torque_sd).fold(0.0, f64::max);

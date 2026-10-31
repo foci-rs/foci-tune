@@ -41,7 +41,7 @@ fn rests_are_delimited_by_constant_step_position_and_length() {
     assert_eq!(m.rests.len(), 3);
     assert_eq!(
         m.rests.iter().map(|r| r.index).collect::<Vec<_>>(),
-        vec![0, 2, 3]
+        vec![0, 1, 2]
     );
     assert_eq!(
         m.rests.iter().map(|r| r.samples).collect::<Vec<_>>(),
