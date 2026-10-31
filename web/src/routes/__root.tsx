@@ -1,16 +1,21 @@
-import { createRootRoute, Outlet } from "@tanstack/react-router";
+import { createRootRoute, Outlet, redirect } from "@tanstack/react-router";
+import { Header } from "@/components/header";
+import { FeedProvider } from "@/feed";
 
 export const Route = createRootRoute({
+  beforeLoad: ({ location }) => {
+    if (location.pathname === "/") throw redirect({ to: "/printer" });
+  },
   component: RootLayout,
 });
 
 function RootLayout() {
   return (
-    <div className="min-h-screen">
-      <header className="border-b px-4 py-3 text-sm font-medium tracking-wide">
-        foci-tune
-      </header>
-      <Outlet />
-    </div>
+    <FeedProvider>
+      <div className="min-h-screen">
+        <Header />
+        <Outlet />
+      </div>
+    </FeedProvider>
   );
 }
