@@ -206,7 +206,7 @@ pub fn compose(
                 applied.push(clamp_speed(v, max_velocity, ratio, &mut clamped)?);
             }
             applied.sort_by(f64::total_cmp);
-            s.lines.insert(1, gain_line(stepper));
+            s.lines.insert(1, feedforward_reset_line(stepper));
             for (i, speed) in applied.iter().enumerate() {
                 if i > 0 {
                     s.push("G4 P500");
@@ -239,7 +239,7 @@ pub fn compose(
             let f = feed(speed, ratio);
             let every = *segments_between_toggles;
             let high = format!("{high_gain:?}");
-            s.lines.insert(1, gain_line(stepper));
+            s.lines.insert(1, feedforward_reset_line(stepper));
             let (mut seg, mut toggles) = (0usize, 0usize);
             for _ in 0..*strokes {
                 s.stroke(&f, &mut |sc| {
@@ -297,6 +297,8 @@ pub fn compose(
     })
 }
 
-fn gain_line(stepper: &str) -> String {
+/// The feedforward line the tracking and probe scripts start and end with: enabled at gain
+/// 1.0. Sent on its own to restore the gain after a script that did not finish.
+pub fn feedforward_reset_line(stepper: &str) -> String {
     format!("FOCI_SET_VELOCITY_FEEDFORWARD STEPPER={stepper} ENABLE=1 GAIN=1.0")
 }

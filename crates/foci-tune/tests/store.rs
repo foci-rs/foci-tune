@@ -107,6 +107,7 @@ fn run(session: &SessionId, id: &RunId) -> Run {
             detail: String::new(),
         }],
         metrics: None,
+        notes: Vec::new(),
     }
 }
 

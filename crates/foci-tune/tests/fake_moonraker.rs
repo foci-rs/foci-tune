@@ -1,8 +1,12 @@
 //! In-process Moonraker stand-in: HTTP routes plus a JSON-RPC WebSocket.
 
+// Shared by several test crates; each uses a different subset.
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
@@ -11,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast, watch};
 use tokio::task::JoinHandle;
 
 #[derive(Clone, Debug)]
@@ -20,6 +24,17 @@ enum Command {
     DropSockets,
 }
 
+/// What a scripted `/printer/gcode/script` call answers.
+pub struct ScriptReply {
+    /// `Err` carries Moonraker's error message.
+    pub result: Result<(), String>,
+    /// When set, the reply waits for this notification or for an emergency stop, which
+    /// answers with a shutdown error as Klipper does for an interrupted script.
+    pub gate: Option<Arc<Notify>>,
+}
+
+type ScriptHook = Arc<dyn Fn(&str) -> ScriptReply + Send + Sync>;
+
 struct Inner {
     settings: Value,
     status: Value,
@@ -27,15 +42,34 @@ struct Inner {
     script_error: Option<String>,
     emergency_stops: u32,
     firmware_restarts: u32,
+    estop_status: Option<u16>,
+    estop_delay: Duration,
+    estop_shutdown: bool,
 }
 
 struct Shared {
     inner: Mutex<Inner>,
     refuse_ws: AtomicBool,
     commands: broadcast::Sender<Command>,
+    hook: Mutex<Option<ScriptHook>>,
+    estopped: watch::Sender<u64>,
 }
 
 impl Shared {
+    fn push(&self, method: &str, params: Value) {
+        let webhooks = match method {
+            "notify_klippy_ready" => Some("ready"),
+            "notify_klippy_shutdown" => Some("shutdown"),
+            "notify_klippy_disconnected" => Some("disconnected"),
+            _ => None,
+        };
+        if let Some(state) = webhooks {
+            self.inner.lock().unwrap().status["webhooks"]["state"] = json!(state);
+        }
+        let text = json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string();
+        let _ = self.commands.send(Command::Push(text));
+    }
+
     fn call(&self, method: &str, params: &Value) -> Result<Value, String> {
         let mut inner = self.inner.lock().unwrap();
         match method {
@@ -101,11 +135,45 @@ async fn query(
 }
 
 async fn script(State(shared): State<Arc<Shared>>, Json(body): Json<Value>) -> Response {
-    http_reply(shared.call("printer.gcode.script", &body))
+    let hook = shared.hook.lock().unwrap().clone();
+    let Some(hook) = hook else {
+        return http_reply(shared.call("printer.gcode.script", &body));
+    };
+    let script = body["script"].as_str().unwrap_or_default().to_owned();
+    shared.inner.lock().unwrap().scripts.push(script.clone());
+    let reply = tokio::task::spawn_blocking(move || hook(&script))
+        .await
+        .unwrap();
+    if let Some(gate) = reply.gate {
+        let mut estopped = shared.estopped.subscribe();
+        tokio::select! {
+            () = gate.notified() => {}
+            _ = estopped.changed() => return http_reply(Err("Klipper shutdown".to_owned())),
+            () = tokio::time::sleep(Duration::from_secs(30)) => {}
+        }
+    }
+    http_reply(reply.result.map(|()| json!("ok")))
 }
 
 async fn emergency_stop(State(shared): State<Arc<Shared>>) -> Response {
-    http_reply(shared.call("printer.emergency_stop", &Value::Null))
+    let (status, delay, shutdown) = {
+        let mut inner = shared.inner.lock().unwrap();
+        inner.emergency_stops += 1;
+        (inner.estop_status, inner.estop_delay, inner.estop_shutdown)
+    };
+    tokio::time::sleep(delay).await;
+    if let Some(code) = status {
+        return (
+            StatusCode::from_u16(code).unwrap(),
+            Json(json!({"error": {"code": code, "message": "emergency stop failed"}})),
+        )
+            .into_response();
+    }
+    shared.estopped.send_modify(|n| *n += 1);
+    if shutdown {
+        shared.push("notify_klippy_shutdown", json!([]));
+    }
+    http_reply(Ok(json!("ok")))
 }
 
 async fn firmware_restart(State(shared): State<Arc<Shared>>) -> Response {
@@ -185,9 +253,14 @@ impl FakeMoonraker {
                 script_error: None,
                 emergency_stops: 0,
                 firmware_restarts: 0,
+                estop_status: None,
+                estop_delay: Duration::ZERO,
+                estop_shutdown: false,
             }),
             refuse_ws: AtomicBool::new(false),
             commands,
+            hook: Mutex::new(None),
+            estopped: watch::channel(0).0,
         });
         let app = Router::new()
             .route("/server/files/roots", get(roots))
@@ -230,17 +303,37 @@ impl FakeMoonraker {
     }
 
     pub fn push(&self, method: &str, params: Value) {
-        let webhooks = match method {
-            "notify_klippy_ready" => Some("ready"),
-            "notify_klippy_shutdown" => Some("shutdown"),
-            "notify_klippy_disconnected" => Some("disconnected"),
-            _ => None,
-        };
-        if let Some(state) = webhooks {
-            self.shared.inner.lock().unwrap().status["webhooks"]["state"] = json!(state);
+        self.shared.push(method, params);
+    }
+
+    /// Answers every G-code script through `hook`, which runs on a blocking thread.
+    pub fn on_script(&self, hook: impl Fn(&str) -> ScriptReply + Send + Sync + 'static) {
+        *self.shared.hook.lock().unwrap() = Some(Arc::new(hook));
+    }
+
+    /// Makes the emergency stop wait `delay`, then fail with `status` or succeed, and on
+    /// success report Klipper shutdown when `shutdown` is set.
+    pub fn script_emergency_stop(&self, status: Option<u16>, delay: Duration, shutdown: bool) {
+        let mut inner = self.shared.inner.lock().unwrap();
+        inner.estop_status = status;
+        inner.estop_delay = delay;
+        inner.estop_shutdown = shutdown;
+    }
+
+    /// Merges `patch` into the subscribed objects without notifying anyone.
+    pub fn set_status(&self, patch: Value) {
+        let mut inner = self.shared.inner.lock().unwrap();
+        for (object, fields) in patch.as_object().unwrap() {
+            for (key, value) in fields.as_object().unwrap() {
+                inner.status[object][key] = value.clone();
+            }
         }
-        let text = json!({"jsonrpc": "2.0", "method": method, "params": params}).to_string();
-        let _ = self.shared.commands.send(Command::Push(text));
+    }
+
+    /// Merges `patch` and pushes it as a status update.
+    pub fn update_status(&self, patch: Value) {
+        self.set_status(patch.clone());
+        self.push("notify_status_update", json!([patch, 2.0]));
     }
 
     pub fn refuse_websockets(&self, refuse: bool) {

@@ -683,6 +683,59 @@ pub struct Run {
     pub verification: Vec<Verification>,
     /// Analysis results.
     pub metrics: Option<Metrics>,
+    /// Operator-visible remarks that are not errors, such as a trace mode left unrestored.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl RunState {
+    /// True for states a run never leaves on its own: finished, stopped or not run.
+    ///
+    /// `KillUnconfirmed` counts as terminal: only a confirmed emergency stop changes it.
+    pub fn is_terminal(&self) -> bool {
+        match self {
+            Self::Done
+            | Self::NotComparable(_)
+            | Self::Failed(_)
+            | Self::Aborted
+            | Self::Skipped(_)
+            | Self::KillUnconfirmed
+            | Self::Killed => true,
+            Self::Queued
+            | Self::Preparing
+            | Self::WritingGains
+            | Self::Baseline
+            | Self::Recording
+            | Self::Moving
+            | Self::Draining
+            | Self::Verifying
+            | Self::Analyzing
+            | Self::Killing => false,
+        }
+    }
+
+    /// The state's `snake_case` name, as `run.json` stores it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Preparing => "preparing",
+            Self::WritingGains => "writing_gains",
+            Self::Baseline => "baseline",
+            Self::Recording => "recording",
+            Self::Moving => "moving",
+            Self::Draining => "draining",
+            Self::Verifying => "verifying",
+            Self::Analyzing => "analyzing",
+            Self::Done => "done",
+            Self::NotComparable(_) => "not_comparable",
+            Self::Failed(_) => "failed",
+            Self::Aborted => "aborted",
+            Self::Skipped(_) => "skipped",
+            Self::Killing => "killing",
+            Self::KillUnconfirmed => "kill_unconfirmed",
+            Self::Killed => "killed",
+        }
+    }
 }
 
 /// Decimated plot series of one channel; `None` marks a non-finite sample.

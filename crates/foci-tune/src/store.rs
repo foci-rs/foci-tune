@@ -163,6 +163,22 @@ impl Store {
         write_json_atomic(&dir.join(SERIES_FILE), s)
     }
 
+    /// Reads `session.json`.
+    ///
+    /// # Errors
+    /// I/O errors, including a missing session, and unreadable JSON.
+    pub fn read_session(&self, session: &SessionId) -> Result<Session, StoreError> {
+        read_json(&self.session_dir(session).join(SESSION_FILE))
+    }
+
+    /// Reads a run's `run.json`.
+    ///
+    /// # Errors
+    /// I/O errors, including a missing run, and unreadable JSON.
+    pub fn read_run(&self, session: &SessionId, run: &RunId) -> Result<Run, StoreError> {
+        read_json(&self.run_dir(session, run).join(RUN_FILE))
+    }
+
     /// Where the run's capture lives.
     pub fn capture_path(&self, session: &SessionId, run: &RunId) -> PathBuf {
         self.run_dir(session, run).join(CAPTURE_FILE)

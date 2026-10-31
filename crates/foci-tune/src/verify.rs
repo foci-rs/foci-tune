@@ -31,8 +31,10 @@ pub enum Kind {
 /// Channel the reference scripts analysed.
 const CHANNEL: u8 = 0;
 const ROTATION_DISTANCE_MM: f64 = 40.0;
-const STANDSTILL_SETTLE: usize = 500;
-const STANDSTILL_MIN_LEN: usize = 200;
+/// Samples dropped at the start of each rest before measuring.
+pub(crate) const STANDSTILL_SETTLE: usize = 500;
+/// Samples a rest must keep after the settle prefix.
+pub(crate) const STANDSTILL_MIN_LEN: usize = 200;
 const PSD_BIN_HZ: f64 = 1000.0 / 256.0;
 const ARCHIVE_PROTOCOL_VERSION: u8 = 24;
 const FRAME_TYPE_CRITICAL: u8 = 1;
