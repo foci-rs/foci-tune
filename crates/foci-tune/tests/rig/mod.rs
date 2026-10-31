@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
+use foci_tune::discovery::{DiscoveryConfig, run_trace_discovery};
 use foci_tune::engine::{Engine, EngineConfig, EngineEvent, LadderRequest};
 use foci_tune::live::LiveState;
 use foci_tune::model::{
@@ -25,6 +26,7 @@ use foci_tune::trace::{FrameSource, pump_source};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::sync::{Notify, broadcast};
+use tokio::task::JoinHandle;
 
 use crate::fake_moonraker::{FakeMoonraker, ScriptReply};
 
@@ -247,6 +249,24 @@ pub fn probe_velocity(n: usize, edges: &[(usize, f64)], zeta: f64) -> f64 {
             .sum::<f64>()
 }
 
+fn spawn_pump(
+    serial: &'static str,
+    rx: mpsc::Receiver<Vec<u8>>,
+    live: &Arc<Mutex<LiveState>>,
+    frames: &broadcast::Sender<(String, Bytes)>,
+    stop: &Arc<AtomicBool>,
+) {
+    let (live, frames, stop) = (live.clone(), frames.clone(), stop.clone());
+    std::thread::spawn(move || {
+        let mut source = ScriptedSource {
+            serial: serial.to_owned(),
+            rx,
+            pending: VecDeque::new(),
+        };
+        pump_source(&mut source, &live, &frames, &stop);
+    });
+}
+
 impl Board {
     pub fn new(
         serial: &'static str,
@@ -257,15 +277,7 @@ impl Board {
     ) -> Arc<Self> {
         let (tx, rx) = mpsc::channel();
         if open {
-            let (live, frames, stop) = (live.clone(), frames.clone(), stop.clone());
-            std::thread::spawn(move || {
-                let mut source = ScriptedSource {
-                    serial: serial.to_owned(),
-                    rx,
-                    pending: VecDeque::new(),
-                };
-                pump_source(&mut source, &live, &frames, &stop);
-            });
+            spawn_pump(serial, rx, live, frames, stop);
         }
         Arc::new(Self {
             serial,
@@ -282,6 +294,13 @@ impl Board {
 
     pub fn unplug(&self) {
         self.tx.lock().unwrap().take();
+    }
+
+    /// Opens the interface again with a new reader, as after a USB re-enumeration.
+    pub fn replug(&self, stop: &Arc<AtomicBool>) {
+        let (tx, rx) = mpsc::channel();
+        *self.tx.lock().unwrap() = Some(tx);
+        spawn_pump(self.serial, rx, &self.live, &self.frames, stop);
     }
 
     pub fn next(sim: &mut Sim) -> (u32, u64) {
@@ -552,8 +571,19 @@ pub fn fast_config() -> EngineConfig {
     }
 }
 
+pub fn fast_discovery() -> DiscoveryConfig {
+    DiscoveryConfig {
+        grace: Duration::from_millis(300),
+        retry_start: Duration::from_millis(50),
+        retry_max: Duration::from_millis(200),
+        poll: Duration::from_millis(10),
+    }
+}
+
 pub struct Options {
     pub config: EngineConfig,
+    pub discovery: Option<DiscoveryConfig>,
+    pub announce_b: bool,
     pub electrical_model: bool,
     pub open_a: bool,
     pub initial_hz_a: Option<u32>,
@@ -566,6 +596,8 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             config: fast_config(),
+            discovery: None,
+            announce_b: true,
             electrical_model: true,
             open_a: true,
             initial_hz_a: Some(0),
@@ -587,12 +619,16 @@ pub struct Rig {
     pub stop: Arc<AtomicBool>,
     pub live: Arc<Mutex<LiveState>>,
     pub frames: broadcast::Sender<(String, Bytes)>,
+    pub discovery: Option<JoinHandle<()>>,
     pub _dir: TempDir,
 }
 
 impl Drop for Rig {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(task) = &self.discovery {
+            task.abort();
+        }
     }
 }
 
@@ -634,7 +670,9 @@ pub async fn rig_with(o: Options) -> Rig {
     if let Some(hz) = o.initial_hz_a {
         a.announce(hz);
     }
-    b.announce(0);
+    if o.announce_b {
+        b.announce(0);
+    }
 
     let fake = FakeMoonraker::start().await;
     fake.set_settings(settings(o.electrical_model));
@@ -682,6 +720,9 @@ pub async fn rig_with(o: Options) -> Rig {
         )
         .unwrap(),
     );
+    let discovery = o
+        .discovery
+        .map(|config| tokio::spawn(run_trace_discovery(engine.clone(), live.clone(), config)));
     Rig {
         fake,
         client,
@@ -693,6 +734,7 @@ pub async fn rig_with(o: Options) -> Rig {
         stop,
         live,
         frames,
+        discovery,
         _dir: dir,
     }
 }

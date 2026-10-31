@@ -11,6 +11,7 @@ use bytes::Bytes;
 use tokio::sync::broadcast;
 
 use crate::api::{Api, router};
+use crate::discovery::{DiscoveryConfig, run_trace_discovery};
 use crate::engine::{Engine, EngineConfig};
 use crate::live::LiveState;
 use crate::moonraker::{ClientConfig, MoonrakerApi, MoonrakerClient};
@@ -142,8 +143,14 @@ pub async fn serve_with(
         path: data.clone(),
         source,
     })?;
+    let engine = Arc::new(engine);
+    let discovery = tokio::spawn(run_trace_discovery(
+        engine.clone(),
+        live.clone(),
+        DiscoveryConfig::default(),
+    ));
     let app = router(Api {
-        engine: Arc::new(engine),
+        engine,
         moonraker,
         live,
         frames,
@@ -162,5 +169,6 @@ pub async fn serve_with(
         .map_err(ServeError::Server);
     stop.store(true, Ordering::Relaxed);
     reader.abort();
+    discovery.abort();
     result
 }

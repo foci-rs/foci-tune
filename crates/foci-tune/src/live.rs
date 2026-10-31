@@ -43,6 +43,12 @@ pub struct BoardLive {
     pub last_frame_at: Instant,
     /// Whether the USB interface is currently open.
     pub open: bool,
+    /// How many times the interface was opened.
+    pub opens: u64,
+    /// When the interface was last opened.
+    pub opened_at: Instant,
+    /// Frames with a valid header since the interface was last opened.
+    pub frames_since_open: u64,
     /// Boot identifier of the latest frame.
     pub boot_id: Option<u32>,
     /// Sequence number of the latest frame.
@@ -52,6 +58,7 @@ pub struct BoardLive {
     /// Frames that could not be decoded for a reason other than a protocol mismatch.
     pub undecodable_frames: u64,
     unusable_reason: Option<String>,
+    wake_note: Option<String>,
     critical_ticks: HashMap<u8, VecDeque<u64>>,
 }
 
@@ -65,18 +72,24 @@ impl BoardLive {
             channels: HashMap::new(),
             last_frame_at: now,
             open: false,
+            opens: 0,
+            opened_at: now,
+            frames_since_open: 0,
             boot_id: None,
             last_sequence: None,
             boot_changes: 0,
             undecodable_frames: 0,
             unusable_reason: None,
+            wake_note: None,
             critical_ticks: HashMap::new(),
         }
     }
 
     /// Why runs must not start on this board, `None` when it is usable.
     pub fn unusable_reason(&self) -> Option<&str> {
-        self.unusable_reason.as_deref()
+        self.unusable_reason
+            .as_deref()
+            .or(self.wake_note.as_deref())
     }
 
     fn reset_stream_state(&mut self) {
@@ -137,10 +150,26 @@ pub struct LiveState {
 impl LiveState {
     /// Records that the interface for `serial` opened.
     pub fn mark_open(&mut self, serial: &str, now: Instant) {
-        self.boards
+        let board = self
+            .boards
             .entry(serial.to_owned())
-            .or_insert_with(|| BoardLive::new(now))
-            .open = true;
+            .or_insert_with(|| BoardLive::new(now));
+        board.open = true;
+        board.opens += 1;
+        board.opened_at = now;
+        board.frames_since_open = 0;
+        board.wake_note = None;
+    }
+
+    /// Sets why a silent board cannot be woken, unless it has sent a frame or was reopened
+    /// since open number `opens`; `None` clears it.
+    pub fn set_wake_note(&mut self, serial: &str, opens: u64, note: Option<String>) {
+        if let Some(board) = self.boards.get_mut(serial)
+            && board.opens == opens
+            && board.frames_since_open == 0
+        {
+            board.wake_note = note;
+        }
     }
 
     /// Records that the interface for `serial` was lost; the last known state is kept.
@@ -160,7 +189,12 @@ impl LiveState {
             .entry(serial.to_owned())
             .or_insert_with(|| BoardLive::new(now));
         board.open = true;
-        let decoded = match decode_frame(frame) {
+        let decoded = decode_frame(frame);
+        if matches!(decoded, Ok(_) | Err(DecodeError::UnsupportedVersion(_))) {
+            board.frames_since_open += 1;
+            board.wake_note = None;
+        }
+        let decoded = match decoded {
             Ok(decoded) => decoded,
             Err(DecodeError::UnsupportedVersion(version)) => {
                 board.protocol_version = Some(version);

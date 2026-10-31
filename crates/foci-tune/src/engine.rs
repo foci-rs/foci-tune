@@ -124,7 +124,10 @@ pub enum Precondition {
     #[error("unknown session {0}")]
     UnknownSession(String),
     /// The trace interface is open but no frame has arrived, so its protocol is unknown.
-    #[error("no trace frame from the stepper's board yet; its protocol version is unknown")]
+    #[error(
+        "the stepper's board is open but has sent no trace frame yet; foci-tune is setting its \
+         trace mode to wake it"
+    )]
     NoTraceFrames,
     /// An emergency stop was posted and not confirmed.
     #[error(
@@ -997,6 +1000,38 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         s.gcode(&format!(
             "FOCI_TRACE_MODE STEPPER={stepper} MODE={}",
             mode.name()
+        ))
+        .await
+        .map_err(CommandError::Gcode)
+    }
+
+    /// Sets `stepper`'s board to the dormant trace mode so a silent board reports its
+    /// metadata and control state; refused like [`Engine::set_trace_mode`], and also while
+    /// Klipper is not ready or an emergency stop is being posted. The command is bounded by
+    /// the confirm timeout.
+    ///
+    /// # Errors
+    /// [`CommandError::Precondition`] when refused, [`CommandError::Gcode`] when Klipper
+    /// rejects the command or it times out.
+    pub async fn wake_trace(&self, stepper: &str) -> Result<(), CommandError> {
+        let s = &self.shared;
+        if s.moonraker.state().borrow().klippy != KlippyState::Ready {
+            return Err(Precondition::KlippyNotReady.into());
+        }
+        {
+            let mut inner = lock(&s.inner);
+            if *s.kill_requested.borrow() != *s.kill_resolved.borrow() {
+                return Err(Precondition::KillPressed.into());
+            }
+            if let Some(first) = inner.admission_failures().into_iter().next() {
+                return Err(first.into());
+            }
+            inner.writing = true;
+        }
+        let _guard = WriteGuard(&s.inner);
+        s.gcode_bounded(&format!(
+            "FOCI_TRACE_MODE STEPPER={stepper} MODE={}",
+            TraceModeCommand::Dormant.name()
         ))
         .await
         .map_err(CommandError::Gcode)

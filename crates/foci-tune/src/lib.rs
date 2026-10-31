@@ -8,6 +8,7 @@ pub mod capture_read;
 pub mod config_block;
 #[cfg(debug_assertions)]
 pub mod devfake;
+pub mod discovery;
 pub mod engine;
 pub mod live;
 pub mod model;
