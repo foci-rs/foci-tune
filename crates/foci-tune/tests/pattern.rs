@@ -100,3 +100,28 @@ fn bed_too_small_for_the_span_is_rejected() {
         Err(PatternError::OutsideLimits)
     );
 }
+
+#[test]
+fn zero_and_sub_millimetre_patterns_are_rejected() {
+    let same = Pattern {
+        start: (100.0, 100.0),
+        end: (100.0, 100.0),
+    };
+    assert_eq!(
+        validate_pattern(&same, &bed()),
+        Err(PatternError::ZeroLength)
+    );
+    let tiny = Pattern {
+        start: (100.0, 100.0),
+        end: (100.5, 100.0),
+    };
+    assert_eq!(
+        validate_pattern(&tiny, &bed()),
+        Err(PatternError::ZeroLength)
+    );
+    let ok = Pattern {
+        start: (100.0, 100.0),
+        end: (101.0, 100.0),
+    };
+    assert_eq!(validate_pattern(&ok, &bed()), Ok(()));
+}

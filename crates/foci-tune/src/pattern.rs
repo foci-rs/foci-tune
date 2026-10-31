@@ -6,6 +6,7 @@ use crate::steppers::BedLimits;
 
 const SPAN_MM: f64 = 100.0;
 const MARGIN_MM: f64 = 10.0;
+const MIN_LENGTH_MM: f64 = 1.0;
 
 /// A stroke between two bed points; strokes run start to end and back.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -28,6 +29,9 @@ pub enum PatternError {
     /// A point lies outside the axis limits minus the margin.
     #[error("pattern lies outside the bed limits minus the {MARGIN_MM} mm margin")]
     OutsideLimits,
+    /// Start and end are closer than 1 mm, so there is no stroke direction.
+    #[error("pattern is shorter than {MIN_LENGTH_MM} mm")]
+    ZeroLength,
 }
 
 /// Proposes a centred 100 mm pattern along the stepper's isolating direction.
@@ -73,15 +77,18 @@ pub fn propose_pattern(
 /// Checks both points against the axis limits shrunk by the 10 mm margin.
 ///
 /// # Errors
-/// [`PatternError::OutsideLimits`] when any coordinate falls outside, or is not finite.
+/// [`PatternError::OutsideLimits`] when any coordinate falls outside, or is not finite;
+/// [`PatternError::ZeroLength`] when start and end are closer than 1 mm.
 pub fn validate_pattern(p: &Pattern, limits: &BedLimits) -> Result<(), PatternError> {
     let inside = |v: f64, (lo, hi): (f64, f64)| v >= lo + MARGIN_MM && v <= hi - MARGIN_MM;
     let ok = [p.start, p.end]
         .iter()
         .all(|&(x, y)| inside(x, limits.x) && inside(y, limits.y));
-    if ok {
-        Ok(())
-    } else {
-        Err(PatternError::OutsideLimits)
+    if !ok {
+        return Err(PatternError::OutsideLimits);
     }
+    if (p.end.0 - p.start.0).hypot(p.end.1 - p.start.1) < MIN_LENGTH_MM {
+        return Err(PatternError::ZeroLength);
+    }
+    Ok(())
 }

@@ -316,3 +316,27 @@ fn invalid_parameters_are_errors_not_corrections() {
     );
     assert!(invalid(nan_max.unwrap_err()));
 }
+
+#[test]
+fn zero_length_pattern_is_refused_for_every_run_kind() {
+    let p = Pattern {
+        start: (150.0, 150.0),
+        end: (150.0, 150.0),
+    };
+    let kinds = [
+        tracking(&[50.0], 1),
+        probe(195.0, 3),
+        RunKind::Standstill {
+            rests: 8,
+            dwell_s: 3.0,
+        },
+    ];
+    for kind in kinds {
+        let e = compose(&kind, &p, "stepper_x", "corexy", &bed(), 500.0).unwrap_err();
+        assert_eq!(
+            e,
+            StimulusError::Pattern(PatternError::ZeroLength),
+            "{kind:?}"
+        );
+    }
+}
