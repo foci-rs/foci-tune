@@ -91,5 +91,4 @@ jobs:
           for target in armv7-unknown-linux-musleabihf aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
             cp "artifacts/foci-tune-${target}/foci-tune" "dist/foci-tune-${target}"
           done
-          cp deploy/99-foci-trace.rules deploy/foci-tune.service dist/
           gh release create "$TAG" dist/* --title "$TAG" --generate-notes
