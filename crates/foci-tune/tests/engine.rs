@@ -293,6 +293,48 @@ async fn metadata_without_control_state_is_a_missing_baseline() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_gain_changed_before_the_baseline_fails_the_run_before_motion() {
+    let rig = rig().await;
+    rig.a
+        .sim(|s| s.drift = Some(Box::new(|c| c.gains[0] = 900)));
+
+    let run = rig.run_once(tracking()).await;
+
+    assert_eq!(
+        run.state,
+        failed("baseline differs: velocity_p requested 841, found 900")
+    );
+    assert_eq!(rig.stimuli(), 0);
+    assert_eq!(rig.scripts().last().unwrap(), DORMANT_LINE);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_filter_changed_before_the_baseline_fails_the_run_before_motion() {
+    let rig = rig().await;
+    rig.a
+        .sim(|s| s.drift = Some(Box::new(|c| c.filters[1] = 2000)));
+
+    let run = rig.run_once(tracking()).await;
+
+    assert_eq!(
+        run.state,
+        failed("baseline differs: torque_hz requested 1000, found 2000")
+    );
+    assert_eq!(rig.stimuli(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_other_channel_changing_before_the_baseline_does_not_fail_the_run() {
+    let rig = rig().await;
+    rig.a.sim(|s| s.channels[1].gains[0] = 900);
+
+    let run = rig.run_once(tracking()).await;
+
+    assert_eq!(run.state, RunState::Done, "{:?}", run.verification);
+    assert_eq!(rig.stimuli(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_channel_moved_thresholds_sit_at_one_and_sixteen_counts() {
     let rig = rig().await;
     let cases = [

@@ -104,6 +104,8 @@ impl Default for Profile {
     }
 }
 
+pub type Drift = Box<dyn FnOnce(&mut Channel) + Send>;
+
 pub struct Sim {
     pub sequence: u32,
     pub ticks: u64,
@@ -119,6 +121,9 @@ pub struct Sim {
     pub edges_by_position_p: HashMap<i32, usize>,
     pub profile_by_velocity_p: HashMap<i32, Profile>,
     pub unconfirmed_velocity_p: Vec<i32>,
+    /// Applied to the channel when the critical trace mode is requested, as another client's
+    /// write landing between the confirmed writes and the baseline.
+    pub drift: Option<Drift>,
 }
 
 impl Default for Sim {
@@ -143,6 +148,7 @@ impl Default for Sim {
             edges_by_position_p: HashMap::new(),
             profile_by_velocity_p: HashMap::new(),
             unconfirmed_velocity_p: Vec::new(),
+            drift: None,
         }
     }
 }
@@ -406,7 +412,15 @@ impl Board {
             } else {
                 0
             };
-            let baseline = self.sim.lock().unwrap().baseline;
+            let baseline = {
+                let mut sim = self.sim.lock().unwrap();
+                if hz > 0
+                    && let Some(drift) = sim.drift.take()
+                {
+                    drift(&mut sim.channels[ch]);
+                }
+                sim.baseline
+            };
             let frames = self.mode_frames(hz, baseline);
             self.emit(frames);
         } else if script.starts_with("G90") {

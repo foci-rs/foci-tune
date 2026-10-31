@@ -449,6 +449,39 @@ fn filter_value(f: &Filters, index: usize) -> u16 {
     }
 }
 
+/// Fails with the first of the four outer gains and four filter cutoffs that the forced
+/// baseline does not carry as requested, so a write by another client is never run under.
+fn baseline_matches(req: &RunRequest, c: &ControlState) -> Result<(), String> {
+    let (g, f) = (&req.gains, &req.filters);
+    let gains = [
+        ("velocity_p", g.velocity_p, c.velocity_p),
+        ("velocity_i", g.velocity_i, c.velocity_i),
+        ("position_p", g.position_p, c.position_p),
+        ("position_i", g.position_i, c.position_i),
+    ];
+    let filters = [
+        ("velocity_hz", f.velocity_hz, c.velocity_filter_hz),
+        ("torque_hz", f.torque_hz, c.torque_filter_hz),
+        ("position_hz", f.position_hz, c.position_filter_hz),
+        ("flux_hz", f.flux_hz, c.flux_filter_hz),
+    ];
+    let differs = gains
+        .into_iter()
+        .map(|(name, want, got)| (name, i64::from(want), i64::from(got)))
+        .chain(
+            filters
+                .into_iter()
+                .map(|(name, want, got)| (name, i64::from(want), i64::from(got))),
+        )
+        .find(|(_, want, got)| want != got);
+    match differs {
+        None => Ok(()),
+        Some((name, want, got)) => Err(format!(
+            "baseline differs: {name} requested {want}, found {got}"
+        )),
+    }
+}
+
 fn parse_axis(axis: &str) -> Result<LadderAxis, LadderRejected> {
     match axis {
         "velocity_p" => Ok(LadderAxis::VelocityP),
@@ -1360,15 +1393,15 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     }
 
     /// Waits for the metadata frame of the stepper's board, then one control-state frame for
-    /// every channel it declares.
+    /// every channel it declares; returns the stepper's channel's frame.
     async fn wait_baseline(
         &self,
         mut rx: broadcast::Receiver<(String, Bytes)>,
         stepper: &Stepper,
-    ) -> Result<(), String> {
+    ) -> Result<ControlState, String> {
         let deadline = Instant::now() + self.config.baseline_timeout;
         let mut channels: Option<Vec<u8>> = None;
-        let mut seen: HashSet<u8> = HashSet::new();
+        let mut seen: HashMap<u8, ControlState> = HashMap::new();
         loop {
             let (serial, frame) = match timeout_at(deadline, rx.recv()).await {
                 Err(_) | Ok(Err(RecvError::Closed)) => break,
@@ -1392,16 +1425,17 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                     channels = Some(declared);
                     seen.clear();
                 }
-                Ok(Frame::ControlState(h, _)) if channels.is_some() => {
-                    seen.insert(h.source_index);
+                Ok(Frame::ControlState(h, c)) if channels.is_some() => {
+                    seen.entry(h.source_index).or_insert(c);
                 }
                 _ => {}
             }
             if channels
                 .as_ref()
-                .is_some_and(|c| c.iter().all(|ch| seen.contains(ch)))
+                .is_some_and(|c| c.iter().all(|ch| seen.contains_key(ch)))
+                && let Some(own) = seen.remove(&stepper.channel)
             {
-                return Ok(());
+                return Ok(own);
             }
         }
         Err(match channels {
@@ -1489,7 +1523,8 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             r.stepper.name
         ))
         .await?;
-        self.wait_baseline(baseline, &r.stepper).await?;
+        let found = self.wait_baseline(baseline, &r.stepper).await?;
+        baseline_matches(req, &found)?;
 
         self.set_state(RunState::Recording);
         self.set_state(RunState::Moving);
