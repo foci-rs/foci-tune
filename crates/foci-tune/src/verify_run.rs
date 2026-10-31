@@ -13,7 +13,11 @@ use crate::model::{Verification, VerificationCheck};
 pub const FEEDFORWARD_REQUEST: u8 = 7;
 /// Probe runs need at least this many located edges.
 pub const MIN_PROBE_EDGES: usize = 20;
+/// Floor of another channel's allowed travel, in its encoder counts.
 const OTHER_CHANNEL_COUNTS: f64 = 16.0;
+/// Another channel may travel this fraction of the declared channel's measured range: on a
+/// corexy machine the idle motor deflects through the belt coupling.
+const OTHER_CHANNEL_FRACTION: f64 = 0.02;
 
 /// One recorded window: the frames from the metadata frame on, in arrival order.
 #[derive(Debug, Clone, Copy)]
@@ -83,23 +87,44 @@ fn channel_moved(w: &Window<'_>) -> Verification {
         }
     }
     let declared_q = quantum(w, w.declared);
-    let declared_range = ranges
+    let (declared_range, declared_travel) = ranges
         .get(&w.declared)
-        .map_or(0.0, |(step, _)| step.range());
-    let failure = if declared_range > declared_q {
-        ranges
-            .iter()
-            .filter(|(channel, _)| **channel != w.declared)
-            .find(|(channel, (_, tmc))| tmc.range() >= OTHER_CHANNEL_COUNTS * quantum(w, **channel))
-            .map(|(channel, _)| format!("channel {channel} moved"))
+        .map_or((0.0, 0.0), |(step, tmc)| (step.range(), tmc.range()));
+    if declared_range <= declared_q {
+        return outcome(
+            VerificationCheck::ChannelMoved,
+            Some(format!("channel {} did not move", w.declared)),
+            String::new(),
+        );
+    }
+    let declared_counts = declared_travel / declared_q;
+    let mut failure = None;
+    let mut others = Vec::new();
+    for (&channel, (_, tmc)) in ranges.iter().filter(|(c, _)| **c != w.declared) {
+        let q = quantum(w, channel);
+        let limit = (OTHER_CHANNEL_COUNTS * q).max(OTHER_CHANNEL_FRACTION * declared_travel);
+        let text = format!(
+            "channel {channel} moved {:.1} counts against a limit of {:.1} (declared channel \
+             {declared_counts:.1})",
+            tmc.range() / q,
+            limit / q
+        );
+        if tmc.range() >= limit {
+            failure = Some(text);
+            break;
+        }
+        others.push(format!("{text}, margin {:.1}", (limit - tmc.range()) / q));
+    }
+    let others = if others.is_empty() {
+        "no other channel".to_owned()
     } else {
-        Some(format!("channel {} did not move", w.declared))
+        others.join("; ")
     };
     outcome(
         VerificationCheck::ChannelMoved,
         failure,
         format!(
-            "channel {} step range {declared_range} > {declared_q}; others under 16 counts",
+            "channel {} step range {declared_range} > {declared_q}; {others}",
             w.declared
         ),
     )

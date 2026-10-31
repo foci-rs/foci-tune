@@ -117,13 +117,60 @@ fn declared_channel_must_move_more_than_one_count() {
     assert_eq!(above_q, None);
 }
 
-#[test]
-fn other_channels_must_stay_under_sixteen_counts() {
-    let (_, at_limit) = outcome(&motion(1000, 16 * Q), None);
-    let (_, below_limit) = outcome(&motion(1000, 16 * Q - 1), None);
+fn channel_moved(frames: &[Frame]) -> (bool, String) {
+    let base = baselines();
+    let v = verify(&Window {
+        declared: 0,
+        frames,
+        baselines: &base,
+        probe_edges: None,
+    });
+    let check = v
+        .into_iter()
+        .find(|c| c.check == VerificationCheck::ChannelMoved)
+        .unwrap();
+    (check.passed, check.detail)
+}
 
-    assert_eq!(at_limit.as_deref(), Some("channel 1 moved"));
-    assert_eq!(below_limit, None);
+#[test]
+fn a_short_declared_move_keeps_the_sixteen_count_floor() {
+    let (at_floor, detail) = channel_moved(&motion(1000, 16 * Q));
+    let (below_floor, _) = channel_moved(&motion(1000, 16 * Q - 1));
+
+    assert!(!at_floor);
+    assert_eq!(
+        detail,
+        "channel 1 moved 16.0 counts against a limit of 16.0 (declared channel 62.5)"
+    );
+    assert!(below_floor);
+}
+
+#[test]
+fn a_long_declared_move_allows_two_percent_of_its_range() {
+    let declared = 500 * 100 * Q;
+    let (at_limit, detail) = channel_moved(&motion(declared, 1000 * Q));
+    let (below_limit, _) = channel_moved(&motion(declared, 1000 * Q - 1));
+
+    assert!(!at_limit);
+    assert_eq!(
+        detail,
+        "channel 1 moved 1000.0 counts against a limit of 1000.0 (declared channel 50000.0)"
+    );
+    assert!(below_limit);
+}
+
+#[test]
+fn belt_coupling_deflection_of_the_idle_corexy_motor_passes() {
+    let (passed, detail) = channel_moved(&motion(19_988 * Q, 18 * Q));
+
+    assert!(passed, "{detail}");
+    assert!(
+        detail.contains(
+            "channel 1 moved 18.0 counts against a limit of 399.8 (declared channel 19988.0), \
+             margin 381.8"
+        ),
+        "{detail}"
+    );
 }
 
 #[test]

@@ -335,13 +335,25 @@ async fn the_other_channel_changing_before_the_baseline_does_not_fail_the_run() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_channel_moved_thresholds_sit_at_one_and_sixteen_counts() {
+async fn the_channel_moved_thresholds_follow_the_declared_range() {
     let rig = rig().await;
     let cases = [
         ((Q, 0), not_comparable("channel 0 did not move")),
         ((Q + 1, 0), RunState::Done),
-        ((50_000, 16 * Q), not_comparable("channel 1 moved")),
-        ((50_000, 16 * Q - 1), RunState::Done),
+        (
+            (5_000, 16 * Q),
+            not_comparable(
+                "channel 1 moved 16.0 counts against a limit of 16.0 (declared channel 312.5)",
+            ),
+        ),
+        ((5_000, 16 * Q - 1), RunState::Done),
+        (
+            (50_000, 1000),
+            not_comparable(
+                "channel 1 moved 62.5 counts against a limit of 62.5 (declared channel 3125.0)",
+            ),
+        ),
+        ((50_000, 999), RunState::Done),
     ];
 
     for ((declared, other), expected) in cases {
