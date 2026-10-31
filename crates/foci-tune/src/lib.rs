@@ -11,3 +11,4 @@ pub mod stimulus;
 pub mod store;
 pub mod trace;
 pub mod verify;
+pub mod verify_run;
