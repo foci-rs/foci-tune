@@ -1,7 +1,8 @@
 use foci_tune::pattern::{Pattern, PatternError};
 use foci_tune::steppers::BedLimits;
 use foci_tune::stimulus::{
-    MAX_SPEEDS, MAX_STROKES, REST_OFFSETS_MM, RunKind, Stimulus, StimulusError, compose,
+    MAX_SCRIPT_S, MAX_SPEEDS, MAX_STROKES, REST_OFFSETS_MM, RunKind, Stimulus, StimulusError,
+    compose,
 };
 
 const FF: &str = "FOCI_SET_VELOCITY_FEEDFORWARD STEPPER=stepper_x ENABLE=1 GAIN=";
@@ -346,7 +347,7 @@ fn zero_length_pattern_is_refused_for_every_run_kind() {
 #[test]
 fn request_sizes_are_bounded_before_the_script_is_built() {
     let compose_x = |kind: &RunKind| compose(kind, &diag(), "stepper_x", "corexy", &bed(), 500.0);
-    let at_limit = tracking(&[50.0; MAX_SPEEDS], MAX_STROKES);
+    let at_limit = tracking(&[400.0; MAX_SPEEDS], MAX_STROKES);
 
     let strokes = compose_x(&tracking(&[50.0], 1_000_000_000));
     let speeds = compose_x(&tracking(&[50.0; MAX_SPEEDS + 1], 1));
@@ -379,4 +380,88 @@ fn request_sizes_are_bounded_before_the_script_is_built() {
             ..
         })
     ));
+}
+
+fn long_x() -> Pattern {
+    Pattern {
+        start: (20.5, 150.5),
+        end: (277.5, 150.5),
+    }
+}
+
+fn probe_strokes(speed: f64, strokes: usize) -> RunKind {
+    RunKind::Probe {
+        speed_mm_s: speed,
+        high_gain: 1.3,
+        segments_between_toggles: 3,
+        strokes,
+    }
+}
+
+#[test]
+fn the_predicted_duration_may_reach_the_cap_but_not_pass_it() {
+    let at_x = |kind: &RunKind| compose(kind, &long_x(), "stepper_x", "cartesian", &bed(), 500.0);
+
+    // 0.5 s settle plus 28 strokes of 257 mm at 8 mm/s is exactly 900 s.
+    let probe_at_cap = at_x(&probe_strokes(8.0, 28));
+    let tracking_at_cap = at_x(&tracking(&[8.0], 28));
+    let probe_over = at_x(&probe_strokes(7.99, 28));
+    let tracking_over = at_x(&tracking(&[400.0, 7.99], 28));
+
+    assert_eq!(MAX_SCRIPT_S, 900.0);
+    assert!(probe_at_cap.is_ok(), "{probe_at_cap:?}");
+    assert!(tracking_at_cap.is_ok(), "{tracking_at_cap:?}");
+    let Err(StimulusError::TooLong {
+        parameter,
+        predicted_s,
+        max_s,
+    }) = probe_over
+    else {
+        panic!("{probe_over:?}");
+    };
+    assert_eq!((parameter, max_s), ("speed_mm_s", 900.0));
+    assert!(predicted_s > 900.0 && predicted_s < 905.0, "{predicted_s}");
+    assert!(matches!(
+        tracking_over,
+        Err(StimulusError::TooLong {
+            parameter: "speeds_mm_s",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn speeds_below_one_mm_s_or_feed_sixty_are_refused() {
+    let x = |kind: &RunKind| compose(kind, &along_x(), "stepper_x", "cartesian", &bed(), 500.0);
+    let d = |kind: &RunKind| compose(kind, &diag(), "stepper_x", "corexy", &bed(), 500.0);
+
+    assert!(x(&tracking(&[1.0], 1)).is_ok());
+    assert!(x(&tracking(&[1.0], 1)).unwrap().gcode.contains(" F60\n"));
+    assert!(d(&tracking(&[1.42], 1)).is_ok());
+    for (kind, parameter) in [
+        (x(&tracking(&[50.0, 0.99], 1)), "speeds_mm_s"),
+        (x(&probe_strokes(0.01, 1)), "speed_mm_s"),
+        (d(&tracking(&[1.0], 1)), "speeds_mm_s"),
+        (d(&probe_strokes(1.4, 1)), "speed_mm_s"),
+    ] {
+        assert!(
+            matches!(kind, Err(StimulusError::TooSlow { parameter: p, .. }) if p == parameter),
+            "{kind:?}"
+        );
+    }
+}
+
+#[test]
+fn the_default_requests_fit_within_the_duration_cap() {
+    let d = |kind: &RunKind| compose(kind, &diag(), "stepper_x", "corexy", &bed(), 500.0);
+
+    assert!(d(&tracking(&[50.0, 195.0, 400.0], 8)).is_ok());
+    assert!(d(&probe_strokes(195.0, 8)).is_ok());
+    assert!(
+        d(&RunKind::Standstill {
+            rests: 8,
+            dwell_s: 3.0
+        })
+        .is_ok()
+    );
 }

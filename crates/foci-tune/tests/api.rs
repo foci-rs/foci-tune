@@ -967,6 +967,28 @@ async fn oversized_requests_are_400_naming_the_parameter() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn too_slow_and_too_long_requests_are_400_naming_the_parameter() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let mut slow = tracking_body();
+    slow["parameters"]["speeds_mm_s"] = json!([50.0, 0.01]);
+    let mut long = probe_body();
+    long["parameters"]["speed_mm_s"] = json!(2.0);
+    long["parameters"]["strokes"] = json!(50);
+
+    let slow = post(&app, "/api/runs", slow).await;
+    let long = post(&app, "/api/runs", long).await;
+
+    assert_eq!(slow.status, StatusCode::BAD_REQUEST);
+    assert_eq!(slow.json()["field"], "parameters.speeds_mm_s");
+    assert_eq!(long.status, StatusCode::BAD_REQUEST);
+    assert_eq!(long.json()["field"], "parameters.speed_mm_s");
+    assert!(long.error().contains("900 s"), "{}", long.error());
+    assert!(rig.scripts().is_empty());
+    assert_eq!(rig.store.scan().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn printer_names_every_failing_precondition_of_a_stepper() {
     let rig = rig_with(Options {
         homed: "y",

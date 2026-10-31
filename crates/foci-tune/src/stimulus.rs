@@ -12,8 +12,17 @@ pub const REST_OFFSETS_MM: [f64; 8] = [0.0, 0.007, 0.013, 0.021, 0.034, 0.055, 0
 pub const MAX_STROKES: usize = 50;
 /// Most speeds a tracking run may ask for.
 pub const MAX_SPEEDS: usize = 10;
+/// Slowest stepper speed a tracking or probe run may ask for, in mm/s.
+pub const MIN_SPEED_MM_S: f64 = 1.0;
+/// Slowest feed, in mm/min, a stroke may be sent with after rounding.
+pub const MIN_FEED_MM_MIN: u32 = 60;
+/// Longest predicted script, in seconds. Abort waits for the script in flight, so this also
+/// bounds how long an abort can take.
+pub const MAX_SCRIPT_S: f64 = 900.0;
 
 const SEGMENT_MM: f64 = 5.0;
+const SETTLE_LINE: &str = "G4 P500";
+const SETTLE_S: f64 = 0.5;
 const APPROACH_FEED: u32 = 3000;
 const MAX_DWELL_S: f64 = 60.0;
 const REST_FEED: u32 = 600;
@@ -76,6 +85,29 @@ pub enum StimulusError {
         /// The ceiling.
         max: usize,
     },
+    /// A speed is below [`MIN_SPEED_MM_S`], or its feed rounds below [`MIN_FEED_MM_MIN`].
+    #[error(
+        "{parameter}: {speed_mm_s} mm/s is too slow; speeds must be at least {MIN_SPEED_MM_S} \
+         mm/s and give a feed of at least F{MIN_FEED_MM_MIN}"
+    )]
+    TooSlow {
+        /// Parameter name as in [`RunKind`].
+        parameter: &'static str,
+        /// The speed, after clamping to `max_velocity`.
+        speed_mm_s: f64,
+    },
+    /// The predicted script duration exceeds [`MAX_SCRIPT_S`].
+    #[error(
+        "{parameter}: the script would take {predicted_s:.1} s, more than the {max_s} s allowed"
+    )]
+    TooLong {
+        /// Parameter name as in [`RunKind`].
+        parameter: &'static str,
+        /// Predicted duration in seconds.
+        predicted_s: f64,
+        /// The ceiling, [`MAX_SCRIPT_S`].
+        max_s: f64,
+    },
 }
 
 fn num(v: f64) -> String {
@@ -95,6 +127,27 @@ fn feed(stepper_speed_mm_s: f64, ratio: f64) -> String {
     format!("{:.0}", stepper_speed_mm_s * 60.0 * ratio)
 }
 
+/// The feed [`feed`] formats, as a number: `{:.0}` rounds ties to even.
+fn feed_mm_min(stepper_speed_mm_s: f64, ratio: f64) -> f64 {
+    (stepper_speed_mm_s * 60.0 * ratio).round_ties_even()
+}
+
+fn strokes_s(strokes: usize, length_mm: f64, feed_mm_min: f64) -> f64 {
+    strokes as f64 * length_mm * 60.0 / feed_mm_min
+}
+
+fn within_budget(predicted_s: f64, parameter: &'static str) -> Result<(), StimulusError> {
+    if predicted_s > MAX_SCRIPT_S {
+        Err(StimulusError::TooLong {
+            parameter,
+            predicted_s,
+            max_s: MAX_SCRIPT_S,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn positive(v: f64, what: &'static str) -> Result<f64, StimulusError> {
     if v.is_finite() && v > 0.0 {
         Ok(v)
@@ -107,16 +160,24 @@ fn clamp_speed(
     speed: f64,
     max_velocity: f64,
     ratio: f64,
+    parameter: &'static str,
     clamped: &mut Vec<(f64, f64)>,
 ) -> Result<f64, StimulusError> {
     positive(speed, "speed must be finite and positive")?;
     let limit = max_velocity / ratio;
-    if speed > limit {
+    let applied = if speed > limit {
         clamped.push((speed, limit));
-        Ok(limit)
+        limit
     } else {
-        Ok(speed)
+        speed
+    };
+    if applied < MIN_SPEED_MM_S || feed_mm_min(applied, ratio) < f64::from(MIN_FEED_MM_MIN) {
+        return Err(StimulusError::TooSlow {
+            parameter,
+            speed_mm_s: applied,
+        });
     }
+    Ok(applied)
 }
 
 struct Script<'a> {
@@ -136,7 +197,7 @@ impl<'a> Script<'a> {
         };
         s.goto(pattern.start, &APPROACH_FEED.to_string());
         s.push("M400");
-        s.push("G4 P500");
+        s.push(SETTLE_LINE);
         s
     }
 
@@ -189,9 +250,14 @@ impl<'a> Script<'a> {
 /// on the corexy isolating diagonal is `1/sqrt(2)` of the stepper speed, and speeds are clamped
 /// so the path speed stays within `max_velocity` before the script is built.
 ///
+/// The predicted duration counts the strokes at their sent feed, the settle dwells and, for a
+/// standstill, the rests and the moves between them; the approach from wherever the toolhead
+/// stands is not counted.
+///
 /// # Errors
-/// Unsupported kinematics, a pattern outside `limits` minus margin, or any non-finite or
-/// out-of-range run parameter.
+/// Unsupported kinematics, a pattern outside `limits` minus margin, any non-finite or
+/// out-of-range run parameter, a speed below [`MIN_SPEED_MM_S`] or [`MIN_FEED_MM_MIN`], or a
+/// predicted duration above [`MAX_SCRIPT_S`].
 pub fn compose(
     kind: &RunKind,
     pattern: &Pattern,
@@ -209,6 +275,7 @@ pub fn compose(
     positive(max_velocity, "max_velocity must be finite and positive")?;
     let mut clamped = Vec::new();
     let mut applied = Vec::new();
+    let length = (pattern.end.0 - pattern.start.0).hypot(pattern.end.1 - pattern.start.1);
     let mut s = Script::new(stepper, pattern);
     match kind {
         RunKind::Tracking {
@@ -226,13 +293,23 @@ pub fn compose(
             at_most(speeds_mm_s.len(), MAX_SPEEDS, "speeds_mm_s")?;
             at_most(*strokes, MAX_STROKES, "strokes")?;
             for &v in speeds_mm_s {
-                applied.push(clamp_speed(v, max_velocity, ratio, &mut clamped)?);
+                applied.push(clamp_speed(
+                    v,
+                    max_velocity,
+                    ratio,
+                    "speeds_mm_s",
+                    &mut clamped,
+                )?);
             }
             applied.sort_by(f64::total_cmp);
+            let predicted = applied.iter().fold(0.0, |total, &v| {
+                total + SETTLE_S + strokes_s(*strokes, length, feed_mm_min(v, ratio))
+            });
+            within_budget(predicted, "speeds_mm_s")?;
             s.lines.insert(1, feedforward_reset_line(stepper));
             for (i, speed) in applied.iter().enumerate() {
                 if i > 0 {
-                    s.push("G4 P500");
+                    s.push(SETTLE_LINE);
                 }
                 let f = feed(*speed, ratio);
                 for _ in 0..*strokes {
@@ -258,7 +335,11 @@ pub fn compose(
                 ));
             }
             at_most(*strokes, MAX_STROKES, "strokes")?;
-            let speed = clamp_speed(*speed_mm_s, max_velocity, ratio, &mut clamped)?;
+            let speed = clamp_speed(*speed_mm_s, max_velocity, ratio, "speed_mm_s", &mut clamped)?;
+            within_budget(
+                SETTLE_S + strokes_s(*strokes, length, feed_mm_min(speed, ratio)),
+                "speed_mm_s",
+            )?;
             applied.push(speed);
             let f = feed(speed, ratio);
             let every = *segments_between_toggles;
@@ -290,10 +371,15 @@ pub fn compose(
                 pattern.end.0 - pattern.start.0,
                 pattern.end.1 - pattern.start.1,
             );
-            let len = dx.hypot(dy);
-            let (ux, uy) = (dx / len, dy / len);
+            let (ux, uy) = (dx / length, dy / length);
+            let offsets = &REST_OFFSETS_MM[..*rests];
+            let moves_mm: f64 = offsets.windows(2).map(|w| (w[1] - w[0]) * ratio).sum();
+            within_budget(
+                SETTLE_S + *rests as f64 * dwell_s + moves_mm * 60.0 / f64::from(REST_FEED),
+                "dwell_s",
+            )?;
             let dwell_ms = (dwell_s * 1000.0).round() as u64;
-            for off in REST_OFFSETS_MM.iter().take(*rests) {
+            for off in offsets {
                 let path = off * ratio;
                 s.goto(
                     (pattern.start.0 + path * ux, pattern.start.1 + path * uy),
