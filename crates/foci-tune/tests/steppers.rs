@@ -182,3 +182,61 @@ fn bed_limits_come_from_the_x_and_y_steppers() {
     assert_eq!(limits.x, (-2.0, 350.0));
     assert_eq!(limits.y, (0.0, 330.0));
 }
+
+fn with_gear_ratio(value: Value) -> foci_tune::steppers::Stepper {
+    let mut settings = corexy_settings();
+    settings["stepper_y"]["gear_ratio"] = value;
+    let steppers = derive_steppers(&settings, &serials(&[OUROBOROS_SERIAL]));
+    steppers
+        .into_iter()
+        .find(|s| s.name == "stepper_y")
+        .unwrap()
+}
+
+#[test]
+fn list_form_gear_ratio_divides_the_rotation_distance() {
+    let stepper = with_gear_ratio(json!([[5.0, 1.0]]));
+
+    assert_eq!(stepper.motor_rotation_distance_mm, 8.0);
+    assert_eq!(stepper.unusable, None);
+}
+
+#[test]
+fn multiple_gear_pairs_multiply_in_both_forms() {
+    let list = with_gear_ratio(json!([[5, 1], [2.0, 1.0]]));
+    let text = with_gear_ratio(json!("5:1, 2:1"));
+
+    assert_eq!(list.motor_rotation_distance_mm, 4.0);
+    assert_eq!(text.motor_rotation_distance_mm, 4.0);
+}
+
+#[test]
+fn empty_gear_ratio_means_ungeared() {
+    for value in [json!([]), json!(""), Value::Null] {
+        let stepper = with_gear_ratio(value);
+        assert_eq!(stepper.motor_rotation_distance_mm, 40.0);
+        assert_eq!(stepper.unusable, None);
+    }
+}
+
+#[test]
+fn unintelligible_gear_ratio_makes_the_stepper_unusable() {
+    for value in [
+        json!({"motor": 5}),
+        json!(5.0),
+        json!([5.0, 1.0]),
+        json!([[5.0]]),
+        json!([[5.0, 1.0, 2.0]]),
+        json!([["a", "b"]]),
+        json!([[5.0, 0.0]]),
+        json!("5:0"),
+        json!("fast"),
+    ] {
+        let stepper = with_gear_ratio(value.clone());
+        let reason = stepper.unusable.unwrap_or_default();
+        assert!(
+            reason.contains("gear_ratio is not understood"),
+            "{value}: {reason}"
+        );
+    }
+}

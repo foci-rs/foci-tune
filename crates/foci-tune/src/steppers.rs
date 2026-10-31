@@ -106,18 +106,32 @@ fn unsigned(value: &Value) -> Option<u32> {
     number(value).and_then(|n| (n >= 0.0 && n.fract() == 0.0).then_some(n as u32))
 }
 
+fn gear_pair_ratio(motor: f64, output: f64) -> Option<f64> {
+    let ratio = motor / output;
+    (ratio.is_finite() && ratio > 0.0).then_some(ratio)
+}
+
 fn gear_ratio_product(value: &Value) -> Option<f64> {
-    let Some(text) = value.as_str() else {
-        return Some(1.0);
-    };
-    text.split([',', '\n'])
-        .map(str::trim)
-        .filter(|pair| !pair.is_empty())
-        .try_fold(1.0, |product, pair| {
-            let (motor, output) = pair.split_once(':')?;
-            let ratio = motor.trim().parse::<f64>().ok()? / output.trim().parse::<f64>().ok()?;
-            ratio.is_finite().then_some(product * ratio)
-        })
+    match value {
+        Value::Null => Some(1.0),
+        Value::String(text) => text
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+            .try_fold(1.0, |product, pair| {
+                let (motor, output) = pair.split_once(':')?;
+                let ratio =
+                    gear_pair_ratio(motor.trim().parse().ok()?, output.trim().parse().ok()?)?;
+                Some(product * ratio)
+            }),
+        Value::Array(pairs) => pairs.iter().try_fold(1.0, |product, pair| {
+            let [motor, output] = pair.as_array()?.as_slice() else {
+                return None;
+            };
+            Some(product * gear_pair_ratio(motor.as_f64()?, output.as_f64()?)?)
+        }),
+        Value::Bool(_) | Value::Number(_) | Value::Object(_) => None,
+    }
 }
 
 fn axis_of(section: &str) -> Option<char> {
@@ -177,8 +191,10 @@ fn derive_one(
 
     let unusable = if serial.is_empty() {
         Some(format!("no usable USB serial for mcu {mcu}"))
-    } else if rotation.is_none_or(|r| r <= 0.0) || ratio.is_none_or(|r| r <= 0.0) {
-        Some("rotation_distance or gear_ratio is missing or invalid".to_owned())
+    } else if rotation.is_none_or(|r| r <= 0.0) {
+        Some("rotation_distance is missing or invalid".to_owned())
+    } else if ratio.is_none() {
+        Some("gear_ratio is not understood".to_owned())
     } else if position_max.is_none() {
         Some("position_max is missing".to_owned())
     } else if encoder_ppr.is_none() {
