@@ -109,7 +109,10 @@ archived capture files (plain or zstd) and compares the result with the referenc
 manual checks of analysis changes. Probe lines gate the velocity fit and the edge count; the
 torque fit and torque PSD peak are printed for information only, since the reference scripts
 measured no usable torque for them. Torque is the torque controller's target, the high half of
-the TMC4671 `PID_TORQUE_TARGET_TORQUE_ACTUAL` register.
+the TMC4671 `PID_TORQUE_TARGET_TORQUE_ACTUAL` register. Tracking lines gate the error standard deviation, p99 and cruise mean;
+the reversal peak and count are printed beside the reference values for information only. The
+reference scripts counted sign changes of the measured velocity, which encoder quantisation
+miscounts, while foci-tune takes reversals from the commanded position.
 
 ## License
 
