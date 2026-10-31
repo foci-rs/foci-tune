@@ -164,7 +164,7 @@ fn no_drop_gaps(w: &Window<'_>) -> Verification {
     )
 }
 
-/// Runs every check that applies to the window, in the spec's order.
+/// Runs every check that applies to the window.
 pub fn verify(w: &Window<'_>) -> Vec<Verification> {
     let mut checks = vec![channel_moved(w), baseline_contiguous(w), no_drop_gaps(w)];
     if let Some(edges) = w.probe_edges {

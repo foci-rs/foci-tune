@@ -278,7 +278,6 @@ fn load(path: &Path) -> Result<Loaded, LoadError> {
         return Err(LoadError::NoCriticals);
     }
     let metadata = metadata.ok_or(LoadError::NoMetadata)?;
-    // The reference scripts sort rows by timestamp before any analysis.
     rows.sort_by_key(|(h, _, _)| h.timestamp_ticks);
     let packed_torque_target = rows.iter().map(|(_, _, t)| *t).collect();
     let criticals: Vec<(FrameHeader, Critical)> =

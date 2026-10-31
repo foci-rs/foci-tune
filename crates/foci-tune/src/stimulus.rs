@@ -292,11 +292,6 @@ pub fn compose(
             );
             let len = dx.hypot(dy);
             let (ux, uy) = (dx / len, dy / len);
-            if !(ux.is_finite() && uy.is_finite()) {
-                return Err(StimulusError::InvalidParameter(
-                    "pattern direction is not finite",
-                ));
-            }
             let dwell_ms = (dwell_s * 1000.0).round() as u64;
             for off in REST_OFFSETS_MM.iter().take(*rests) {
                 let path = off * ratio;
