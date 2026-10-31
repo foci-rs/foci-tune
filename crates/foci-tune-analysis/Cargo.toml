@@ -9,6 +9,6 @@ repository.workspace = true
 
 [dependencies]
 levenberg-marquardt = "0.15.0"
-nalgebra = "0.35.0"
+nalgebra = "0.34.2"
 realfft = "3.5.0"
 thiserror = "2.0.21"
