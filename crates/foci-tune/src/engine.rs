@@ -171,6 +171,27 @@ pub enum EngineEvent {
     Queue(Vec<RunId>),
 }
 
+/// What an emergency stop achieved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillOutcome {
+    /// The run that was in flight when the stop was posted.
+    pub run: Option<RunId>,
+    /// [`RunState::Killed`] when Klipper confirmed the shutdown, [`RunState::KillUnconfirmed`]
+    /// otherwise.
+    pub state: RunState,
+}
+
+/// The run in flight, the queue and an unconfirmed kill, at one instant.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EngineStatus {
+    /// The run in flight: its session, id and state.
+    pub current: Option<(SessionId, RunId, RunState)>,
+    /// Queued runs in execution order.
+    pub queue: Vec<RunId>,
+    /// The run whose emergency stop is unconfirmed; it gates every new run.
+    pub unconfirmed_kill: Option<RunId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct LadderSlot {
     ladder: u64,
@@ -573,9 +594,49 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
     ///
     /// The work runs on its own task, so dropping this future does not leave a run in
     /// `Killing`.
-    pub async fn kill(&self) {
+    pub async fn kill(&self) -> KillOutcome {
         let shared = self.shared.clone();
-        let _ = tokio::spawn(async move { shared.kill().await }).await;
+        let (run, confirmed) = tokio::spawn(async move { shared.kill().await })
+            .await
+            .unwrap_or((None, false));
+        KillOutcome {
+            run,
+            state: if confirmed {
+                RunState::Killed
+            } else {
+                RunState::KillUnconfirmed
+            },
+        }
+    }
+
+    /// Checks every precondition for a run on `stepper` without queueing anything.
+    ///
+    /// # Errors
+    /// The first failing [`Precondition`].
+    pub async fn check(&self, stepper: &str) -> Result<(), Precondition> {
+        {
+            let inner = lock(&self.shared.inner);
+            if inner.unconfirmed_kill.is_some() {
+                return Err(Precondition::KillUnconfirmed);
+            }
+            if inner.busy() {
+                return Err(Precondition::Busy);
+            }
+        }
+        self.shared.check_run(stepper).await.map(|_| ())
+    }
+
+    /// The run in flight, the queue and any unconfirmed kill.
+    pub fn status(&self) -> EngineStatus {
+        let inner = lock(&self.shared.inner);
+        EngineStatus {
+            current: inner
+                .current
+                .as_ref()
+                .map(|c| (c.session.clone(), c.run.id.clone(), c.run.state.clone())),
+            queue: inner.queue.iter().map(|q| q.run.id.clone()).collect(),
+            unconfirmed_kill: inner.unconfirmed_kill.as_ref().map(|(_, id)| id.clone()),
+        }
     }
 
     /// Writes the session's starting gains and filters through the confirmed write path.
@@ -1426,7 +1487,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         matches!(reported, Ok(Ok(s)) if s.klippy == KlippyState::Shutdown)
     }
 
-    async fn kill(&self) {
+    async fn kill(&self) -> (Option<RunId>, bool) {
         let target = {
             let mut inner = lock(&self.inner);
             let target = match inner.current.as_mut() {
@@ -1443,6 +1504,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             target
         };
         let confirmed = self.post_stop().await;
+        let killed_run = target.as_ref().map(|(_, id)| id.clone());
         {
             let mut inner = lock(&self.inner);
             let target_id = target.as_ref().map(|(_, id)| id);
@@ -1471,6 +1533,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         let restarts = *self.moonraker.klippy_restarts().borrow();
         self.observe_klippy(klippy, restarts);
         self.kill_resolved.send_modify(|n| *n += 1);
+        (killed_run, confirmed)
     }
 
     /// Upgrades a `KillUnconfirmed` run, current or stored, to `Killed`.
