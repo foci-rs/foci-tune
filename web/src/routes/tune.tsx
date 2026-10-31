@@ -53,6 +53,7 @@ import {
   sessionForRun,
   setupOfSession,
   RECORDING_STATES,
+  runTypeOfKind,
   savePattern,
   stateLabel,
   TERMINAL_STATES,
@@ -661,8 +662,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
 
 function setupType(view: SessionView): RunType {
   const kind = view.session?.kind;
-  if (kind === undefined) return "tracking";
-  return "Tracking" in kind ? "tracking" : "Probe" in kind ? "probe" : "standstill";
+  return kind === undefined ? "tracking" : runTypeOfKind(kind);
 }
 
 /** Ladder plot, results table, overlay plots and Accept for one session. */

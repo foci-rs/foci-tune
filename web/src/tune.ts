@@ -109,6 +109,10 @@ export function isUnknownSession(e: unknown): boolean {
   );
 }
 
+export function runTypeOfKind(kind: RunKind): RunType {
+  return "Tracking" in kind ? "tracking" : "Probe" in kind ? "probe" : "standstill";
+}
+
 export function setupFromKind(stepper: string, pattern: Pattern, kind: RunKind): Setup {
   if ("Tracking" in kind) return { stepper, pattern, type: "tracking", parameters: kind.Tracking };
   if ("Probe" in kind) return { stepper, pattern, type: "probe", parameters: kind.Probe };
