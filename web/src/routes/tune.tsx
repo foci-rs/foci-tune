@@ -46,7 +46,10 @@ import {
   nextSession,
   parseNumberList,
   patternProblem,
+  isUnknownSession,
   pickRestoreSession,
+  restoreStillApplies,
+  type RestoreBasis,
   sessionForRun,
   setupOfSession,
   RECORDING_STATES,
@@ -114,7 +117,7 @@ function fallbackPattern(limits: Limits): Pattern {
 }
 
 /** Refetches a session whenever the engine reports on it, dropping out-of-order replies. */
-function useSessionView(id: SessionId | null) {
+function useSessionView(id: SessionId | null, onGone: () => void) {
   const { listen } = useFeed();
   const [view, setView] = useState<SessionView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -130,10 +133,12 @@ function useSessionView(id: SessionId | null) {
         setError(null);
       },
       (e: unknown) => {
-        if (mine === generation.current) setError(errorText(e));
+        if (mine !== generation.current) return;
+        if (isUnknownSession(e)) onGone();
+        else setError(errorText(e));
       },
     );
-  }, [id]);
+  }, [id, onGone]);
 
   useEffect(() => {
     setView(null);
@@ -327,14 +332,20 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const queue = printer.engine.queue;
 
   const [link, setLink] = useStored<"link">("link", () => null);
+  const formKey = setup === null ? "" : JSON.stringify(setup);
+  const basis = useRef<RestoreBasis>({ link: null, form: formKey });
+  basis.current = { link: link?.id ?? null, form: formKey };
   const restoring = useRef(false);
   useEffect(() => {
     if (link !== null || restoring.current || setup === null) return;
+    if (current === null && queue.length === 0) return;
     restoring.current = true;
+    const started = basis.current;
     const running = current?.session ?? null;
     getSessions().then(
       (sessions) => {
-        const id = pickRestoreSession(running, sessions, setup);
+        if (!restoreStillApplies(started, basis.current)) return;
+        const id = pickRestoreSession(running, queue, sessions);
         const found = sessions.find((v) => v.id === id);
         const restored = found === undefined ? null : setupOfSession(found);
         if (id === null || restored === null) return;
@@ -345,14 +356,22 @@ function Workbench({ printer }: { printer: PrinterView }) {
     );
   });
 
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const forgetSession = useCallback(() => {
+    setLink(null);
+    setMessage({
+      tone: "error",
+      text: "The linked session no longer exists; the next Run opens a new session",
+    });
+  }, [setLink]);
+
   const active = link !== null && setup !== null && sessionForRun(link, setup) !== null ? link : null;
   const runningLinked = current !== null && link !== null && current.session === link.id;
   const shown = active ?? (runningLinked ? link : null);
-  const { view, error: sessionError, refresh } = useSessionView(shown?.id ?? null);
+  const { view, error: sessionError, refresh } = useSessionView(shown?.id ?? null, forgetSession);
 
   const [busy, setBusy] = useState(false);
   const [awaiting, setAwaiting] = useState<string[] | null>(null);
-  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (awaiting === null) return;
@@ -417,7 +436,10 @@ function Workbench({ printer }: { printer: PrinterView }) {
         ? postLadder(ladderBuilt.body).then((r) => done(r.session, r.runs))
         : postRun(base).then((r) => done(r.session, [r.run]));
     request
-      .catch((e: unknown) => setMessage({ tone: "error", text: errorText(e) }))
+      .catch((e: unknown) => {
+        if (isUnknownSession(e)) forgetSession();
+        else setMessage({ tone: "error", text: errorText(e) });
+      })
       .finally(() => setBusy(false));
   };
 
@@ -759,7 +781,7 @@ export function SessionResults({ view }: { view: SessionView }) {
             floor={type === "probe" && ladder !== null ? ladder.floor : null}
             marginal={type === "probe" && ladder !== null ? ladder.marginal : null}
           />
-          {unassessable.length > 0 && (
+          {type === "probe" && unassessable.length > 0 && (
             <p className="mt-2 text-sm text-amber-400">
               No median for {unassessable.join(", ")}: a repeat did not finish done with a metric, so the value is
               unassessable.

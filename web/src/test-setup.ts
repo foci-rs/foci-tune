@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
+import { resetWorkbench } from "./workbench";
 
 afterEach(cleanup);
 
@@ -18,3 +19,5 @@ if (typeof window.matchMedia !== "function") {
       dispatchEvent: () => false,
     }) as MediaQueryList;
 }
+
+afterEach(resetWorkbench);

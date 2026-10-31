@@ -1,3 +1,4 @@
+import { ApiRequestError } from "./api";
 import type {
   ChannelMetrics,
   Filters,
@@ -8,6 +9,7 @@ import type {
   Run,
   RunKind,
   RunRegime,
+  RunId,
   RunRequestBody,
   RunSetup,
   SessionId,
@@ -76,24 +78,35 @@ export function setupOfSession(view: SessionView): Setup | null {
 }
 
 /**
- * The session to show when the page has none: the session of the run in flight, else the
- * newest stored session whose setup equals `setup`. Ids sort by creation time.
+ * The session to show when the page has none: the session of the run the engine executes,
+ * else the session holding a queued run. An idle engine restores nothing, so an old session is
+ * never resumed silently.
  */
 export function pickRestoreSession(
   running: SessionId | null,
+  queue: RunId[],
   sessions: SessionView[],
-  setup: Setup | null,
 ): SessionId | null {
   if (running !== null) return running;
-  if (setup === null) return null;
-  const matching = sessions
-    .filter((v) => {
-      const s = setupOfSession(v);
-      return s !== null && !nextSession(s, setup);
-    })
-    .map((v) => v.id)
-    .sort();
-  return matching.length === 0 ? null : matching[matching.length - 1];
+  return sessions.find((v) => v.runs.some((r) => queue.includes(r.id)))?.id ?? null;
+}
+
+export interface RestoreBasis {
+  link: SessionId | null;
+  form: string;
+}
+
+/** A restore applies only if neither the link nor the form changed while it was fetched. */
+export function restoreStillApplies(started: RestoreBasis, now: RestoreBasis): boolean {
+  return started.link === now.link && started.form === now.form;
+}
+
+/** True when the error says the linked session is gone: not found, or refused as unknown. */
+export function isUnknownSession(e: unknown): boolean {
+  return (
+    e instanceof ApiRequestError &&
+    (e.status === 404 || (e.status === 409 && e.message.startsWith("unknown session")))
+  );
 }
 
 export function setupFromKind(stepper: string, pattern: Pattern, kind: RunKind): Setup {

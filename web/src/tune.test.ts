@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { LiveChannel, Run, RunKind, SessionView } from "./api";
+import { ApiRequestError, type LiveChannel, type Run, type RunKind, type SessionView } from "./api";
 import {
   alignSeries,
   appendLive,
@@ -12,7 +12,9 @@ import {
   ladderMedians,
   ladderPlotData,
   patternProblem,
+  isUnknownSession,
   pickRestoreSession,
+  restoreStillApplies,
   sessionForRun,
   liveRegime,
   loadPattern,
@@ -385,19 +387,32 @@ describe("session continuity", () => {
     };
   }
 
-  test("restores the engine's running session first", () => {
-    expect(pickRestoreSession("S9", [view("S1", "stepper_x")], tracking())).toBe("S9");
+  test("restores the session of the run the engine is executing", () => {
+    expect(pickRestoreSession("S9", [], [view("S1", "stepper_x")])).toBe("S9");
   });
 
-  test("otherwise restores the newest session whose setup matches", () => {
-    const sessions = [
-      view("20261031T080000Z-aaaa", "stepper_x"),
-      view("20261031T090000Z-bbbb", "stepper_x"),
-      view("20261031T100000Z-cccc", "stepper_y"),
-    ];
-    expect(pickRestoreSession(null, sessions, tracking())).toBe("20261031T090000Z-bbbb");
-    expect(pickRestoreSession(null, sessions, tracking({ stepper: "stepper_z" }))).toBeNull();
-    expect(pickRestoreSession(null, sessions, null)).toBeNull();
+  test("restores the session holding a queued run when nothing executes", () => {
+    const queued = view("S2", "stepper_x");
+    queued.runs = [{ id: "R7", state: "queued", run: null }];
+    expect(pickRestoreSession(null, ["R7"], [view("S1", "stepper_x"), queued])).toBe("S2");
+  });
+
+  test("an idle engine restores nothing, however well a stored session matches", () => {
+    expect(pickRestoreSession(null, [], [view("S1", "stepper_x")])).toBeNull();
+  });
+
+  test("a restore result is dropped when the link or the form changed meanwhile", () => {
+    const before = { link: null, form: "setup-a" };
+    expect(restoreStillApplies(before, { link: null, form: "setup-a" })).toBe(true);
+    expect(restoreStillApplies(before, { link: "S5", form: "setup-a" })).toBe(false);
+    expect(restoreStillApplies(before, { link: null, form: "setup-b" })).toBe(false);
+  });
+
+  test("recognises a linked session that no longer exists", () => {
+    expect(isUnknownSession(new ApiRequestError(404, "session S1 not found"))).toBe(true);
+    expect(isUnknownSession(new ApiRequestError(409, "unknown session S1"))).toBe(true);
+    expect(isUnknownSession(new ApiRequestError(409, "a run is in flight"))).toBe(false);
+    expect(isUnknownSession(new Error("network"))).toBe(false);
   });
 });
 

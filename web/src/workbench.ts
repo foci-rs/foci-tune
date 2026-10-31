@@ -17,3 +17,7 @@ export interface WorkbenchState {
 }
 
 export const workbench: Partial<WorkbenchState> = {};
+
+export function resetWorkbench(): void {
+  for (const key of Object.keys(workbench) as (keyof WorkbenchState)[]) delete workbench[key];
+}
