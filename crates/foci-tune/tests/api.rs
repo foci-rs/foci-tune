@@ -11,6 +11,7 @@ use foci_tune::api::{Api, ApiError, router};
 use foci_tune::assets;
 use foci_tune::engine::Precondition;
 use foci_tune::model::{RunId, SessionId};
+use foci_tune::moonraker::{KlippyState, MoonrakerApi};
 use futures_util::{SinkExt, StreamExt};
 use rig::*;
 use serde_json::{Value, json};
@@ -976,4 +977,129 @@ async fn printer_names_every_failing_precondition_of_a_stepper() {
             "the stepper has no identified electrical model"
         ])
     );
+}
+
+fn trace_mode_lines(rig: &Rig) -> Vec<String> {
+    rig.scripts()
+        .into_iter()
+        .filter(|s| s.starts_with("FOCI_TRACE_MODE"))
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trace_mode_sends_the_command_for_a_stepper_on_the_board() {
+    let rig = rig().await;
+    let app = app(&rig);
+
+    let ok = post(
+        &app,
+        "/api/trace-mode",
+        json!({"board": SERIAL_A, "mode": "dormant"}),
+    )
+    .await;
+    let bad_mode = post(
+        &app,
+        "/api/trace-mode",
+        json!({"board": SERIAL_A, "mode": "loud"}),
+    )
+    .await;
+    let no_board = post(
+        &app,
+        "/api/trace-mode",
+        json!({"board": "FFFF0000", "mode": "critical"}),
+    )
+    .await;
+    rig.a.sim(|s| {
+        s.failures
+            .push(("FOCI_TRACE_MODE".into(), "!! trace mode refused".into()))
+    });
+    let failed = post(
+        &app,
+        "/api/trace-mode",
+        json!({"board": SERIAL_A, "mode": "critical"}),
+    )
+    .await;
+
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.text());
+    assert_eq!(bad_mode.status, StatusCode::BAD_REQUEST);
+    assert_eq!(bad_mode.json()["field"], "mode");
+    assert_eq!(no_board.status, StatusCode::NOT_FOUND);
+    assert!(no_board.error().contains("FFFF0000"));
+    assert_eq!(failed.status, StatusCode::BAD_GATEWAY);
+    assert!(
+        failed.error().contains("trace mode refused"),
+        "{}",
+        failed.error()
+    );
+    assert_eq!(
+        trace_mode_lines(&rig),
+        vec![
+            "FOCI_TRACE_MODE STEPPER=stepper_x MODE=dormant".to_owned(),
+            "FOCI_TRACE_MODE STEPPER=stepper_x MODE=critical".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn trace_mode_is_refused_while_a_run_is_in_flight_or_a_kill_is_unconfirmed() {
+    let rig = rig().await;
+    let app = app(&rig);
+    rig.fake
+        .script_emergency_stop(Some(500), Duration::ZERO, None);
+    let gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let (_, run) = submit(&app, tracking_body()).await;
+    rig.wait_moving(&mut events, &RunId::parse(&run).unwrap())
+        .await;
+    let sent = trace_mode_lines(&rig).len();
+
+    let busy = post(
+        &app,
+        "/api/trace-mode",
+        json!({"board": SERIAL_A, "mode": "dormant"}),
+    )
+    .await;
+    post(&app, "/api/kill", json!({})).await;
+    finish(&rig, &app, &run).await;
+    let unconfirmed = post(
+        &app,
+        "/api/trace-mode",
+        json!({"board": SERIAL_A, "mode": "dormant"}),
+    )
+    .await;
+
+    assert_eq!(busy.status, StatusCode::CONFLICT);
+    assert_eq!(busy.error(), "a run is in flight");
+    assert_eq!(unconfirmed.status, StatusCode::CONFLICT);
+    assert_eq!(
+        unconfirmed.error(),
+        Precondition::KillUnconfirmed.to_string()
+    );
+    assert_eq!(
+        trace_mode_lines(&rig).len(),
+        sent,
+        "no trace-mode command was sent"
+    );
+    rig.a.sim(|s| s.gate = None);
+    gate.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn firmware_restart_is_offered_only_once_klipper_is_shut_down() {
+    let rig = rig().await;
+    let app = app(&rig);
+
+    let ready = post(&app, "/api/firmware-restart", json!({})).await;
+    rig.fake.push("notify_klippy_shutdown", json!([]));
+    let mut state = rig.client.state();
+    tokio::time::timeout(WAIT, state.wait_for(|s| s.klippy == KlippyState::Shutdown))
+        .await
+        .unwrap()
+        .unwrap();
+    let shutdown = post(&app, "/api/firmware-restart", json!({})).await;
+
+    assert_eq!(ready.status, StatusCode::CONFLICT);
+    assert!(ready.error().contains("shutdown"), "{}", ready.error());
+    assert_eq!(shutdown.status, StatusCode::OK, "{}", shutdown.text());
+    assert_eq!(rig.fake.firmware_restarts(), 1);
 }

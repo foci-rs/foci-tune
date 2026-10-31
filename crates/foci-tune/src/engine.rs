@@ -195,6 +195,49 @@ pub enum EngineEvent {
     Queue(Vec<RunId>),
 }
 
+/// A trace mode `FOCI_TRACE_MODE` accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceModeCommand {
+    /// No critical frames.
+    Dormant,
+    /// Critical frames.
+    Critical,
+    /// Diagnostic frames.
+    Diagnostic,
+}
+
+impl TraceModeCommand {
+    /// Parses the command's `MODE` value.
+    pub fn parse(mode: &str) -> Option<Self> {
+        match mode {
+            "dormant" => Some(Self::Dormant),
+            "critical" => Some(Self::Critical),
+            "diagnostic" => Some(Self::Diagnostic),
+            _ => None,
+        }
+    }
+
+    /// The `MODE` value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dormant => "dormant",
+            Self::Critical => "critical",
+            Self::Diagnostic => "diagnostic",
+        }
+    }
+}
+
+/// Why an operator command was not carried out.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CommandError {
+    /// The engine refused it before anything was sent.
+    #[error(transparent)]
+    Precondition(#[from] Precondition),
+    /// Klipper or Moonraker refused the G-code; the text is their message.
+    #[error("{0}")]
+    Gcode(String),
+}
+
 /// What an emergency stop achieved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KillOutcome {
@@ -244,12 +287,12 @@ struct Inner {
     ladders: HashMap<u64, LadderTrack>,
     unconfirmed_kill: Option<(SessionId, RunId)>,
     restarts_at_kill: u64,
-    reverting: bool,
+    writing: bool,
 }
 
 impl Inner {
     fn busy(&self) -> bool {
-        self.current.is_some() || !self.queue.is_empty() || self.reverting
+        self.current.is_some() || !self.queue.is_empty() || self.writing
     }
 
     /// The engine-wide preconditions, the same for every stepper: an unconfirmed kill and a
@@ -739,9 +782,9 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             if let Some(first) = inner.admission_failures().into_iter().next() {
                 return Err(first.to_string());
             }
-            inner.reverting = true;
+            inner.writing = true;
         }
-        let _guard = RevertGuard(&s.inner);
+        let _guard = WriteGuard(&s.inner);
         let resolved = s
             .resolve(&record.stepper)
             .await
@@ -749,6 +792,35 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         s.gcode("M400").await?;
         s.write_gains(&resolved.stepper, &record.gains).await?;
         s.write_filters(&resolved.stepper, &record.filters).await
+    }
+
+    /// Sends `FOCI_TRACE_MODE` for `stepper` through the engine's G-code path, refused while a
+    /// run or another write is in flight or a kill is unconfirmed, and holding off new runs
+    /// until it returns.
+    ///
+    /// # Errors
+    /// [`CommandError::Precondition`] when refused, [`CommandError::Gcode`] when Klipper
+    /// rejects the command.
+    pub async fn set_trace_mode(
+        &self,
+        stepper: &str,
+        mode: TraceModeCommand,
+    ) -> Result<(), CommandError> {
+        let s = &self.shared;
+        {
+            let mut inner = lock(&s.inner);
+            if let Some(first) = inner.admission_failures().into_iter().next() {
+                return Err(first.into());
+            }
+            inner.writing = true;
+        }
+        let _guard = WriteGuard(&s.inner);
+        s.gcode(&format!(
+            "FOCI_TRACE_MODE STEPPER={stepper} MODE={}",
+            mode.name()
+        ))
+        .await
+        .map_err(CommandError::Gcode)
     }
 
     /// Subscribes to run state changes, results and queue updates.
@@ -762,11 +834,11 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
     }
 }
 
-struct RevertGuard<'a>(&'a Mutex<Inner>);
+struct WriteGuard<'a>(&'a Mutex<Inner>);
 
-impl Drop for RevertGuard<'_> {
+impl Drop for WriteGuard<'_> {
     fn drop(&mut self) {
-        lock(self.0).reverting = false;
+        lock(self.0).writing = false;
     }
 }
 

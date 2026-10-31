@@ -28,7 +28,9 @@ use tokio::time::MissedTickBehavior;
 
 use crate::assets;
 use crate::config_block;
-use crate::engine::{Engine, LadderRejected, LadderRequest, Precondition};
+use crate::engine::{
+    CommandError, Engine, LadderRejected, LadderRequest, Precondition, TraceModeCommand,
+};
 use crate::live::{LiveState, TraceMode};
 use crate::model::{
     ControlSnapshot, FORMAT_VERSION, Filters, Gains, LadderDef, Run, RunId, RunRequest, RunState,
@@ -46,7 +48,6 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
 /// A snapshot that differs only in free space or measured cadence is republished at most
 /// this often.
 const VOLATILE_PERIOD: Duration = Duration::from_secs(5);
-const TRACE_MODES: [&str; 3] = ["dormant", "critical", "diagnostic"];
 const DEFAULT_REPEATS: u32 = 2;
 const DEFAULT_FLOOR: f64 = 0.05;
 const DEFAULT_MARGINAL: f64 = 0.08;
@@ -1137,6 +1138,17 @@ async fn revert<M: MoonrakerApi + 'static>(
 async fn firmware_restart<M: MoonrakerApi + 'static>(
     State(api): State<App<M>>,
 ) -> ApiResult<Json<Value>> {
+    let klippy = api.moonraker.state().borrow().klippy;
+    if !matches!(klippy, KlippyState::Shutdown | KlippyState::Error) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!(
+                "firmware restart is offered only once klipper reports shutdown or error; \
+                 klipper is {}",
+                klippy_name(klippy)
+            ),
+        ));
+    }
     api.moonraker
         .firmware_restart()
         .await
@@ -1150,16 +1162,13 @@ async fn trace_mode<M: MoonrakerApi + 'static>(
 ) -> ApiResult<Json<Value>> {
     let body = json_body(body)?;
     let board: String = required(&body, "board")?;
-    let mode: String = required(&body, "mode")?;
-    if !TRACE_MODES.contains(&mode.as_str()) {
-        return Err(ApiError::bad_field(
+    let raw: String = required(&body, "mode")?;
+    let mode = TraceModeCommand::parse(&raw).ok_or_else(|| {
+        ApiError::bad_field(
             "mode",
-            format!("mode must be one of {}, not {mode}", TRACE_MODES.join(", ")),
-        ));
-    }
-    if !api.engine.is_idle() {
-        return Err(Precondition::Busy.into());
-    }
+            format!("mode must be dormant, critical or diagnostic, not {raw}"),
+        )
+    })?;
     let steppers = api.engine.steppers().await?;
     let stepper = steppers.iter().find(|s| s.serial == board).ok_or_else(|| {
         ApiError::new(
@@ -1167,14 +1176,14 @@ async fn trace_mode<M: MoonrakerApi + 'static>(
             format!("no FOCI stepper on board {board}"),
         )
     })?;
-    api.moonraker
-        .script(&format!(
-            "FOCI_TRACE_MODE STEPPER={} MODE={mode}",
-            stepper.name
-        ))
+    api.engine
+        .set_trace_mode(&stepper.name, mode)
         .await
-        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()))?;
-    Ok(Json(json!({"board": board, "mode": mode})))
+        .map_err(|e| match e {
+            CommandError::Precondition(p) => ApiError::from(p),
+            CommandError::Gcode(message) => ApiError::new(StatusCode::BAD_GATEWAY, message),
+        })?;
+    Ok(Json(json!({"board": board, "mode": mode.name()})))
 }
 
 async fn static_or_index(uri: Uri) -> Response {
