@@ -5,5 +5,6 @@ pub mod probe;
 pub mod protocol;
 pub mod psd;
 pub mod signals;
+pub mod standstill;
 pub mod tracking;
 pub mod units;
