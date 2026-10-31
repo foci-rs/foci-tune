@@ -100,16 +100,31 @@ pub fn tracking_metrics(s: &ChannelSeries, regime: &Regime) -> TrackingMetrics {
     }
 }
 
-/// Splits a series into moving spans `[start, end)` separated by standstill of at least
-/// `min_gap_s`, in time order. Any non-zero velocity counts as moving here, since no regime
-/// is available to convert to rpm.
+/// Splits a series into speed blocks `[start, end)` in time order, using the commanded
+/// position: a block is a maximal span of commanded motion between holds of at least
+/// `min_gap_s`, ending on the sample that reaches the hold. Leading and trailing holds of any
+/// length are not part of a block.
+///
+/// The measured position cannot find the holds: at rest it jitters by a few encoder counts,
+/// each worth about 10 mm/s of finite-difference velocity at 1 kHz.
 pub fn split_speed_segments(s: &ChannelSeries, min_gap_s: f64) -> Vec<(usize, usize)> {
-    let mut spans: Vec<(usize, usize)> = Vec::new();
-    for k in (0..s.velocity_mm_s.len()).filter(|&k| s.velocity_mm_s[k].abs() > 0.0) {
-        match spans.last_mut() {
-            Some(last) if s.t_s[k] - s.t_s[last.1 - 1] < min_gap_s => last.1 = k + 1,
-            _ => spans.push((k, k + 1)),
+    let p = &s.step_position;
+    let n = p.len().min(s.t_s.len());
+    let mut spans = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut k = 0;
+    while k < n {
+        let last = (k..n).take_while(|&j| p[j] == p[k]).last().unwrap_or(k);
+        let is_gap = k == 0 || last + 1 == n || s.t_s[last + 1] - s.t_s[k] >= min_gap_s;
+        match (is_gap, open) {
+            (true, Some(start)) => {
+                spans.push((start, k + 1));
+                open = None;
+            }
+            (false, None) => open = Some(k),
+            _ => {}
         }
+        k = last + 1;
     }
     spans
 }

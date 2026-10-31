@@ -75,27 +75,95 @@ fn nan_velocity_does_not_panic() {
     assert!(m.moving_samples >= 3);
 }
 
+const UNITS_PER_MM: f64 = 65536.0 / 40.0;
+const JITTER_UNITS: [i32; 4] = [0, 66, 33, 49];
+
+/// Commanded positions at 1 kHz: a hold of `samples` frames, or a move at `mm_s`.
+enum Piece {
+    Hold(usize),
+    Move(usize, f64),
+}
+
+/// A series whose measured position jitters by up to 4 encoder counts around the command,
+/// with velocity differentiated from the measured position as the series builder does.
+fn commanded(pieces: &[Piece]) -> ChannelSeries {
+    let mut step = Vec::new();
+    let mut at = 0.0_f64;
+    for piece in pieces {
+        let (n, mm_s) = match *piece {
+            Piece::Hold(n) => (n, 0.0),
+            Piece::Move(n, mm_s) => (n, mm_s),
+        };
+        for _ in 0..n {
+            at += mm_s * UNITS_PER_MM / 1000.0;
+            step.push(at.round() as i32);
+        }
+    }
+    let tmc: Vec<i32> = step
+        .iter()
+        .enumerate()
+        .map(|(k, p)| p + JITTER_UNITS[k % JITTER_UNITS.len()])
+        .collect();
+    let velocity = (0..tmc.len())
+        .map(|k| match k {
+            0 => 0.0,
+            _ => f64::from(tmc[k] - tmc[k - 1]) / UNITS_PER_MM * 1000.0,
+        })
+        .collect();
+    ChannelSeries {
+        t_s: (0..step.len()).map(|k| k as f64 * 1e-3).collect(),
+        position_error_um: vec![0.0; step.len()],
+        step_position: step,
+        tmc_position: tmc,
+        velocity_mm_s: velocity,
+        ..ChannelSeries::default()
+    }
+}
+
 #[test]
-fn speed_segments_split_on_standstill_gaps_in_order() {
-    let mut v = vec![50.0; 100];
-    v.extend(vec![0.0; 50]);
-    v.extend(vec![195.0; 100]);
-    v.extend(vec![0.0; 50]);
-    v.extend(vec![400.0; 100]);
-    let n = v.len();
-    let s = series(v, vec![0.0; n]);
+fn a_dwell_splits_speed_blocks_despite_encoder_jitter() {
+    let s = commanded(&[
+        Piece::Hold(300),
+        Piece::Move(1000, 50.0),
+        Piece::Hold(500),
+        Piece::Move(1000, 195.0),
+        Piece::Hold(300),
+    ]);
+
     assert_eq!(
         split_speed_segments(&s, 0.4),
-        vec![(0, 100), (150, 250), (300, 400)]
+        vec![(300, 1300), (1800, 2800)]
     );
 }
 
 #[test]
-fn short_stops_do_not_split_a_segment() {
-    let mut v = vec![50.0; 100];
-    v.extend(vec![0.0; 10]);
-    v.extend(vec![50.0; 100]);
-    let n = v.len();
-    let s = series(v, vec![0.0; n]);
-    assert_eq!(split_speed_segments(&s, 0.4), vec![(0, 210)]);
+fn back_to_back_speeds_without_a_dwell_are_one_block() {
+    let s = commanded(&[
+        Piece::Hold(300),
+        Piece::Move(1000, 50.0),
+        Piece::Move(1000, 195.0),
+        Piece::Hold(300),
+    ]);
+
+    assert_eq!(split_speed_segments(&s, 0.4), vec![(300, 2300)]);
+}
+
+#[test]
+fn a_hold_shorter_than_the_gap_does_not_split() {
+    let s = commanded(&[
+        Piece::Hold(300),
+        Piece::Move(1000, 50.0),
+        Piece::Hold(300),
+        Piece::Move(1000, 195.0),
+        Piece::Hold(300),
+    ]);
+
+    assert_eq!(split_speed_segments(&s, 0.4), vec![(300, 2600)]);
+}
+
+#[test]
+fn leading_and_trailing_rests_are_not_blocks() {
+    let s = commanded(&[Piece::Hold(200), Piece::Move(1000, 50.0), Piece::Hold(900)]);
+
+    assert_eq!(split_speed_segments(&s, 0.4), vec![(200, 1200)]);
 }

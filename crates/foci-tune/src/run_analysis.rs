@@ -18,8 +18,8 @@ use crate::stimulus::RunKind;
 use crate::verify::{STANDSTILL_MIN_LEN, STANDSTILL_SETTLE};
 
 /// Speed blocks of a tracking script are separated by a 500 ms dwell; reversals inside a
-/// block stand still for a few milliseconds only.
-const SPEED_BLOCK_GAP_S: f64 = 0.25;
+/// block hold the commanded position for a few milliseconds only.
+const SPEED_BLOCK_GAP_S: f64 = 0.4;
 
 /// A capture decoded from its first metadata frame on.
 #[derive(Debug, Clone)]
