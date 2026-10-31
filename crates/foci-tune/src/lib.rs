@@ -15,6 +15,7 @@ pub mod moonraker;
 pub mod pattern;
 pub mod run_analysis;
 pub mod server;
+pub mod setup;
 pub mod steppers;
 pub mod stimulus;
 pub mod store;

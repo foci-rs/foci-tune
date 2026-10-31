@@ -102,3 +102,43 @@ async fn the_service_serves_the_api_and_stops_on_sigterm() {
     assert!(dir.path().join("foci-results/sessions").is_dir());
     assert!(status.success(), "{status:?}");
 }
+
+#[test]
+fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for d in ["etc/udev/rules.d", "etc/systemd/system", "usr/local/bin"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    std::fs::write(
+        root.join("etc/passwd"),
+        "pi:x:1000:1000::/home/pi:/bin/bash\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("etc/group"), "pi:x:1000:\nplugdev:x:46:\n").unwrap();
+    let unit = root.join("etc/systemd/system/foci-tune.service");
+    let setup = |extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("foci-tune").unwrap();
+        cmd.args(["setup", "--root"]).arg(root).args(extra);
+        cmd
+    };
+
+    setup(&["--dry-run", "--user", "pi"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("User=pi"))
+        .stdout(predicates::str::contains("dry run"));
+    assert!(!unit.exists());
+
+    setup(&[])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("not executed under --root"));
+    assert!(
+        std::fs::read_to_string(&unit)
+            .unwrap()
+            .contains("User=pi\n")
+    );
+    assert!(root.join("usr/local/bin/foci-tune").is_file());
+    assert!(root.join("etc/udev/rules.d/99-foci-trace.rules").is_file());
+}

@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use foci_tune::assets;
 use foci_tune::server::{ServeConfig, serve};
+use foci_tune::setup::{self, Host, Runner, Setup, SetupError, SystemRunner, UnexecutedRunner};
 use foci_tune::verify::{Kind, verify_archive};
 
 #[derive(Parser)]
@@ -45,6 +46,21 @@ enum Command {
         #[arg(required = true)]
         captures: Vec<PathBuf>,
     },
+    /// Install the binary, udev rule and systemd unit and start the service (Linux, root).
+    Setup {
+        /// User the service runs as; added to the plugdev group.
+        #[arg(long, default_value = "pi", conflicts_with = "remove")]
+        user: String,
+        /// Print what would be done, including the file contents, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Stop and disable the service and remove the installed files.
+        #[arg(long)]
+        remove: bool,
+        /// Place every system path under this directory and run no external commands.
+        #[arg(long, hide = true)]
+        root: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -75,6 +91,18 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some(Command::Setup {
+            user,
+            dry_run,
+            remove,
+            root,
+        }) => match run_setup(&user, dry_run, remove, root) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
         None => {
             tracing_subscriber::fmt()
                 .with_max_level(tracing::Level::INFO)
@@ -110,4 +138,31 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+fn run_setup(
+    user: &str,
+    dry_run: bool,
+    remove: bool,
+    root: Option<PathBuf>,
+) -> Result<(), SetupError> {
+    let mut runner: Box<dyn Runner> = if root.is_some() {
+        Box::new(UnexecutedRunner)
+    } else {
+        Box::new(SystemRunner)
+    };
+    let config = Setup {
+        prefix: root,
+        dry_run,
+        host: Host::current(),
+    };
+    let mut out = std::io::stdout().lock();
+    if remove {
+        return setup::remove(&config, runner.as_mut(), &mut out);
+    }
+    let exe = std::env::current_exe().map_err(|source| SetupError::Io {
+        path: PathBuf::from("the running executable"),
+        source,
+    })?;
+    setup::install(&config, user, &exe, runner.as_mut(), &mut out)
 }
