@@ -8,7 +8,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::Condvar;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -21,7 +23,7 @@ use foci_tune_analysis::signals::{i_gain_param, p_gain_param};
 use foci_tune_analysis::units::Regime;
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Notify, broadcast, watch};
+use tokio::sync::{Notify, broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout, timeout_at};
 
@@ -518,6 +520,132 @@ fn reconcile(store: &Store) -> io::Result<Vec<(SessionId, Run)>> {
     Ok(reconciled)
 }
 
+fn advance(run: &mut Run, state: RunState) {
+    run.steps.push(StepTime {
+        step: state.name().to_owned(),
+        unix_ms: now_ms(),
+    });
+    run.state = state;
+}
+
+enum Job {
+    Write(SessionId, Box<Run>),
+    Event(EngineEvent),
+    MarkKilled(SessionId, RunId),
+    Flush(oneshot::Sender<()>),
+}
+
+struct Writer {
+    store: Store,
+    events: broadcast::Sender<EngineEvent>,
+    #[cfg(test)]
+    paused: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl Writer {
+    fn handle(&self, job: Job) {
+        #[cfg(test)]
+        {
+            let (paused, resumed) = &*self.paused;
+            let mut p = lock(paused);
+            while *p {
+                p = resumed.wait(p).unwrap_or_else(PoisonError::into_inner);
+            }
+        }
+        match job {
+            Job::Write(session, run) => self.write(&session, &run),
+            Job::Event(event) => {
+                let _ = self.events.send(event);
+            }
+            Job::MarkKilled(session, id) => match self.store.read_run(&session, &id) {
+                Ok(mut run) if run.state == RunState::KillUnconfirmed => {
+                    advance(&mut run, RunState::Killed);
+                    self.write(&session, &run);
+                    let _ = self.events.send(EngineEvent::State {
+                        session,
+                        run: run.id.clone(),
+                        state: run.state,
+                    });
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(run = %id, error = %e, "cannot confirm the kill"),
+            },
+            Job::Flush(done) => {
+                let _ = done.send(());
+            }
+        }
+    }
+
+    fn write(&self, session: &SessionId, run: &Run) {
+        if let Err(e) = self.store.write_run(session, run) {
+            tracing::warn!(run = %run.id, error = %e, "cannot write run.json");
+        }
+    }
+}
+
+/// Writes `run.json` and sends engine events in submission order, off the engine lock: a
+/// stalled disk must not hold the lock the emergency stop needs.
+struct Persister {
+    jobs: std::sync::mpsc::Sender<Job>,
+    pending: Arc<AtomicUsize>,
+    #[cfg(test)]
+    paused: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl Persister {
+    fn start(store: Store, events: broadcast::Sender<EngineEvent>) -> io::Result<Self> {
+        #[cfg(test)]
+        let paused: Arc<(Mutex<bool>, Condvar)> = Arc::default();
+        let writer = Writer {
+            store,
+            events,
+            #[cfg(test)]
+            paused: paused.clone(),
+        };
+        let pending = Arc::new(AtomicUsize::new(0));
+        let done = pending.clone();
+        let (jobs, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("run-writer".to_owned())
+            .spawn(move || {
+                for job in rx {
+                    writer.handle(job);
+                    done.fetch_sub(1, Ordering::SeqCst);
+                }
+            })?;
+        Ok(Self {
+            jobs,
+            pending,
+            #[cfg(test)]
+            paused,
+        })
+    }
+
+    fn send(&self, job: Job) {
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        if self.jobs.send(job).is_err() {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn idle(&self) -> bool {
+        self.pending.load(Ordering::SeqCst) == 0
+    }
+
+    async fn flush(&self) {
+        let (done, wait) = oneshot::channel();
+        self.send(Job::Flush(done));
+        let _ = wait.await;
+    }
+
+    #[cfg(test)]
+    fn set_paused(&self, paused: bool) {
+        let (flag, resumed) = &*self.paused;
+        *lock(flag) = paused;
+        resumed.notify_all();
+    }
+}
+
 /// Klipper's `configfile.settings`, read once and kept until Klipper reports ready again.
 #[derive(Default)]
 struct SettingsCache {
@@ -530,6 +658,7 @@ struct Shared<M> {
     live: Arc<Mutex<LiveState>>,
     frames: broadcast::Sender<(String, Bytes)>,
     store: Store,
+    persister: Persister,
     config: EngineConfig,
     inner: Mutex<Inner>,
     wake: Notify,
@@ -574,11 +703,14 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             .rfind(|(_, run)| run.state == RunState::KillUnconfirmed)
             .map(|(session, run)| (session, run.id));
         let restarts_at_kill = *moonraker.klippy_restarts().borrow();
+        let events = broadcast::channel(EVENT_CAPACITY).0;
+        let persister = Persister::start(store.clone(), events.clone())?;
         let shared = Arc::new(Shared {
             moonraker,
             live,
             frames,
             store,
+            persister,
             config,
             inner: Mutex::new(Inner {
                 unconfirmed_kill,
@@ -586,7 +718,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
                 ..Inner::default()
             }),
             wake: Notify::new(),
-            events: broadcast::channel(EVENT_CAPACITY).0,
+            events,
             kill_requested: watch::channel(0).0,
             kill_resolved: watch::channel(0).0,
             next_ladder: AtomicU64::new(0),
@@ -610,7 +742,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         let (resolved, session, generation) = s.admit(&req).await?;
         let run = Shared::<M>::new_run(req, resolved.stepper.channel, &session);
         let id = run.id.clone();
-        s.enqueue(vec![run], None, generation)?;
+        s.enqueue(vec![run], None, generation).await?;
         Ok(id)
     }
 
@@ -687,14 +819,18 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             outcomes: vec![Vec::new(); values.len()],
         };
         let ids = runs.iter().map(|r| r.id.clone()).collect();
-        s.enqueue(runs, Some((slots, ladder, track)), generation)?;
+        s.enqueue(runs, Some((slots, ladder, track)), generation)
+            .await?;
         Ok(ids)
     }
 
     /// Stops the queue after the current run: every queued run is marked `Aborted`.
     pub async fn abort(&self) {
-        let mut inner = lock(&self.shared.inner);
-        self.shared.abort_queue(&mut inner);
+        {
+            let mut inner = lock(&self.shared.inner);
+            self.shared.abort_queue(&mut inner);
+        }
+        self.shared.persister.flush().await;
     }
 
     /// Posts the emergency stop and empties the queue; the current run becomes `Killed` once
@@ -828,9 +964,10 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         self.shared.events.subscribe()
     }
 
-    /// True when no run is in flight or queued and no revert is being written.
+    /// True when no run is in flight or queued, no revert is being written and every run
+    /// record is on disk.
     pub fn is_idle(&self) -> bool {
-        !lock(&self.shared.inner).busy()
+        !lock(&self.shared.inner).busy() && self.shared.persister.idle()
     }
 }
 
@@ -844,14 +981,17 @@ impl Drop for WriteGuard<'_> {
 
 impl<M: MoonrakerApi + 'static> Shared<M> {
     fn persist(&self, session: &SessionId, run: &Run) {
-        if let Err(e) = self.store.write_run(session, run) {
-            tracing::warn!(run = %run.id, error = %e, "cannot write run.json");
-        }
+        self.persister
+            .send(Job::Write(session.clone(), Box::new(run.clone())));
+    }
+
+    fn emit(&self, event: EngineEvent) {
+        self.persister.send(Job::Event(event));
     }
 
     fn publish(&self, session: &SessionId, run: &Run) {
         self.persist(session, run);
-        let _ = self.events.send(EngineEvent::State {
+        self.emit(EngineEvent::State {
             session: session.clone(),
             run: run.id.clone(),
             state: run.state.clone(),
@@ -859,17 +999,13 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     }
 
     fn transition(&self, q: &mut Queued, state: RunState) {
-        q.run.steps.push(StepTime {
-            step: state.name().to_owned(),
-            unix_ms: now_ms(),
-        });
-        q.run.state = state;
+        advance(&mut q.run, state);
         self.publish(&q.session, &q.run);
     }
 
     fn publish_queue(&self, inner: &Inner) {
         let ids = inner.queue.iter().map(|q| q.run.id.clone()).collect();
-        let _ = self.events.send(EngineEvent::Queue(ids));
+        self.emit(EngineEvent::Queue(ids));
     }
 
     /// Moves the current run to `state` unless a kill owns its state.
@@ -953,7 +1089,19 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         }
     }
 
-    fn enqueue(
+    async fn enqueue(
+        &self,
+        runs: Vec<Run>,
+        ladder: Option<(Vec<LadderSlot>, u64, LadderTrack)>,
+        generation: u64,
+    ) -> Result<(), Precondition> {
+        self.queue_runs(runs, ladder, generation)?;
+        self.persister.flush().await;
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    fn queue_runs(
         &self,
         runs: Vec<Run>,
         ladder: Option<(Vec<LadderSlot>, u64, LadderTrack)>,
@@ -987,8 +1135,6 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             inner.queue.push_back(q);
         }
         self.publish_queue(&inner);
-        drop(inner);
-        self.wake.notify_one();
         Ok(())
     }
 
@@ -1621,9 +1767,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 if unresolvable || !killing {
                     if let Some(finished) = inner.current.take() {
                         self.retire(&mut inner, &finished);
-                        let _ = self
-                            .events
-                            .send(EngineEvent::Finished(Box::new(finished.run)));
+                        self.emit(EngineEvent::Finished(Box::new(finished.run)));
                     }
                     return;
                 }
@@ -1734,6 +1878,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         let restarts = *self.moonraker.klippy_restarts().borrow();
         self.observe_klippy(klippy, restarts);
         self.kill_resolved.send_modify(|n| *n += 1);
+        self.persister.flush().await;
         (killed_run, confirmed)
     }
 
@@ -1747,18 +1892,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             }
             return;
         }
-        match self.store.read_run(&session, id) {
-            Ok(run) if run.state == RunState::KillUnconfirmed => {
-                let mut q = Queued {
-                    session,
-                    run,
-                    ladder: None,
-                };
-                self.transition(&mut q, RunState::Killed);
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(run = %id, error = %e, "cannot confirm the kill"),
-        }
+        self.persister.send(Job::MarkKilled(session, id.clone()));
     }
 
     /// Clears an unconfirmed kill once Klipper reports shutdown, which confirms the stop, or
@@ -1812,6 +1946,7 @@ mod tests {
 
     struct Stub {
         scripts: Mutex<Vec<String>>,
+        stops: AtomicUsize,
         state: watch::Sender<PrinterState>,
         gcode: broadcast::Sender<String>,
     }
@@ -1831,6 +1966,8 @@ mod tests {
         }
 
         async fn emergency_stop(&self) -> moonraker::Result<()> {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            self.state.send_modify(|s| s.klippy = KlippyState::Shutdown);
             Ok(())
         }
 
@@ -1927,13 +2064,16 @@ mod tests {
         };
         let stub = Arc::new(Stub {
             scripts: Mutex::new(Vec::new()),
+            stops: AtomicUsize::new(0),
             state: watch::channel(printer).0,
             gcode: broadcast::channel(4).0,
         });
+        let events = broadcast::channel(4).0;
         let shared = Shared {
             moonraker: stub.clone(),
             live: Arc::default(),
             frames: broadcast::channel(4).0,
+            persister: Persister::start(store.clone(), events.clone()).unwrap(),
             store,
             config: EngineConfig::default(),
             inner: Mutex::new(Inner {
@@ -1945,7 +2085,7 @@ mod tests {
                 ..Inner::default()
             }),
             wake: Notify::new(),
-            events: broadcast::channel(4).0,
+            events,
             kill_requested: watch::channel(0).0,
             kill_resolved: watch::channel(0).0,
             next_ladder: AtomicU64::new(0),
@@ -1990,6 +2130,42 @@ mod tests {
                 feedforward_reset_line("stepper_x"),
                 "FOCI_TRACE_MODE STEPPER=stepper_x MODE=dormant".to_owned(),
             ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_store_does_not_delay_the_emergency_stop() {
+        let (shared, stub, _dir) = shared_with_run(RunState::Moving);
+        let (session, id) = {
+            let inner = lock(&shared.inner);
+            let current = inner.current.as_ref().unwrap();
+            shared
+                .store
+                .write_run(&current.session, &current.run)
+                .unwrap();
+            (current.session.clone(), current.run.id.clone())
+        };
+        let shared = Arc::new(shared);
+        shared.persister.set_paused(true);
+
+        let killing = shared.clone();
+        let kill = tokio::spawn(async move { killing.kill().await });
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while stub.stops.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let stops_while_stalled = stub.stops.load(Ordering::SeqCst);
+        let on_disk_while_stalled = shared.store.read_run(&session, &id).unwrap().state;
+        shared.persister.set_paused(false);
+        let (killed, confirmed) = kill.await.unwrap();
+
+        assert_eq!(stops_while_stalled, 1);
+        assert_eq!(on_disk_while_stalled, RunState::Moving);
+        assert_eq!(killed, Some(id.clone()));
+        assert!(confirmed);
+        assert_eq!(
+            shared.store.read_run(&session, &id).unwrap().state,
+            RunState::Killed
         );
     }
 }
