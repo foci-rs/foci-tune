@@ -464,6 +464,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "axum",
+ "bytes",
  "clap",
  "foci-trace",
  "foci-tune-analysis",
