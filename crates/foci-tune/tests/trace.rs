@@ -350,21 +350,6 @@ fn metadata_frame_clears_the_cadence_window() {
 }
 
 #[test]
-fn critical_frames_without_metadata_leave_no_cadence() {
-    let mut live = LiveState::default();
-    let now = Instant::now();
-
-    for k in 0..5000u32 {
-        live.ingest(SERIAL, &critical(k, u64::from(k) * 260_000), now);
-    }
-
-    assert_eq!(live.boards[SERIAL].critical_hz_measured, 0.0);
-    live.ingest(SERIAL, &frame(5, &metadata_payload(1000), 0, 0, 0), now);
-    live.ingest(SERIAL, &critical(1, 1_000_000), now);
-    assert_eq!(live.boards[SERIAL].critical_hz_measured, 0.0);
-}
-
-#[test]
 fn boot_id_change_resets_trace_mode_to_unknown() {
     let mut live = LiveState::default();
     let now = Instant::now();

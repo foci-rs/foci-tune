@@ -1,6 +1,6 @@
 //! Trace interface readers: one blocking task per board, frames broadcast by serial.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -21,6 +21,7 @@ const TRANSFER_SIZE: usize = 4096;
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 const BACKOFF_START: Duration = Duration::from_millis(500);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
+const WARN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// A source of raw trace bytes for one board.
 pub trait FrameSource: Send {
@@ -124,32 +125,52 @@ pub async fn run_trace_reader(
 ) {
     let active: Arc<Mutex<HashSet<String>>> = Arc::default();
     let mut backoff = BACKOFF_START;
+    let mut last_warned: HashMap<String, Instant> = HashMap::new();
     while !stop.load(Ordering::Relaxed) {
         let active_now = active
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let found = tokio::task::spawn_blocking(move || {
+        let scan = tokio::task::spawn_blocking(move || {
             let wanted = serials_to_open(
                 &candidate_serials().map_err(|e| e.to_string())?,
                 &active_now,
             );
-            if wanted.is_empty() {
-                return Ok(Vec::new());
+            let mut opened = Vec::new();
+            let mut failed = Vec::new();
+            for serial in wanted {
+                match find_trace_devices(std::slice::from_ref(&serial)) {
+                    Ok(devices) => opened.extend(devices),
+                    Err(e) => failed.push((serial, e.to_string())),
+                }
             }
-            find_trace_devices(&wanted).map_err(|e| e.to_string())
+            Ok::<_, String>((opened, failed))
         })
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
-        match found {
-            Ok(devices) if !devices.is_empty() => {
-                backoff = BACKOFF_START;
-                for device in devices {
-                    spawn_reader(device, &live, &tx, &stop, &active);
+        match scan {
+            Ok((devices, failed)) => {
+                let now = Instant::now();
+                for (serial, error) in failed {
+                    let due = last_warned
+                        .get(&serial)
+                        .is_none_or(|at| now.duration_since(*at) >= WARN_INTERVAL);
+                    if due {
+                        warn!(%serial, %error, "cannot open trace interface");
+                        last_warned.insert(serial, now);
+                    }
+                }
+                if devices.is_empty() {
+                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                } else {
+                    backoff = BACKOFF_START;
+                    for device in devices {
+                        last_warned.remove(&device.info.serial);
+                        spawn_reader(device, &live, &tx, &stop, &active);
+                    }
                 }
             }
-            Ok(_) => backoff = (backoff * 2).min(BACKOFF_MAX),
             Err(e) => {
                 warn!(error = %e, "trace interface scan failed");
                 backoff = (backoff * 2).min(BACKOFF_MAX);
