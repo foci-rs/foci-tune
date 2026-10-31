@@ -107,14 +107,17 @@ pub enum StopDecision {
     StopUnassessable,
 }
 
-/// Applies the probe-ladder stop rule to one value's outcomes.
+/// Applies the probe-ladder stop rule to the outcomes of exactly one value.
 ///
-/// Returns `Continue` until `repeats` outcomes exist, so the median is never
-/// taken over fewer repeats than requested.
+/// The queue is interleaved (A B C A B C), so one value's runs are not
+/// contiguous in global order: the caller gathers `outcomes` by value index, in
+/// repeat order. Returns `Continue` until `repeats` outcomes exist; only the
+/// first `repeats` are evaluated, so the median is never taken over a wider set.
 pub fn probe_stop(outcomes: &[RungOutcome], repeats: usize, floor: f64) -> StopDecision {
     if repeats == 0 || outcomes.len() < repeats {
         return StopDecision::Continue;
     }
+    let outcomes = &outcomes[..repeats];
     let mut zetas = Vec::with_capacity(outcomes.len());
     for outcome in outcomes {
         match outcome {

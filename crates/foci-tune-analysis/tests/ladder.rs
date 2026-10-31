@@ -106,3 +106,20 @@ fn median_and_marginal() {
     assert!(is_marginal(0.07, 0.08));
     assert!(!is_marginal(0.08, 0.08));
 }
+
+#[test]
+fn probe_stop_evaluates_only_the_first_repeats() {
+    assert_eq!(
+        probe_stop(&assessed(&[0.1, 0.09, 0.01]), 2, 0.05),
+        StopDecision::Continue
+    );
+    let tail_unassessable = [
+        RungOutcome::Assessed(0.06),
+        RungOutcome::Assessed(0.03),
+        RungOutcome::Unassessable,
+    ];
+    match probe_stop(&tail_unassessable, 2, 0.05) {
+        StopDecision::StopBelowFloor { median } => assert!((median - 0.045).abs() < 1e-12),
+        other => panic!("{other:?}"),
+    }
+}
