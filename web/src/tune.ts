@@ -10,6 +10,8 @@ import type {
   RunRegime,
   RunRequestBody,
   RunSetup,
+  SessionId,
+  SessionView,
   StepperView,
 } from "./api";
 import { velocityIRaw } from "./units";
@@ -56,6 +58,42 @@ export function nextSession(a: Setup, b: Setup): boolean {
     !sameValue(a.pattern, b.pattern) ||
     !sameValue(a.parameters, b.parameters)
   );
+}
+
+export interface SessionLink {
+  id: SessionId;
+  setup: Setup;
+}
+
+/** The session a single run joins: the linked one while the setup is unchanged, else none. */
+export function sessionForRun(link: SessionLink | null, setup: Setup): SessionId | null {
+  return link !== null && !nextSession(link.setup, setup) ? link.id : null;
+}
+
+export function setupOfSession(view: SessionView): Setup | null {
+  const s = view.session;
+  return s === null ? null : setupFromKind(s.stepper, s.pattern, s.kind);
+}
+
+/**
+ * The session to show when the page has none: the session of the run in flight, else the
+ * newest stored session whose setup equals `setup`. Ids sort by creation time.
+ */
+export function pickRestoreSession(
+  running: SessionId | null,
+  sessions: SessionView[],
+  setup: Setup | null,
+): SessionId | null {
+  if (running !== null) return running;
+  if (setup === null) return null;
+  const matching = sessions
+    .filter((v) => {
+      const s = setupOfSession(v);
+      return s !== null && !nextSession(s, setup);
+    })
+    .map((v) => v.id)
+    .sort();
+  return matching.length === 0 ? null : matching[matching.length - 1];
 }
 
 export function setupFromKind(stepper: string, pattern: Pattern, kind: RunKind): Setup {
@@ -112,7 +150,10 @@ export interface Headline {
   note?: string;
 }
 
-/** The run type's headline metric for the declared channel, as the spec names it. */
+/**
+ * The headline metric of the declared channel: p99 error at the highest tracking speed, the
+ * velocity fit's zeta for a probe, the worst rest torque sd for standstill.
+ */
 export function headlineMetric(run: Run, type: RunType): Headline {
   const m = declaredMetrics(run);
   switch (type) {
@@ -160,6 +201,7 @@ export function buildLadderRequest(
   input: LadderInput,
   pwmHz: number | null,
 ): Built<LadderRequestBody> {
+  const { session: _session, ...fixed } = base;
   const parsed = parseLadderList(input.text);
   if (!parsed.ok) return parsed;
   const values = parsed.values;
@@ -194,7 +236,7 @@ export function buildLadderRequest(
   return {
     ok: true,
     body: {
-      ...base,
+      ...fixed,
       axis: input.axis,
       values,
       repeats: input.repeats,
@@ -204,7 +246,10 @@ export function buildLadderRequest(
   };
 }
 
-/** The spec's default rungs from the current gains, every out-of-range rung omitted. */
+/**
+ * Default rungs from the current gains: velocity P in six steps of +100, position P from 20
+ * below in six steps of +20, corners 25 to 100 Hz; every out-of-range rung omitted.
+ */
 export function defaultLadderValues(axis: LadderAxis, gains: OuterGains, pwmHz: number): number[] {
   const steps = [0, 1, 2, 3, 4, 5];
   const shown =
@@ -335,28 +380,55 @@ export function median(values: number[]): number | null {
   return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+export interface LadderEntry {
+  value: number | null;
+  metric: number | null;
+  /** Finished `done` with a metric; anything else cannot be assessed. */
+  assessable: boolean;
+}
+
+export interface LadderMedian {
+  value: number;
+  median: number | null;
+  unassessable: boolean;
+}
+
 /**
- * `[values, repeat 1, ..., repeat n, median]`. The median is null for a value with fewer
- * metrics than repeats, matching the stop rule that never takes it over fewer repeats.
+ * The median per value over its first `repeats` runs in run order, as the ladder stop rule
+ * takes it: none until every repeat has finished, and none, marked unassessable, when any of
+ * them was not `done` or has no metric.
  */
-export function ladderPlotData(
-  entries: { value: number | null; metric: number | null }[],
-  repeats: number,
-): [number[], ...(number | null)[][]] {
-  const groups = new Map<number, (number | null)[]>();
+export function ladderMedians(entries: LadderEntry[], repeats: number): LadderMedian[] {
+  const groups = new Map<number, LadderEntry[]>();
   for (const e of entries) {
     if (e.value === null) continue;
-    const g = groups.get(e.value) ?? [];
-    g.push(e.metric);
-    groups.set(e.value, g);
+    groups.set(e.value, [...(groups.get(e.value) ?? []), e]);
   }
-  const values = [...groups.keys()].sort((a, b) => a - b);
-  const reps = Array.from({ length: repeats }, (_, r) => values.map((v) => groups.get(v)?.[r] ?? null));
-  const medians = values.map((v) => {
-    const metrics = (groups.get(v) ?? []).filter((m): m is number => m !== null);
-    return metrics.length >= repeats ? median(metrics) : null;
-  });
-  return [values, ...reps, medians];
+  return [...groups.keys()]
+    .sort((a, b) => a - b)
+    .map((value) => {
+      const first = (groups.get(value) ?? []).slice(0, repeats);
+      const unassessable = first.some((e) => !e.assessable || e.metric === null);
+      const complete = first.length >= repeats && !unassessable;
+      return {
+        value,
+        median: complete ? median(first.map((e) => e.metric as number)) : null,
+        unassessable,
+      };
+    });
+}
+
+/** `[values, repeat 1, ..., repeat n, median]` for the ladder plot. */
+export function ladderPlotData(entries: LadderEntry[], repeats: number): [number[], ...(number | null)[][]] {
+  const medians = ladderMedians(entries, repeats);
+  const values = medians.map((m) => m.value);
+  const byValue = new Map<number, (number | null)[]>();
+  for (const e of entries) {
+    if (e.value === null) continue;
+    byValue.set(e.value, [...(byValue.get(e.value) ?? []), e.metric]);
+  }
+  const reps = Array.from({ length: repeats }, (_, r) => values.map((v) => byValue.get(v)?.[r] ?? null));
+  return [values, ...reps, medians.map((m) => m.median)];
 }
 
 /** Keeps each checked run's colour slot; a newly checked run takes the lowest free slot. */
@@ -399,6 +471,27 @@ export function clampPoint(p: [number, number], limits: Limits): [number, number
   const clamp = (v: number, [lo, hi]: [number, number]) =>
     Math.min(hi - PATTERN_MARGIN_MM, Math.max(lo + PATTERN_MARGIN_MM, v));
   return [clamp(p[0], limits.x), clamp(p[1], limits.y)];
+}
+
+/** Why the service would refuse the pattern, naming the broken limit; null when it is valid. */
+export function patternProblem(p: Pattern, limits: Limits): string | null {
+  const checks: [string, number, [number, number]][] = [
+    ["start X", p.start[0], limits.x],
+    ["start Y", p.start[1], limits.y],
+    ["end X", p.end[0], limits.x],
+    ["end Y", p.end[1], limits.y],
+  ];
+  for (const [name, v, [lo, hi]] of checks) {
+    const min = lo + PATTERN_MARGIN_MM;
+    const max = hi - PATTERN_MARGIN_MM;
+    if (!Number.isFinite(v) || v < min || v > max) {
+      return `${name} ${v} is outside ${min}..${max} mm (bed limits minus the ${PATTERN_MARGIN_MM} mm margin)`;
+    }
+  }
+  if (Math.hypot(p.end[0] - p.start[0], p.end[1] - p.start[1]) < 1) {
+    return "the pattern is shorter than 1 mm";
+  }
+  return null;
 }
 
 export function patternInside(p: Pattern, limits: Limits): boolean {

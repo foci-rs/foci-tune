@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { LiveChannel, Run, RunKind } from "./api";
+import type { LiveChannel, Run, RunKind, SessionView } from "./api";
 import {
   alignSeries,
   appendLive,
@@ -9,7 +9,11 @@ import {
   defaultLadderValues,
   headlineMetric,
   highlightChanges,
+  ladderMedians,
   ladderPlotData,
+  patternProblem,
+  pickRestoreSession,
+  sessionForRun,
   liveRegime,
   loadPattern,
   nextSession,
@@ -165,6 +169,16 @@ describe("buildLadderRequest", () => {
     filters: { velocity_hz: 500, torque_hz: 1000, position_hz: 500, flux_hz: 1000 },
   };
 
+  test("never names a session: a ladder opens its own session that records the ladder", () => {
+    const r = buildLadderRequest(
+      { ...base, session: "20261031T085136Z-r87j" },
+      { axis: "position_p", text: "100", repeats: 2, floor: 0.05, marginal: 0.08 },
+      50_000,
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect("session" in r.body).toBe(false);
+  });
+
   test("carries the axis, values, repeats and thresholds", () => {
     const r = buildLadderRequest(
       base,
@@ -173,7 +187,19 @@ describe("buildLadderRequest", () => {
     );
     expect(r).toEqual({
       ok: true,
-      body: { ...base, axis: "position_p", values: [100, 120], repeats: 2, floor: 0.05, marginal: 0.08 },
+      body: {
+        stepper: base.stepper,
+        type: base.type,
+        pattern: base.pattern,
+        parameters: base.parameters,
+        gains: base.gains,
+        filters: base.filters,
+        axis: "position_p",
+        values: [100, 120],
+        repeats: 2,
+        floor: 0.05,
+        marginal: 0.08,
+      },
     });
   });
 
@@ -289,16 +315,8 @@ describe("alignSeries", () => {
 
 describe("ladderPlotData", () => {
   test("groups repeats by value; no median for a value short of its repeats", () => {
-    const data = ladderPlotData(
-      [
-        { value: 120, metric: 0.2 },
-        { value: 100, metric: 0.3 },
-        { value: 120, metric: null },
-        { value: 100, metric: 0.1 },
-        { value: 100, metric: 0.5 },
-      ],
-      3,
-    );
+    const e = (value: number, metric: number | null) => ({ value, metric, assessable: metric !== null });
+    const data = ladderPlotData([e(120, 0.2), e(100, 0.3), e(120, null), e(100, 0.1), e(100, 0.5)], 3);
     expect(data).toEqual([
       [100, 120],
       [0.3, 0.2],
@@ -306,6 +324,80 @@ describe("ladderPlotData", () => {
       [0.5, null],
       [0.3, null],
     ]);
+  });
+});
+
+describe("ladderMedians", () => {
+  test("a not comparable repeat makes the value unassessable, as the engine's stop rule does", () => {
+    const medians = ladderMedians(
+      [
+        { value: 100, metric: 0.2, assessable: true },
+        { value: 200, metric: 0.3, assessable: true },
+        { value: 100, metric: 0.25, assessable: false },
+        { value: 200, metric: 0.1, assessable: true },
+      ],
+      2,
+    );
+    expect(medians).toEqual([
+      { value: 100, median: null, unassessable: true },
+      { value: 200, median: 0.2, unassessable: false },
+    ]);
+  });
+
+  test("only the first repeats count, in run order", () => {
+    const medians = ladderMedians(
+      [
+        { value: 100, metric: 0.2, assessable: true },
+        { value: 100, metric: 0.4, assessable: true },
+        { value: 100, metric: null, assessable: false },
+      ],
+      2,
+    );
+    expect(medians).toEqual([{ value: 100, median: 0.30000000000000004, unassessable: false }]);
+  });
+});
+
+describe("session continuity", () => {
+  const link = { id: "S1", setup: tracking() };
+
+  test("a single run reuses the session while the setup is unchanged", () => {
+    expect(sessionForRun(link, tracking())).toBe("S1");
+    expect(sessionForRun(link, tracking({ stepper: "stepper_y" }))).toBeNull();
+    expect(sessionForRun(null, tracking())).toBeNull();
+  });
+
+  function view(id: string, stepper: string): SessionView {
+    return {
+      id,
+      error: null,
+      runs: [],
+      session: {
+        format_version: 1,
+        name: id,
+        created_unix_s: 0,
+        stepper,
+        kind: { Tracking: { speeds_mm_s: [50, 195, 400], strokes: 8 } },
+        pattern,
+        gains: { velocity_p: 1, velocity_i: 1, position_p: 1, position_i: 0 },
+        filters: { velocity_hz: 1, torque_hz: 1, position_hz: 1, flux_hz: 1 },
+        ladder: null,
+      },
+    };
+  }
+
+  test("restores the engine's running session first", () => {
+    expect(pickRestoreSession("S9", [view("S1", "stepper_x")], tracking())).toBe("S9");
+  });
+
+  test("otherwise restores the newest session whose setup matches", () => {
+    const sessions = [
+      view("20261031T080000Z-aaaa", "stepper_x"),
+      view("20261031T090000Z-bbbb", "stepper_x"),
+      view("20261031T100000Z-cccc", "stepper_y"),
+    ];
+    expect(pickRestoreSession(null, sessions, tracking())).toBe("20261031T090000Z-bbbb");
+    expect(pickRestoreSession(null, sessions, tracking({ stepper: "stepper_z" }))).toBeNull();
+    expect(pickRestoreSession(null, sessions, null)).toBeNull();
   });
 });
 
@@ -322,6 +414,14 @@ describe("assignColors", () => {
 
 describe("pattern helpers", () => {
   const limits = { x: [0, 300] as [number, number], y: [0, 250] as [number, number] };
+
+  test("names the limit an out-of-margin point breaks, and accepts a valid pattern", () => {
+    expect(patternProblem(pattern, limits)).toBeNull();
+    const typed = { start: [1, 100] as [number, number], end: [200, 200] as [number, number] };
+    expect(patternProblem(typed, limits)).toBe("start X 1 is outside 10..290 mm (bed limits minus the 10 mm margin)");
+    const short = { start: [100, 100] as [number, number], end: [100.5, 100] as [number, number] };
+    expect(patternProblem(short, limits)).toBe("the pattern is shorter than 1 mm");
+  });
 
   test("clamps a point to the limits minus the margin", () => {
     expect(clampPoint([-5, 400], limits)).toEqual([10, 240]);

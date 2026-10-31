@@ -382,7 +382,9 @@ export type RunRequestBody = {
   filters: Filters;
 } & RunSetup;
 
-export type LadderRequestBody = RunRequestBody & {
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+export type LadderRequestBody = DistributiveOmit<RunRequestBody, "session"> & {
   axis: LadderAxis;
   values: number[];
   repeats: number;

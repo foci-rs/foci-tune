@@ -5,12 +5,12 @@ import {
   getConfigBlock,
   getSeries,
   getSession,
+  getSessions,
   postAbort,
   postLadder,
   postRevert,
   postRun,
   type ChannelPlot,
-  type Filters,
   type Pattern,
   type PrinterView,
   type RunSetup,
@@ -31,6 +31,7 @@ import { finishedMs, ResultsTable } from "@/components/ResultsTable";
 import { TracePanels, type OverlayRun } from "@/components/TracePanels";
 import { Button, Card, NumberField } from "@/components/ui";
 import { useFeed } from "@/feed";
+import { workbench, type WorkbenchState } from "@/workbench";
 import {
   assignColors,
   bedLimits,
@@ -40,17 +41,20 @@ import {
   DEFAULT_PARAMETERS,
   defaultLadderValues,
   headlineMetric,
+  ladderMedians,
   loadPattern,
   nextSession,
   parseNumberList,
-  patternInside,
+  patternProblem,
+  pickRestoreSession,
+  sessionForRun,
+  setupOfSession,
   RECORDING_STATES,
   savePattern,
   stateLabel,
   TERMINAL_STATES,
   type LadderInput,
   type Limits,
-  type OuterGains,
   type RunBody,
   type RunType,
   type Setup,
@@ -76,6 +80,22 @@ const DEFAULT_LADDER: LadderInput = {
   floor: 0.05,
   marginal: 0.08,
 };
+
+const AWAIT_PICKUP_MS = 10_000;
+
+/** State kept in the module-level workbench store, so it survives leaving the page. */
+function useStored<K extends keyof WorkbenchState>(
+  key: K,
+  initial: () => WorkbenchState[K],
+): [WorkbenchState[K], (v: WorkbenchState[K] | ((prev: WorkbenchState[K]) => WorkbenchState[K])) => void] {
+  const [value, setValue] = useState<WorkbenchState[K]>(() =>
+    key in workbench ? (workbench[key] as WorkbenchState[K]) : initial(),
+  );
+  useEffect(() => {
+    workbench[key] = value;
+  }, [key, value]);
+  return [value, setValue];
+}
 
 function errorText(e: unknown): string {
   if (e instanceof ApiRequestError) return e.field === null ? e.message : `${e.field}: ${e.message}`;
@@ -222,25 +242,32 @@ function TunePage() {
 function Workbench({ printer }: { printer: PrinterView }) {
   const storage = useMemo(() => browserStorage(), []);
   const limits = useMemo(() => bedLimits(printer.steppers), [printer.steppers]);
-  const [stepperName, setStepperName] = useState(
+  const { refetch } = useFeed();
+  const [stepperName, setStepperName] = useStored(
+    "stepperName",
     () => (printer.steppers.find((s) => s.unusable === null) ?? printer.steppers[0]).name,
   );
   const stepper = printer.steppers.find((s) => s.name === stepperName);
   const channel = channelOf(printer, stepper);
   const pwmHz = channel !== undefined && channel.control.pwm_hz > 0 ? channel.control.pwm_hz : null;
 
-  const [params, setParams] = useState(DEFAULT_PARAMETERS);
-  const [type, setType] = useState<RunType>("probe");
-  const [patterns, setPatterns] = useState<Record<string, Pattern>>({});
-  const [speedsText, setSpeedsText] = useState(DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "));
+  const [params, setParams] = useStored("params", () => DEFAULT_PARAMETERS);
+  const [type, setType] = useStored<"type">("type", () => "probe");
+  const [patterns, setPatterns] = useStored<"patterns">("patterns", () => ({}));
+  const [speedsText, setSpeedsText] = useStored("speedsText", () =>
+    DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "),
+  );
 
   const patternFor = (s: StepperView | undefined): Pattern | null => {
     if (s === undefined || limits === null) return null;
-    const remembered = patterns[s.name] ?? loadPattern(storage, s.name);
-    if (remembered !== null && patternInside(remembered, limits)) return remembered;
+    const typed = patterns[s.name];
+    if (typed !== undefined) return typed;
+    const remembered = loadPattern(storage, s.name);
+    if (remembered !== null && patternProblem(remembered, limits) === null) return remembered;
     return s.proposal.pattern ?? fallbackPattern(limits);
   };
   const pattern = patternFor(stepper);
+  const patternError = pattern !== null && limits !== null ? patternProblem(pattern, limits) : null;
 
   const speeds = parseNumberList(speedsText, "the speed set");
   const runSetup: RunSetup =
@@ -257,12 +284,20 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const setPattern = (p: Pattern) => {
     if (stepper === undefined) return;
     setPatterns((prev) => ({ ...prev, [stepper.name]: p }));
-    savePattern(storage, stepper.name, p);
+    if (limits !== null && patternProblem(p, limits) === null) savePattern(storage, stepper.name, p);
   };
 
-  const [gains, setGains] = useState<OuterGains | null>(null);
-  const [filters, setFilters] = useState<Filters | null>(null);
-  const seededFor = useRef<string | null>(null);
+  const adopt = (s: Setup) => {
+    setStepperName(s.stepper);
+    setType(s.type);
+    setParams((prev) => ({ ...prev, [s.type]: s.parameters }));
+    if (s.type === "tracking") setSpeedsText(s.parameters.speeds_mm_s.join(", "));
+    setPatterns((prev) => ({ ...prev, [s.stepper]: s.pattern }));
+  };
+
+  const [gains, setGains] = useStored<"gains">("gains", () => null);
+  const [filters, setFilters] = useStored<"filters">("filters", () => null);
+  const [seededFor, setSeededFor] = useStored<"seededFor">("seededFor", () => null);
   const channelKey = stepper === undefined ? null : `${stepper.serial}:${stepper.channel}`;
   const seed = useCallback(() => {
     if (channel === undefined) return;
@@ -274,35 +309,73 @@ function Workbench({ printer }: { printer: PrinterView }) {
       position_hz: c.position_filter_hz,
       flux_hz: c.flux_filter_hz,
     });
-  }, [channel]);
+  }, [channel, setGains, setFilters]);
+  const [reseed, setReseed] = useState(false);
   useEffect(() => {
-    if (channel !== undefined && seededFor.current !== channelKey) {
-      seededFor.current = channelKey;
+    if (channel === undefined) return;
+    if (seededFor !== channelKey || reseed) {
+      setSeededFor(channelKey);
+      setReseed(false);
       seed();
     }
-  }, [channel, channelKey, seed]);
+  }, [channel, channelKey, seededFor, reseed, seed, setSeededFor]);
 
-  const [ladderOn, setLadderOn] = useState(false);
-  const [ladder, setLadder] = useState<LadderInput>(DEFAULT_LADDER);
-
-  const [session, setSession] = useState<{ id: SessionId; setup: Setup } | null>(null);
-  const active = session !== null && setup !== null && !nextSession(session.setup, setup) ? session : null;
-  const { view, error: sessionError, refresh } = useSessionView(active?.id ?? null);
-
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [ladderOn, setLadderOn] = useStored<"ladderOn">("ladderOn", () => false);
+  const [ladder, setLadder] = useStored<"ladder">("ladder", () => DEFAULT_LADDER);
 
   const current = printer.engine.current;
   const queue = printer.engine.queue;
+
+  const [link, setLink] = useStored<"link">("link", () => null);
+  const restoring = useRef(false);
+  useEffect(() => {
+    if (link !== null || restoring.current || setup === null) return;
+    restoring.current = true;
+    const running = current?.session ?? null;
+    getSessions().then(
+      (sessions) => {
+        const id = pickRestoreSession(running, sessions, setup);
+        const found = sessions.find((v) => v.id === id);
+        const restored = found === undefined ? null : setupOfSession(found);
+        if (id === null || restored === null) return;
+        if (nextSession(restored, setup)) adopt(restored);
+        setLink({ id, setup: restored });
+      },
+      () => undefined,
+    );
+  });
+
+  const active = link !== null && setup !== null && sessionForRun(link, setup) !== null ? link : null;
+  const runningLinked = current !== null && link !== null && current.session === link.id;
+  const shown = active ?? (runningLinked ? link : null);
+  const { view, error: sessionError, refresh } = useSessionView(shown?.id ?? null);
+
+  const [busy, setBusy] = useState(false);
+  const [awaiting, setAwaiting] = useState<string[] | null>(null);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (awaiting === null) return;
+    const timer = setTimeout(() => setAwaiting(null), AWAIT_PICKUP_MS);
+    return () => clearTimeout(timer);
+  }, [awaiting]);
+  const pickedUp =
+    awaiting !== null &&
+    ((current !== null && awaiting.includes(current.run)) ||
+      queue.some((r) => awaiting.includes(r)) ||
+      (view?.runs ?? []).some((r) => awaiting.includes(r.id) && TERMINAL_STATES.has(r.state)));
+  useEffect(() => {
+    if (pickedUp) setAwaiting(null);
+  }, [pickedUp]);
+
   const precondition = printer.preconditions.find((p) => p.stepper === stepperName);
 
   const blocked: string[] = [];
+  if (awaiting !== null) blocked.push("waiting for the engine to take up the queued run");
   if (precondition !== undefined && !precondition.ok) blocked.push(...precondition.failing);
   if (stepper?.unusable) blocked.push(stepper.unusable);
   if (limits === null) blocked.push("bed limits need stepper_x and stepper_y in the config");
-  if (pattern !== null && limits !== null && !patternInside(pattern, limits)) {
-    blocked.push("the pattern lies outside the bed limits minus the 10 mm margin");
-  }
+  if (patternError !== null) blocked.push(patternError);
   if (gains === null || filters === null) blocked.push("no control-state frame for the stepper's channel yet");
   if (gains !== null && filters !== null) blocked.push(...gainProblems(gains, filters));
   if (type === "tracking" && !speeds.ok) blocked.push(speeds.error);
@@ -311,7 +384,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
     setup === null || gains === null || filters === null
       ? null
       : ({
-          session: active?.id ?? null,
+          session: sessionForRun(link, setup),
           stepper: setup.stepper,
           type: setup.type,
           pattern: setup.pattern,
@@ -333,15 +406,16 @@ function Workbench({ printer }: { printer: PrinterView }) {
     setBusy(true);
     setMessage(null);
     const started = setup;
-    const done = (id: SessionId, count: number) => {
-      setSession({ id, setup: started });
-      setMessage({ tone: "ok", text: count === 1 ? "Run queued" : `${count} runs queued` });
+    const done = (id: SessionId, runs: string[]) => {
+      setLink({ id, setup: started });
+      setAwaiting(runs);
+      setMessage({ tone: "ok", text: runs.length === 1 ? "Run queued" : `${runs.length} runs queued` });
       refresh();
     };
     const request =
       ladderBuilt !== null && ladderBuilt.ok
-        ? postLadder(ladderBuilt.body).then((r) => done(r.session, r.runs.length))
-        : postRun(base).then((r) => done(r.session, 1));
+        ? postLadder(ladderBuilt.body).then((r) => done(r.session, r.runs))
+        : postRun(base).then((r) => done(r.session, [r.run]));
     request
       .catch((e: unknown) => setMessage({ tone: "error", text: errorText(e) }))
       .finally(() => setBusy(false));
@@ -351,7 +425,14 @@ function Workbench({ printer }: { printer: PrinterView }) {
     if (active === null) return;
     setMessage(null);
     postRevert(active.id).then(
-      () => setMessage({ tone: "ok", text: "The session's starting gains and filters were written back" }),
+      () => {
+        setMessage({
+          tone: "ok",
+          text: "The session's starting gains and filters were written back; the gains block reloads them",
+        });
+        setReseed(true);
+        refetch();
+      },
       (e: unknown) => setMessage({ tone: "error", text: `Revert: ${errorText(e)}` }),
     );
   };
@@ -366,11 +447,12 @@ function Workbench({ printer }: { printer: PrinterView }) {
 
   const busyEngine = current !== null || queue.length > 0;
   const recording =
-    current !== null && active !== null && current.session === active.id && RECORDING_STATES.has(current.state);
+    current !== null && shown !== null && current.session === shown.id && RECORDING_STATES.has(current.state);
+  const recordingStepper = shown === null ? undefined : printer.steppers.find((s) => s.name === shown.setup.stepper);
   const pending = (view?.runs ?? []).filter((r) => !TERMINAL_STATES.has(r.state));
   const currentRecord = current === null ? null : (view?.runs.find((r) => r.id === current.run)?.run ?? null);
 
-  const changedSetup = session !== null && active === null;
+  const changedSetup = link !== null && active === null;
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 px-4 py-6">
@@ -439,6 +521,11 @@ function Workbench({ printer }: { printer: PrinterView }) {
                   disabled={busy}
                   onChange={setPattern}
                 />
+                {patternError !== null && (
+                  <p role="alert" className="mt-2 text-sm text-amber-400">
+                    Pattern refused: {patternError}
+                  </p>
+                )}
                 {stepper.proposal.pattern !== null && (
                   <Button className="mt-2 text-xs" disabled={busy} onClick={() => setPattern(stepper.proposal.pattern as Pattern)}>
                     Use the proposed pattern
@@ -536,9 +623,9 @@ function Workbench({ printer }: { printer: PrinterView }) {
         </Card>
       )}
 
-      {recording && stepper !== undefined && current !== null && (
+      {recording && recordingStepper !== undefined && current !== null && (
         <Card label="Live">
-          <LivePanels key={current.run} stepper={stepper} runRegime={currentRecord?.regime ?? null} />
+          <LivePanels key={current.run} stepper={recordingStepper} runRegime={currentRecord?.regime ?? null} />
         </Card>
       )}
 
@@ -589,12 +676,25 @@ export function SessionResults({ view }: { view: SessionView }) {
   }, [checked, series]);
 
   const ladder = view.session?.ladder ?? null;
-  const ladderEntries = entries
-    .filter((e) => e.run !== null && e.run.request.ladder_value !== null)
-    .map((e) => ({
-      value: e.run?.request.ladder_value ?? null,
-      metric: e.run === null ? null : headlineMetric(e.run, type).value,
-    }));
+  const ladderEntries = useMemo(
+    () =>
+      [...entries]
+        .filter(
+          (e) =>
+            e.run !== null && e.run.request.ladder_value !== null && e.state !== "skipped" && e.state !== "aborted",
+        )
+        .sort((a, b) => finishedMs(a) - finishedMs(b))
+        .map((e) => ({
+          value: e.run?.request.ladder_value ?? null,
+          metric: e.run === null ? null : headlineMetric(e.run, type).value,
+          assessable: e.state === "done",
+        })),
+    [entries, type],
+  );
+  const repeats = ladder?.repeats ?? 1;
+  const unassessable = ladderMedians(ladderEntries, repeats)
+    .filter((m) => m.unassessable)
+    .map((m) => m.value);
   const headlineLabel = type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (um)" : "Worst torque sd";
 
   const overlay = useMemo(() => checked.flatMap((id) => {
@@ -653,11 +753,18 @@ export function SessionResults({ view }: { view: SessionView }) {
         <Card label="Ladder">
           <LadderPlot
             entries={ladderEntries}
-            repeats={ladder?.repeats ?? 1}
+            repeats={repeats}
             axisLabel={ladderAxisLabel(ladder?.axis ?? "")}
             metricLabel={headlineLabel}
-            thresholds={type === "probe" && ladder !== null ? { floor: ladder.floor, marginal: ladder.marginal } : null}
+            floor={type === "probe" && ladder !== null ? ladder.floor : null}
+            marginal={type === "probe" && ladder !== null ? ladder.marginal : null}
           />
+          {unassessable.length > 0 && (
+            <p className="mt-2 text-sm text-amber-400">
+              No median for {unassessable.join(", ")}: a repeat did not finish done with a metric, so the value is
+              unassessable.
+            </p>
+          )}
         </Card>
       )}
       <Card label={`Results, ${view.session?.name ?? view.id}`}>
