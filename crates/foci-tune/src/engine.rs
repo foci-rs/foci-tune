@@ -34,7 +34,7 @@ use crate::model::{
     LadderDef, Run, RunId, RunRegime, RunRequest, RunState, Session, SessionId, StepTime,
 };
 use crate::moonraker::{KlippyState, MoonrakerApi, PrinterState};
-use crate::run_analysis::{AnalysisInput, analyze, decode_capture};
+use crate::run_analysis::{AnalysisInput, analyze, decode_capture, stimulus_window};
 use crate::steppers::{BedLimits, Stepper, derive_steppers};
 use crate::stimulus::{RunKind, compose, feedforward_reset_line};
 use crate::store::{Store, build_series};
@@ -1613,16 +1613,15 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 })
                 .collect();
             let mut notes = Vec::new();
-            let metrics = analyze(
-                &AnalysisInput {
-                    kind: &kind,
-                    declared: stepper.channel,
-                    frames: &decoded.frames,
-                    regimes: &regimes,
-                    applied_speeds: &applied,
-                },
-                &mut notes,
-            );
+            let input = AnalysisInput {
+                kind: &kind,
+                declared: stepper.channel,
+                frames: &decoded.frames,
+                regimes: &regimes,
+                applied_speeds: &applied,
+            };
+            let window = stimulus_window(&input);
+            let metrics = analyze(&input, &window, &mut notes);
             let probe_edges = match kind {
                 RunKind::Probe { .. } => Some(
                     metrics
@@ -1639,6 +1638,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 frames: &decoded.frames,
                 baselines: &decoded.baselines,
                 probe_edges,
+                stimulus: &window,
             });
             let regime = regimes.get(&stepper.channel).map(|g| RunRegime {
                 motor_rotation_distance_mm: g.motor_rotation_distance_mm,

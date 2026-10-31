@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use foci_tune::model::VerificationCheck;
+use foci_tune::run_analysis::StimulusWindow;
 use foci_tune::verify_run::{Window, first_failure, verify};
 use foci_tune_analysis::protocol::{ControlState, Critical, Frame, FrameHeader};
 
@@ -101,6 +102,7 @@ fn outcome(
         frames,
         baselines: &base,
         probe_edges: edges,
+        stimulus: &StimulusWindow::Whole,
     });
     (
         v.iter().map(|o| (o.check, o.passed)).collect(),
@@ -124,6 +126,7 @@ fn channel_moved(frames: &[Frame]) -> (bool, String) {
         frames,
         baselines: &base,
         probe_edges: None,
+        stimulus: &StimulusWindow::Whole,
     });
     let check = v
         .into_iter()
@@ -254,5 +257,128 @@ fn probe_runs_need_twenty_edges() {
         !no_probe
             .iter()
             .any(|(c, _)| *c == VerificationCheck::EdgeCount)
+    );
+}
+
+/// Ticks of frame `sequence` in [`header`].
+fn tick(sequence: u32) -> u64 {
+    u64::from(sequence) * 1000
+}
+
+/// An approach that moves channel 1 by `approach_other` units, then strokes over sequences
+/// 100..=200 that move channel 0 by `declared` units and channel 1 by `strokes_other` units.
+fn approach_then_strokes(approach_other: i32, declared: i32, strokes_other: i32) -> Vec<Frame> {
+    let mut frames = vec![
+        control_frame(0, 1, control(5, 0)),
+        control_frame(1, 2, control(9, 0)),
+    ];
+    let mut push = |sequence: u32, step: i32, other: i32| {
+        frames.push(critical(0, sequence, step, step));
+        frames.push(critical(1, sequence + 1, 500, other));
+    };
+    push(10, 5000, 500);
+    push(20, 1000, 500 + approach_other);
+    push(100, 1000, 500 + approach_other);
+    push(150, 1000 + declared, 500 + approach_other + strokes_other);
+    push(200, 1000, 500 + approach_other);
+    frames
+}
+
+fn strokes_window() -> StimulusWindow {
+    StimulusWindow::Strokes {
+        blocks: vec![(tick(100), tick(200) + 1000)],
+    }
+}
+
+fn moved_check(frames: &[Frame], stimulus: &StimulusWindow) -> (bool, String) {
+    let base = baselines();
+    let v = verify(&Window {
+        declared: 0,
+        frames,
+        baselines: &base,
+        probe_edges: None,
+        stimulus,
+    });
+    let check = v
+        .into_iter()
+        .find(|c| c.check == VerificationCheck::ChannelMoved)
+        .unwrap();
+    (check.passed, check.detail)
+}
+
+#[test]
+fn idle_travel_during_the_approach_is_outside_the_stimulus_window() {
+    let frames = approach_then_strokes(450 * Q, 19_988 * Q, 17 * Q);
+
+    let (whole, _) = moved_check(&frames, &StimulusWindow::Whole);
+    let (passed, detail) = moved_check(&frames, &strokes_window());
+
+    assert!(!whole);
+    assert!(passed, "{detail}");
+    assert!(
+        detail.contains(
+            "channel 1 moved 17.0 counts against a limit of 399.8 (declared channel 19988.0), \
+             margin 382.8"
+        ),
+        "{detail}"
+    );
+}
+
+#[test]
+fn idle_travel_during_the_strokes_still_fails() {
+    let frames = approach_then_strokes(0, 19_988 * Q, 400 * Q);
+
+    let (passed, detail) = moved_check(&frames, &strokes_window());
+
+    assert!(!passed);
+    assert_eq!(
+        detail,
+        "channel 1 moved 400.0 counts against a limit of 399.8 (declared channel 19988.0)"
+    );
+}
+
+#[test]
+fn the_declared_channel_must_move_inside_the_stimulus_window() {
+    let frames = approach_then_strokes(0, Q, 0);
+
+    let (passed, detail) = moved_check(&frames, &strokes_window());
+
+    assert!(!passed);
+    assert_eq!(detail, "channel 0 did not move");
+}
+
+#[test]
+fn unmatched_speed_blocks_are_the_not_comparable_reason() {
+    let frames = approach_then_strokes(0, 19_988 * Q, 0);
+    let base = baselines();
+
+    let v = verify(&Window {
+        declared: 0,
+        frames: &frames,
+        baselines: &base,
+        probe_edges: None,
+        stimulus: &StimulusWindow::Unmatched("found 4 motion blocks for 2 speeds".to_owned()),
+    });
+
+    assert_eq!(
+        first_failure(&v),
+        Some("found 4 motion blocks for 2 speeds")
+    );
+}
+
+#[test]
+fn rests_measure_the_idle_channel_after_the_approach_only() {
+    let frames = approach_then_strokes(360 * Q, 0, 3 * Q);
+    let rests = StimulusWindow::Rests {
+        from: tick(100),
+        to: tick(200) + 1000,
+    };
+
+    let (passed, detail) = moved_check(&frames, &rests);
+
+    assert!(passed, "{detail}");
+    assert!(
+        detail.contains("channel 1 moved 3.0 counts against a limit of 16.0"),
+        "{detail}"
     );
 }

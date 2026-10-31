@@ -8,6 +8,7 @@ use foci_tune_analysis::protocol::{
 use foci_tune_analysis::units::POSITION_UNITS_PER_REV;
 
 use crate::model::{Verification, VerificationCheck};
+use crate::run_analysis::StimulusWindow;
 
 /// `applied_request` of a velocity feedforward write, the only write a stimulus makes.
 pub const FEEDFORWARD_REQUEST: u8 = 7;
@@ -30,6 +31,8 @@ pub struct Window<'a> {
     pub baselines: &'a HashMap<u8, ControlState>,
     /// Located edges for a probe run, `None` for other run types.
     pub probe_edges: Option<usize>,
+    /// Where the stimulus runs; channel travel is measured over it.
+    pub stimulus: &'a StimulusWindow,
 }
 
 fn header(frame: &Frame) -> &FrameHeader {
@@ -75,21 +78,45 @@ impl Span {
     }
 }
 
-fn channel_moved(w: &Window<'_>) -> Verification {
+/// Step and actual-position spans per channel over the frames within `ticks`, all when `None`.
+fn travel(frames: &[Frame], ticks: Option<(u64, u64)>) -> BTreeMap<u8, (Span, Span)> {
     let mut ranges: BTreeMap<u8, (Span, Span)> = BTreeMap::new();
-    for frame in w.frames {
-        if let Frame::Critical(h, c) = frame {
-            let (step, tmc) = ranges
-                .entry(h.source_index)
-                .or_insert((Span::new(c.step_position), Span::new(c.tmc_position_actual)));
-            step.add(c.step_position);
-            tmc.add(c.tmc_position_actual);
+    for frame in frames {
+        let Frame::Critical(h, c) = frame else {
+            continue;
+        };
+        if ticks.is_some_and(|(from, to)| !(from..=to).contains(&h.timestamp_ticks)) {
+            continue;
         }
+        let (step, tmc) = ranges
+            .entry(h.source_index)
+            .or_insert((Span::new(c.step_position), Span::new(c.tmc_position_actual)));
+        step.add(c.step_position);
+        tmc.add(c.tmc_position_actual);
     }
+    ranges
+}
+
+/// Travel is measured over the stimulus window. A standstill's rests move the declared channel
+/// by less than an encoder count by design, so its "moved" rule keeps the whole window.
+fn channel_moved(w: &Window<'_>) -> Verification {
+    if let StimulusWindow::Unmatched(reason) = w.stimulus {
+        return outcome(
+            VerificationCheck::ChannelMoved,
+            Some(reason.clone()),
+            String::new(),
+        );
+    }
+    let ranges = travel(w.frames, w.stimulus.ticks());
+    let moved = match w.stimulus {
+        StimulusWindow::Rests { .. } => travel(w.frames, None),
+        StimulusWindow::Whole | StimulusWindow::Strokes { .. } | StimulusWindow::Unmatched(_) => {
+            ranges.clone()
+        }
+    };
     let declared_q = quantum(w, w.declared);
-    let (declared_range, declared_travel) = ranges
-        .get(&w.declared)
-        .map_or((0.0, 0.0), |(step, tmc)| (step.range(), tmc.range()));
+    let declared_range = moved.get(&w.declared).map_or(0.0, |(step, _)| step.range());
+    let declared_travel = ranges.get(&w.declared).map_or(0.0, |(_, tmc)| tmc.range());
     if declared_range <= declared_q {
         return outcome(
             VerificationCheck::ChannelMoved,
