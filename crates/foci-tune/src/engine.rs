@@ -125,6 +125,13 @@ pub enum Precondition {
     KillPressed,
 }
 
+/// Most values a ladder may list.
+pub const MAX_LADDER_VALUES: usize = 20;
+/// Most repeats per ladder value.
+pub const MAX_LADDER_REPEATS: usize = 10;
+/// Most runs one ladder may queue, values times repeats.
+pub const MAX_LADDER_RUNS: usize = 60;
+
 /// Why a ladder was not queued; nothing is queued in any of these cases.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum LadderRejected {
@@ -137,6 +144,22 @@ pub enum LadderRejected {
     /// No values or no repeats.
     #[error("a ladder needs at least one value and one repeat")]
     Empty,
+    /// The value list or the repeat count exceeds its ceiling.
+    #[error("{parameter} must be at most {max}")]
+    TooLarge {
+        /// `values` or `repeats`.
+        parameter: &'static str,
+        /// The ceiling.
+        max: usize,
+    },
+    /// Values times repeats exceeds [`MAX_LADDER_RUNS`].
+    #[error("a ladder queues at most {max} runs; this one would queue {runs}")]
+    TooManyRuns {
+        /// Runs the ladder would queue.
+        runs: usize,
+        /// The ceiling.
+        max: usize,
+    },
     /// No control-state frame for the channel yet, so its PWM frequency is unknown.
     #[error("no control-state frame for the channel yet")]
     NoControlState,
@@ -545,6 +568,25 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         let axis = parse_axis(&req.ladder.axis)?;
         if req.ladder.values.is_empty() || req.ladder.repeats == 0 {
             return Err(LadderRejected::Empty);
+        }
+        let (count, repeats) = (req.ladder.values.len(), req.ladder.repeats as usize);
+        if count > MAX_LADDER_VALUES {
+            return Err(LadderRejected::TooLarge {
+                parameter: "values",
+                max: MAX_LADDER_VALUES,
+            });
+        }
+        if repeats > MAX_LADDER_REPEATS {
+            return Err(LadderRejected::TooLarge {
+                parameter: "repeats",
+                max: MAX_LADDER_REPEATS,
+            });
+        }
+        if count * repeats > MAX_LADDER_RUNS {
+            return Err(LadderRejected::TooManyRuns {
+                runs: count * repeats,
+                max: MAX_LADDER_RUNS,
+            });
         }
         let (resolved, session, generation) = s.admit(&req.run).await?;
         let pwm_hz = lock(&s.live)

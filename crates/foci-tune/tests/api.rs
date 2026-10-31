@@ -916,3 +916,37 @@ async fn a_hung_settings_query_does_not_delay_run_events() {
     gate.notify_one();
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oversized_requests_are_400_naming_the_parameter() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let mut strokes = tracking_body();
+    strokes["parameters"]["strokes"] = json!(1_000_000_000u64);
+    let mut speeds = tracking_body();
+    speeds["parameters"]["speeds_mm_s"] = json!(vec![50.0; 11]);
+    let values: Vec<f64> = (0..30).map(|k| 800.0 + f64::from(k)).collect();
+
+    let strokes = post(&app, "/api/runs", strokes).await;
+    let speeds = post(&app, "/api/runs", speeds).await;
+    let ladder = post(
+        &app,
+        "/api/ladders",
+        ladder_body(tracking_body(), "velocity_p", &values),
+    )
+    .await;
+
+    assert_eq!(strokes.status, StatusCode::BAD_REQUEST);
+    assert_eq!(strokes.json()["field"], "parameters.strokes");
+    assert!(
+        strokes.error().contains("at most 50"),
+        "{}",
+        strokes.error()
+    );
+    assert_eq!(speeds.status, StatusCode::BAD_REQUEST);
+    assert_eq!(speeds.json()["field"], "parameters.speeds_mm_s");
+    assert_eq!(ladder.status, StatusCode::BAD_REQUEST);
+    assert_eq!(ladder.json()["field"], "values");
+    assert!(rig.scripts().is_empty());
+    assert_eq!(rig.store.scan().unwrap().len(), 1);
+}

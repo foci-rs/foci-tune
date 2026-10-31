@@ -1,6 +1,8 @@
 use foci_tune::pattern::{Pattern, PatternError};
 use foci_tune::steppers::BedLimits;
-use foci_tune::stimulus::{REST_OFFSETS_MM, RunKind, Stimulus, StimulusError, compose};
+use foci_tune::stimulus::{
+    MAX_SPEEDS, MAX_STROKES, REST_OFFSETS_MM, RunKind, Stimulus, StimulusError, compose,
+};
 
 const FF: &str = "FOCI_SET_VELOCITY_FEEDFORWARD STEPPER=stepper_x ENABLE=1 GAIN=";
 
@@ -339,4 +341,42 @@ fn zero_length_pattern_is_refused_for_every_run_kind() {
             "{kind:?}"
         );
     }
+}
+
+#[test]
+fn request_sizes_are_bounded_before_the_script_is_built() {
+    let compose_x = |kind: &RunKind| compose(kind, &diag(), "stepper_x", "corexy", &bed(), 500.0);
+    let at_limit = tracking(&[50.0; MAX_SPEEDS], MAX_STROKES);
+
+    let strokes = compose_x(&tracking(&[50.0], 1_000_000_000));
+    let speeds = compose_x(&tracking(&[50.0; MAX_SPEEDS + 1], 1));
+    let probe_strokes = compose_x(&RunKind::Probe {
+        speed_mm_s: 195.0,
+        high_gain: 1.3,
+        segments_between_toggles: 3,
+        strokes: MAX_STROKES + 1,
+    });
+
+    assert!(compose_x(&at_limit).is_ok());
+    assert_eq!(
+        strokes,
+        Err(StimulusError::TooLarge {
+            parameter: "strokes",
+            max: MAX_STROKES
+        })
+    );
+    assert_eq!(
+        speeds,
+        Err(StimulusError::TooLarge {
+            parameter: "speeds_mm_s",
+            max: MAX_SPEEDS
+        })
+    );
+    assert!(matches!(
+        probe_strokes,
+        Err(StimulusError::TooLarge {
+            parameter: "strokes",
+            ..
+        })
+    ));
 }

@@ -164,9 +164,10 @@ impl From<LadderRejected> for ApiError {
         match e {
             LadderRejected::Precondition(p) => p.into(),
             LadderRejected::UnknownAxis(_) => Self::bad_field("axis", e.to_string()),
-            LadderRejected::Empty | LadderRejected::OutOfRange(_) => {
-                Self::bad_field("values", e.to_string())
-            }
+            LadderRejected::Empty
+            | LadderRejected::OutOfRange(_)
+            | LadderRejected::TooManyRuns { .. } => Self::bad_field("values", e.to_string()),
+            LadderRejected::TooLarge { parameter, .. } => Self::bad_field(parameter, e.to_string()),
             LadderRejected::NoControlState => Self::new(StatusCode::CONFLICT, e.to_string()),
         }
     }
@@ -617,6 +618,9 @@ fn stimulus_error(e: StimulusError) -> ApiError {
             ApiError::bad_field("pattern", p.to_string())
         }
         e @ StimulusError::InvalidParameter(_) => ApiError::bad_field("parameters", e.to_string()),
+        e @ StimulusError::TooLarge { parameter, .. } => {
+            ApiError::bad_field(&format!("parameters.{parameter}"), e.to_string())
+        }
     }
 }
 

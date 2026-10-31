@@ -8,6 +8,11 @@ use crate::steppers::BedLimits;
 /// Rest offsets from the pattern start, in mm of stepper travel along the isolating direction.
 pub const REST_OFFSETS_MM: [f64; 8] = [0.0, 0.007, 0.013, 0.021, 0.034, 0.055, 0.089, 0.144];
 
+/// Most strokes a tracking (per speed) or probe run may ask for.
+pub const MAX_STROKES: usize = 50;
+/// Most speeds a tracking run may ask for.
+pub const MAX_SPEEDS: usize = 10;
+
 const SEGMENT_MM: f64 = 5.0;
 const APPROACH_FEED: u32 = 3000;
 const MAX_DWELL_S: f64 = 60.0;
@@ -63,11 +68,27 @@ pub enum StimulusError {
     /// A run parameter is non-finite or out of range.
     #[error("invalid run parameter: {0}")]
     InvalidParameter(&'static str),
+    /// A size parameter exceeds its ceiling.
+    #[error("{parameter} must be at most {max}")]
+    TooLarge {
+        /// Parameter name as in [`RunKind`].
+        parameter: &'static str,
+        /// The ceiling.
+        max: usize,
+    },
 }
 
 fn num(v: f64) -> String {
     let s = format!("{v:.5}");
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+fn at_most(value: usize, max: usize, parameter: &'static str) -> Result<(), StimulusError> {
+    if value > max {
+        Err(StimulusError::TooLarge { parameter, max })
+    } else {
+        Ok(())
+    }
 }
 
 fn feed(stepper_speed_mm_s: f64, ratio: f64) -> String {
@@ -202,6 +223,8 @@ pub fn compose(
                     "strokes must be at least 1",
                 ));
             }
+            at_most(speeds_mm_s.len(), MAX_SPEEDS, "speeds_mm_s")?;
+            at_most(*strokes, MAX_STROKES, "strokes")?;
             for &v in speeds_mm_s {
                 applied.push(clamp_speed(v, max_velocity, ratio, &mut clamped)?);
             }
@@ -234,6 +257,7 @@ pub fn compose(
                     "strokes must be at least 1",
                 ));
             }
+            at_most(*strokes, MAX_STROKES, "strokes")?;
             let speed = clamp_speed(*speed_mm_s, max_velocity, ratio, &mut clamped)?;
             applied.push(speed);
             let f = feed(speed, ratio);

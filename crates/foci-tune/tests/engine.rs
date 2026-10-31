@@ -4,7 +4,10 @@ mod rig;
 use std::f64::consts::TAU;
 use std::time::{Duration, Instant};
 
-use foci_tune::engine::{Engine, EngineConfig, LadderRejected, Precondition};
+use foci_tune::engine::{
+    Engine, EngineConfig, LadderRejected, MAX_LADDER_REPEATS, MAX_LADDER_RUNS, MAX_LADDER_VALUES,
+    Precondition,
+};
 use foci_tune::model::{RunId, RunState};
 use foci_tune::moonraker::{KlippyState, MoonrakerApi};
 use foci_tune::stimulus::RunKind;
@@ -1089,4 +1092,52 @@ async fn the_stepper_table_is_read_once_and_again_after_klipper_reports_ready() 
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oversized_ladders_are_rejected_before_anything_is_queued() {
+    let rig = rig().await;
+    let values = |n: usize| -> Vec<f64> { (0..n).map(|k| 800.0 + k as f64).collect() };
+
+    let too_many = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &values(MAX_LADDER_VALUES + 1), 1))
+        .await;
+    let too_often = rig
+        .engine
+        .submit_ladder(rig.ladder(
+            tracking(),
+            "velocity_p",
+            &values(1),
+            MAX_LADDER_REPEATS as u32 + 1,
+        ))
+        .await;
+    let too_long = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &values(MAX_LADDER_VALUES), 4))
+        .await;
+
+    assert_eq!(
+        too_many,
+        Err(LadderRejected::TooLarge {
+            parameter: "values",
+            max: MAX_LADDER_VALUES
+        })
+    );
+    assert_eq!(
+        too_often,
+        Err(LadderRejected::TooLarge {
+            parameter: "repeats",
+            max: MAX_LADDER_REPEATS
+        })
+    );
+    assert_eq!(
+        too_long,
+        Err(LadderRejected::TooManyRuns {
+            runs: MAX_LADDER_VALUES * 4,
+            max: MAX_LADDER_RUNS
+        })
+    );
+    assert!(rig.engine.is_idle());
+    assert!(rig.store.scan().unwrap()[0].runs.is_empty());
 }
