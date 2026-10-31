@@ -116,6 +116,8 @@ struct Sim {
     profile: Profile,
     zeta_by_position_p: HashMap<i32, f64>,
     edges_by_position_p: HashMap<i32, usize>,
+    profile_by_velocity_p: HashMap<i32, Profile>,
+    unconfirmed_velocity_p: Vec<i32>,
 }
 
 impl Default for Sim {
@@ -138,6 +140,8 @@ impl Default for Sim {
             profile: Profile::default(),
             zeta_by_position_p: HashMap::new(),
             edges_by_position_p: HashMap::new(),
+            profile_by_velocity_p: HashMap::new(),
+            unconfirmed_velocity_p: Vec::new(),
         }
     }
 }
@@ -334,6 +338,15 @@ impl Board {
         out
     }
 
+    /// One critical frame: the board's protocol is known, its trace mode is not.
+    fn poke(&self) {
+        let mut sim = self.sim.lock().unwrap();
+        let (seq, ticks) = Self::next(&mut sim);
+        let frame = frame_bytes(25, 1, 0, (1, 0), seq, ticks, &critical_payload(0, 0, 0));
+        drop(sim);
+        self.emit(vec![frame]);
+    }
+
     fn announce(&self, critical_hz: u32) {
         let frames = self.mode_frames(critical_hz, true);
         self.emit(frames);
@@ -355,7 +368,8 @@ impl Board {
         let ch = usize::from(channel);
         if script.starts_with("FOCI_SET_GAINS") {
             let mut sim = self.sim.lock().unwrap();
-            if sim.confirm_gains {
+            let velocity_p = (float(script, "VELOCITY_P") * 256.0).round() as i32;
+            if sim.confirm_gains && !sim.unconfirmed_velocity_p.contains(&velocity_p) {
                 let c = &mut sim.channels[ch];
                 c.change_sequence += 1;
                 c.gains = [
@@ -423,7 +437,12 @@ impl Board {
 
     fn stimulus(&self, declared: u8, probe: bool) -> Vec<Vec<u8>> {
         let mut sim = self.sim.lock().unwrap();
-        let profile = sim.profile.clone();
+        let velocity_p = sim.channels[usize::from(declared)].gains[0];
+        let profile = sim
+            .profile_by_velocity_p
+            .get(&velocity_p)
+            .unwrap_or(&sim.profile)
+            .clone();
         let other = 1 - declared;
         let position_p = sim.channels[usize::from(declared)].gains[2];
         let mut samples: Vec<(i32, i32, i32)> = Vec::new();
@@ -964,6 +983,17 @@ async fn a_board_on_another_protocol_is_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_board_without_frames_is_refused() {
+    let rig = rig_with(Options {
+        initial_hz_a: None,
+        ..Options::default()
+    })
+    .await;
+
+    assert_eq!(refused(&rig).await, Precondition::NoTraceFrames);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn low_disk_is_refused() {
     let rig = rig_with(Options {
         config: EngineConfig {
@@ -1132,7 +1162,8 @@ async fn a_probe_run_with_enough_edges_fits_the_damping() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kill_during_motion_is_killed_once_shutdown_is_reported() {
     let rig = rig().await;
-    rig.fake.script_emergency_stop(None, Duration::ZERO, true);
+    rig.fake
+        .script_emergency_stop(None, Duration::ZERO, Some(Duration::ZERO));
     let _gate = rig.hold_stimulus();
     let mut events = rig.engine.events();
     let ids = rig
@@ -1154,11 +1185,11 @@ async fn kill_during_motion_is_killed_once_shutdown_is_reported() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_failed_emergency_stop_is_kill_unconfirmed_and_stays_so() {
+async fn a_failed_emergency_stop_is_kill_unconfirmed() {
     let rig = rig().await;
     rig.fake
-        .script_emergency_stop(Some(500), Duration::ZERO, false);
-    let gate = rig.hold_stimulus();
+        .script_emergency_stop(Some(500), Duration::ZERO, None);
+    let _gate = rig.hold_stimulus();
     let mut events = rig.engine.events();
     let ids = rig
         .engine
@@ -1168,28 +1199,177 @@ async fn a_failed_emergency_stop_is_kill_unconfirmed_and_stays_so() {
     rig.wait_moving(&mut events, &ids[0]).await;
 
     rig.engine.kill().await;
-    let unconfirmed = rig.finish(&ids[0]).await;
-    rig.fake.refuse_websockets(true);
+
+    assert_eq!(rig.finish(&ids[0]).await.state, RunState::KillUnconfirmed);
+    assert_eq!(rig.run(&ids[1]).state, RunState::Aborted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn losing_the_socket_during_a_delayed_stop_is_kill_unconfirmed() {
+    let rig = rig().await;
+    rig.fake
+        .script_emergency_stop(None, Duration::from_millis(150), None);
+    let _gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+
+    let drop_socket = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        rig.fake.refuse_websockets(true);
+        rig.fake.drop_websockets();
+    };
+    tokio::join!(rig.engine.kill(), drop_socket);
+    let run = rig.finish(&id).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert_eq!(rig.fake.emergency_stops(), 1);
+    assert_eq!(run.state, RunState::KillUnconfirmed);
+    assert_eq!(rig.run(&id).state, RunState::KillUnconfirmed);
+    assert_eq!(
+        rig.engine.submit(rig.request(tracking())).await,
+        Err(Precondition::KillUnconfirmed)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_run_starts_while_a_kill_is_unconfirmed_until_shutdown_is_seen() {
+    let rig = rig().await;
+    rig.fake
+        .script_emergency_stop(Some(500), Duration::ZERO, None);
+    let _gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+    rig.engine.kill().await;
+    rig.finish(&id).await;
+
+    let refused = rig.engine.submit(rig.request(tracking())).await;
+    let ladder = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &[841.0], 1))
+        .await;
+    rig.fake.push("notify_klippy_shutdown", json!([]));
+    let deadline = Instant::now() + WAIT;
+    while rig.run(&id).state != RunState::Killed {
+        assert!(
+            Instant::now() < deadline,
+            "shutdown did not confirm the kill"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    rig.fake.push("notify_klippy_ready", json!([]));
+    let mut state = rig.client.state();
+    state
+        .wait_for(|s| s.klippy == KlippyState::Ready)
+        .await
+        .unwrap();
+    rig.a.sim(|s| s.gate = None);
+    let next = rig.engine.submit(rig.request(tracking())).await;
+
+    assert_eq!(refused, Err(Precondition::KillUnconfirmed));
+    assert_eq!(
+        ladder,
+        Err(LadderRejected::Precondition(Precondition::KillUnconfirmed))
+    );
+    assert!(next.is_ok(), "{next:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_klipper_restart_cycle_clears_an_unconfirmed_kill() {
+    let rig = rig().await;
+    rig.fake
+        .script_emergency_stop(Some(500), Duration::ZERO, None);
+    let _gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+    rig.engine.kill().await;
+    rig.finish(&id).await;
+    assert_eq!(
+        rig.engine.submit(rig.request(tracking())).await,
+        Err(Precondition::KillUnconfirmed)
+    );
+
     rig.fake.drop_websockets();
     let mut state = rig.client.state();
     state
         .wait_for(|s| s.klippy == KlippyState::Disconnected)
         .await
         .unwrap();
-    gate.notify_one();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    state
+        .wait_for(|s| s.klippy == KlippyState::Ready)
+        .await
+        .unwrap();
+    rig.a.sim(|s| s.gate = None);
+    let deadline = Instant::now() + WAIT;
+    let next = loop {
+        match rig.engine.submit(rig.request(tracking())).await {
+            Err(Precondition::KillUnconfirmed) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            other => break other,
+        }
+    };
 
-    assert_eq!(unconfirmed.state, RunState::KillUnconfirmed);
-    assert_eq!(rig.run(&ids[0]).state, RunState::KillUnconfirmed);
-    assert_eq!(rig.run(&ids[1]).state, RunState::Aborted);
+    assert!(next.is_ok(), "{next:?}");
+    assert_eq!(rig.run(&id).state, RunState::KillUnconfirmed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kill_while_a_submit_is_checking_keeps_the_queue_empty() {
+    let rig = rig().await;
+    rig.fake.delay_settings(Duration::from_millis(200));
+    rig.fake
+        .script_emergency_stop(None, Duration::ZERO, Some(Duration::ZERO));
+
+    let kill = async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        rig.engine.kill().await;
+    };
+    let (submitted, ()) = tokio::join!(rig.engine.submit(rig.request(tracking())), kill);
+
+    assert_eq!(submitted, Err(Precondition::KillPressed));
+    assert!(rig.store.scan().unwrap()[0].runs.is_empty());
     assert!(rig.engine.is_idle());
+    assert_eq!(rig.stimuli(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stop_request_and_the_shutdown_report_share_one_deadline() {
+    let rig = rig().await;
+    rig.fake.script_emergency_stop(
+        None,
+        Duration::from_millis(200),
+        Some(Duration::from_millis(200)),
+    );
+    let _gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+
+    let started = Instant::now();
+    rig.engine.kill().await;
+    let elapsed = started.elapsed();
+    let at_return = rig.run(&id).state;
+
+    assert_eq!(at_return, RunState::KillUnconfirmed);
+    assert!(elapsed < Duration::from_millis(380), "{elapsed:?}");
+    let deadline = Instant::now() + WAIT;
+    while rig.run(&id).state != RunState::Killed {
+        assert!(
+            Instant::now() < deadline,
+            "late shutdown did not confirm the kill"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_emergency_stop_that_times_out_is_kill_unconfirmed() {
     let rig = rig().await;
     rig.fake
-        .script_emergency_stop(None, Duration::from_secs(2), true);
+        .script_emergency_stop(None, Duration::from_secs(2), Some(Duration::ZERO));
     let _gate = rig.hold_stimulus();
     let mut events = rig.engine.events();
     let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
@@ -1329,6 +1509,7 @@ async fn a_board_of_unknown_mode_is_left_in_critical_with_a_note() {
         ..Options::default()
     })
     .await;
+    rig.a.poke();
 
     let run = rig.run_once(tracking()).await;
 
@@ -1474,6 +1655,63 @@ async fn the_stop_rule_sees_one_values_repeats_in_an_interleaved_queue() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_not_comparable_run_does_not_stop_a_tracking_ladder() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.profile_by_velocity_p.insert(
+            941,
+            Profile {
+                declared_range: Q,
+                ..Profile::default()
+            },
+        );
+    });
+
+    let ids = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &[841.0, 941.0, 1041.0], 1))
+        .await
+        .unwrap();
+    rig.finish(&ids[2]).await;
+
+    let states: Vec<RunState> = by_value(&rig, &ids).into_iter().map(|r| r.1).collect();
+    assert_eq!(
+        states,
+        vec![
+            RunState::Done,
+            not_comparable("channel 0 did not move"),
+            RunState::Done
+        ]
+    );
+    assert_eq!(rig.stimuli(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_run_stops_the_ladder_and_skips_the_rest() {
+    let rig = rig().await;
+    rig.a.sim(|s| s.unconfirmed_velocity_p.push(941));
+
+    let ids = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &[841.0, 941.0, 1041.0], 1))
+        .await
+        .unwrap();
+    rig.finish(&ids[1]).await;
+
+    let runs = by_value(&rig, &ids);
+    assert_eq!(runs[0].1, RunState::Done);
+    assert_eq!(runs[1].1, failed("gain write unconfirmed"));
+    let RunState::Skipped(reason) = &runs[2].1 else {
+        panic!("{:?}", runs[2]);
+    };
+    assert!(
+        reason.contains("queue stopped") && reason.contains(ids[1].as_str()),
+        "{reason}"
+    );
+    assert_eq!(rig.stimuli(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_typed_value_outside_the_gain_range_rejects_the_ladder() {
     let rig = rig().await;
 
@@ -1545,12 +1783,17 @@ async fn runs_left_in_flight_by_a_crash_are_reconciled_to_failed() {
     crashed.id = RunId::parse("20261030T120000Z-crsh").unwrap();
     crashed.state = RunState::Moving;
     rig.store.write_run(&rig.session, &crashed).unwrap();
+    let mut killing = done.clone();
+    killing.id = RunId::parse("20261030T120001Z-kill").unwrap();
+    killing.state = RunState::Killing;
+    rig.store.write_run(&rig.session, &killing).unwrap();
     done.notes.push("kept".into());
     rig.store.write_run(&rig.session, &done).unwrap();
 
     let restarted = foci_tune::engine::reconcile_interrupted(&rig.store).unwrap();
 
-    assert_eq!(restarted, vec![crashed.id.clone()]);
+    assert_eq!(restarted, vec![crashed.id.clone(), killing.id.clone()]);
     assert_eq!(rig.run(&crashed.id).state, failed("interrupted"));
+    assert_eq!(rig.run(&killing.id).state, RunState::KillUnconfirmed);
     assert_eq!(rig.run(&id), done);
 }

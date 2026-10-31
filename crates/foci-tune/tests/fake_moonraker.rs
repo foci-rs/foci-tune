@@ -44,7 +44,8 @@ struct Inner {
     firmware_restarts: u32,
     estop_status: Option<u16>,
     estop_delay: Duration,
-    estop_shutdown: bool,
+    estop_shutdown: Option<Duration>,
+    settings_delay: Duration,
 }
 
 struct Shared {
@@ -131,6 +132,10 @@ async fn query(
     State(shared): State<Arc<Shared>>,
     Query(params): Query<serde_json::Map<String, Value>>,
 ) -> Response {
+    if params.contains_key("configfile") {
+        let delay = shared.inner.lock().unwrap().settings_delay;
+        tokio::time::sleep(delay).await;
+    }
     http_reply(shared.call("printer.objects.query", &Value::Object(params)))
 }
 
@@ -170,8 +175,12 @@ async fn emergency_stop(State(shared): State<Arc<Shared>>) -> Response {
             .into_response();
     }
     shared.estopped.send_modify(|n| *n += 1);
-    if shutdown {
-        shared.push("notify_klippy_shutdown", json!([]));
+    if let Some(after) = shutdown {
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            shared.push("notify_klippy_shutdown", json!([]));
+        });
     }
     http_reply(Ok(json!("ok")))
 }
@@ -255,7 +264,8 @@ impl FakeMoonraker {
                 firmware_restarts: 0,
                 estop_status: None,
                 estop_delay: Duration::ZERO,
-                estop_shutdown: false,
+                estop_shutdown: None,
+                settings_delay: Duration::ZERO,
             }),
             refuse_ws: AtomicBool::new(false),
             commands,
@@ -312,12 +322,22 @@ impl FakeMoonraker {
     }
 
     /// Makes the emergency stop wait `delay`, then fail with `status` or succeed, and on
-    /// success report Klipper shutdown when `shutdown` is set.
-    pub fn script_emergency_stop(&self, status: Option<u16>, delay: Duration, shutdown: bool) {
+    /// success report Klipper shutdown `shutdown` later when set.
+    pub fn script_emergency_stop(
+        &self,
+        status: Option<u16>,
+        delay: Duration,
+        shutdown: Option<Duration>,
+    ) {
         let mut inner = self.shared.inner.lock().unwrap();
         inner.estop_status = status;
         inner.estop_delay = delay;
         inner.estop_shutdown = shutdown;
+    }
+
+    /// Delays every `configfile.settings` query by `delay`.
+    pub fn delay_settings(&self, delay: Duration) {
+        self.shared.inner.lock().unwrap().settings_delay = delay;
     }
 
     /// Merges `patch` into the subscribed objects without notifying anyone.

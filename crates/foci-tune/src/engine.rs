@@ -110,6 +110,18 @@ pub enum Precondition {
     /// The request names a session that is not in the store.
     #[error("unknown session {0}")]
     UnknownSession(String),
+    /// The trace interface is open but no frame has arrived, so its protocol is unknown.
+    #[error("no trace frame from the stepper's board yet; its protocol version is unknown")]
+    NoTraceFrames,
+    /// An emergency stop was posted and not confirmed.
+    #[error(
+        "the last emergency stop is unconfirmed and motion may continue; confirm the stop or \
+         restart Klipper"
+    )]
+    KillUnconfirmed,
+    /// The kill button was pressed while the request was being checked.
+    #[error("the emergency stop was pressed while the run was being queued")]
+    KillPressed,
 }
 
 /// Why a ladder was not queued; nothing is queued in any of these cases.
@@ -186,6 +198,7 @@ struct Inner {
     current: Option<Queued>,
     ladders: HashMap<u64, LadderTrack>,
     unconfirmed_kill: Option<(SessionId, RunId)>,
+    unconfirmed_saw_down: bool,
     reverting: bool,
 }
 
@@ -370,7 +383,8 @@ fn baselines(first: &HashMap<u8, ControlState>) -> Vec<ChannelBaseline> {
     out
 }
 
-/// Marks runs a crashed process left in a non-terminal state as `Failed("interrupted")`.
+/// Marks runs a crashed process left in a non-terminal state as `Failed("interrupted")`,
+/// except `Killing`, which becomes `KillUnconfirmed`: the stop was posted and never confirmed.
 ///
 /// # Errors
 /// I/O errors from scanning the store or rewriting a run.
@@ -384,7 +398,10 @@ pub fn reconcile_interrupted(store: &Store) -> io::Result<Vec<RunId>> {
             if run.state.is_terminal() {
                 continue;
             }
-            run.state = RunState::Failed("interrupted".to_owned());
+            run.state = match run.state {
+                RunState::Killing => RunState::KillUnconfirmed,
+                _ => RunState::Failed("interrupted".to_owned()),
+            };
             store.write_run(&session.id, &run)?;
             reconciled.push(run.id);
         }
@@ -406,15 +423,17 @@ struct Shared<M> {
     next_ladder: AtomicU64,
 }
 
-/// The run engine. Dropping it stops the worker; a run in flight is abandoned.
+/// The run engine. Dropping it stops its tasks; a run in flight is abandoned.
 pub struct Engine<M> {
     shared: Arc<Shared<M>>,
     worker: JoinHandle<()>,
+    watcher: JoinHandle<()>,
 }
 
 impl<M> Drop for Engine<M> {
     fn drop(&mut self) {
         self.worker.abort();
+        self.watcher.abort();
     }
 }
 
@@ -448,7 +467,12 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             next_ladder: AtomicU64::new(0),
         });
         let worker = tokio::spawn(shared.clone().work());
-        Ok(Self { shared, worker })
+        let watcher = tokio::spawn(shared.clone().watch_klippy());
+        Ok(Self {
+            shared,
+            worker,
+            watcher,
+        })
     }
 
     /// Queues one run after checking every precondition.
@@ -457,10 +481,10 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
     /// The first failing [`Precondition`].
     pub async fn submit(&self, req: RunRequest) -> Result<RunId, Precondition> {
         let s = &self.shared;
-        let (resolved, session) = s.admit(&req).await?;
+        let (resolved, session, generation) = s.admit(&req).await?;
         let run = Shared::<M>::new_run(req, resolved.stepper.channel, &session);
         let id = run.id.clone();
-        s.enqueue(vec![run], None)?;
+        s.enqueue(vec![run], None, generation)?;
         Ok(id)
     }
 
@@ -475,7 +499,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         if req.ladder.values.is_empty() || req.ladder.repeats == 0 {
             return Err(LadderRejected::Empty);
         }
-        let (resolved, session) = s.admit(&req.run).await?;
+        let (resolved, session, generation) = s.admit(&req.run).await?;
         let pwm_hz = lock(&s.live)
             .boards
             .get(&resolved.stepper.serial)
@@ -518,7 +542,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             outcomes: vec![Vec::new(); values.len()],
         };
         let ids = runs.iter().map(|r| r.id.clone()).collect();
-        s.enqueue_ladder(runs, slots, ladder, track)?;
+        s.enqueue(runs, Some((slots, ladder, track)), generation)?;
         Ok(ids)
     }
 
@@ -656,15 +680,24 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         self.publish_queue(inner);
     }
 
-    async fn admit(&self, req: &RunRequest) -> Result<(Resolved, Session), Precondition> {
-        if lock(&self.inner).busy() {
-            return Err(Precondition::Busy);
+    /// Checks a request; also returns the kill generation sampled first, so `enqueue` can
+    /// refuse a request that a kill overtook while it was being checked.
+    async fn admit(&self, req: &RunRequest) -> Result<(Resolved, Session, u64), Precondition> {
+        let generation = *self.kill_requested.borrow();
+        {
+            let inner = lock(&self.inner);
+            if inner.unconfirmed_kill.is_some() {
+                return Err(Precondition::KillUnconfirmed);
+            }
+            if inner.busy() {
+                return Err(Precondition::Busy);
+            }
         }
         let session = self
             .store
             .read_session(&req.session)
             .map_err(|_| Precondition::UnknownSession(req.session.to_string()))?;
-        Ok((self.check_run(&req.stepper).await?, session))
+        Ok((self.check_run(&req.stepper).await?, session, generation))
     }
 
     fn new_run(mut request: RunRequest, channel: u8, session: &Session) -> Run {
@@ -693,12 +726,29 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         }
     }
 
-    fn enqueue(&self, runs: Vec<Run>, slots: Option<Vec<LadderSlot>>) -> Result<(), Precondition> {
+    fn enqueue(
+        &self,
+        runs: Vec<Run>,
+        ladder: Option<(Vec<LadderSlot>, u64, LadderTrack)>,
+        generation: u64,
+    ) -> Result<(), Precondition> {
         let mut inner = lock(&self.inner);
+        if inner.unconfirmed_kill.is_some() {
+            return Err(Precondition::KillUnconfirmed);
+        }
+        if *self.kill_requested.borrow() != generation {
+            return Err(Precondition::KillPressed);
+        }
         if inner.busy() {
             return Err(Precondition::Busy);
         }
-        let slots = slots.unwrap_or_default();
+        let slots = match ladder {
+            Some((slots, id, track)) => {
+                inner.ladders.insert(id, track);
+                slots
+            }
+            None => Vec::new(),
+        };
         for (k, run) in runs.into_iter().enumerate() {
             let q = Queued {
                 session: run.request.session.clone(),
@@ -712,21 +762,6 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         drop(inner);
         self.wake.notify_one();
         Ok(())
-    }
-
-    fn enqueue_ladder(
-        &self,
-        runs: Vec<Run>,
-        slots: Vec<LadderSlot>,
-        ladder: u64,
-        track: LadderTrack,
-    ) -> Result<(), Precondition> {
-        lock(&self.inner).ladders.insert(ladder, track);
-        let queued = self.enqueue(runs, Some(slots));
-        if queued.is_err() {
-            lock(&self.inner).ladders.remove(&ladder);
-        }
-        queued
     }
 
     async fn resolve(&self, stepper: &str) -> Result<Resolved, Precondition> {
@@ -763,10 +798,10 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         if !open.contains(&found.serial) {
             return Err(Precondition::TraceNotOpen);
         }
-        if let Some(Some(version)) = protocol.get(&found.serial)
-            && *version != PROTOCOL_VERSION
-        {
-            return Err(Precondition::ProtocolVersion(*version));
+        match protocol.get(&found.serial) {
+            Some(Some(PROTOCOL_VERSION)) => {}
+            Some(Some(version)) => return Err(Precondition::ProtocolVersion(*version)),
+            Some(None) | None => return Err(Precondition::NoTraceFrames),
         }
         if let Some(reason) = &found.unusable {
             return Err(Precondition::StepperUnusable(reason.clone()));
@@ -801,8 +836,12 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         Ok(resolved)
     }
 
+    /// Sends G-code unless a kill owns the current run; nothing may follow a kill.
     async fn gcode(&self, line: &str) -> Result<(), String> {
         let command = line.split_whitespace().next().unwrap_or_default();
+        if self.kill_engaged() {
+            return Err(format!("{command}: not sent after the emergency stop"));
+        }
         self.moonraker
             .script(line)
             .await
@@ -1027,15 +1066,22 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
 
         self.set_state(RunState::Recording);
         self.set_state(RunState::Moving);
-        ctx.script_sent = true;
-        self.moonraker
-            .script(&stimulus.gcode)
-            .await
-            .map_err(|e| format!("stimulus failed: {e}"))?;
+        self.send_stimulus(&stimulus.gcode, ctx).await?;
         ctx.script_ok = true;
         self.set_state(RunState::Draining);
         tokio::time::sleep(self.config.drain).await;
         Ok(())
+    }
+
+    async fn send_stimulus(&self, gcode: &str, ctx: &mut RunCtx) -> Result<(), String> {
+        if self.kill_engaged() {
+            return Err("stimulus not sent after the emergency stop".to_owned());
+        }
+        ctx.script_sent = true;
+        self.moonraker
+            .script(gcode)
+            .await
+            .map_err(|e| format!("stimulus failed: {e}"))
     }
 
     /// G-code after a run that was not killed: the feedforward gain when a script that
@@ -1281,31 +1327,30 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         if let Some(state) = state {
             self.set_state(state);
         }
-        let finished = loop {
+        let mut unresolvable = false;
+        loop {
             {
                 let mut inner = lock(&self.inner);
                 let killing = inner
                     .current
                     .as_ref()
                     .is_some_and(|c| c.run.state == RunState::Killing);
-                if !killing {
-                    break inner.current.take();
+                if unresolvable || !killing {
+                    if let Some(finished) = inner.current.take() {
+                        self.retire(&mut inner, &finished);
+                        let _ = self
+                            .events
+                            .send(EngineEvent::Finished(Box::new(finished.run)));
+                    }
+                    return;
                 }
             }
-            if resolved_rx.changed().await.is_err() {
-                break lock(&self.inner).current.take();
-            }
-        };
-        let Some(finished) = finished else {
-            return;
-        };
-        let _ = self
-            .events
-            .send(EngineEvent::Finished(Box::new(finished.run.clone())));
-        let mut inner = lock(&self.inner);
-        if finished.run.state == RunState::KillUnconfirmed {
-            inner.unconfirmed_kill = Some((finished.session.clone(), finished.run.id.clone()));
+            unresolvable = resolved_rx.changed().await.is_err();
         }
+    }
+
+    /// The queue rules after a run, applied in the same critical section that took it.
+    fn retire(&self, inner: &mut Inner, finished: &Queued) {
         let mut stop = match &finished.run.state {
             RunState::Failed(_) => Some(format!("queue stopped: run {} failed", finished.run.id)),
             _ => None,
@@ -1330,7 +1375,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             stop = stop.or(reason);
         }
         if let Some(reason) = stop {
-            self.skip_queue(&mut inner, &RunState::Skipped(reason));
+            self.skip_queue(inner, &RunState::Skipped(reason));
         } else if inner.queue.is_empty() {
             inner.ladders.clear();
         }
@@ -1338,7 +1383,8 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
 
     async fn post_stop(&self) -> bool {
         let mut state = self.moonraker.state();
-        match timeout(self.config.kill_timeout, self.moonraker.emergency_stop()).await {
+        let deadline = Instant::now() + self.config.kill_timeout;
+        match timeout_at(deadline, self.moonraker.emergency_stop()).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 tracing::warn!(error = %e, "emergency stop failed");
@@ -1349,8 +1395,8 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 return false;
             }
         }
-        let reported = timeout(
-            self.config.kill_timeout,
+        let reported = timeout_at(
+            deadline,
             state.wait_for(|s| {
                 matches!(s.klippy, KlippyState::Shutdown | KlippyState::Disconnected)
             }),
@@ -1367,42 +1413,291 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                     if !c.run.state.is_terminal() || c.run.state == RunState::KillUnconfirmed =>
                 {
                     self.transition(c, RunState::Killing);
-                    Some(c.run.id.clone())
+                    Some((c.session.clone(), c.run.id.clone()))
                 }
                 _ => None,
             };
             self.abort_queue(&mut inner);
+            self.kill_requested.send_modify(|n| *n += 1);
             target
         };
-        self.kill_requested.send_modify(|n| *n += 1);
         let confirmed = self.post_stop().await;
-        let state = if confirmed {
-            RunState::Killed
-        } else {
-            RunState::KillUnconfirmed
-        };
         {
             let mut inner = lock(&self.inner);
+            let target_id = target.as_ref().map(|(_, id)| id);
             if let Some(c) = inner.current.as_mut()
-                && Some(&c.run.id) == target.as_ref()
+                && Some(&c.run.id) == target_id
             {
+                let state = if confirmed {
+                    RunState::Killed
+                } else {
+                    RunState::KillUnconfirmed
+                };
                 self.transition(c, state);
             }
-            if confirmed && let Some((session, id)) = inner.unconfirmed_kill.take() {
-                match self.store.read_run(&session, &id) {
-                    Ok(run) if run.state == RunState::KillUnconfirmed => {
-                        let mut q = Queued {
-                            session,
-                            run,
-                            ladder: None,
-                        };
-                        self.transition(&mut q, RunState::Killed);
-                    }
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!(run = %id, error = %e, "cannot confirm the kill"),
+            if confirmed {
+                if let Some((session, id)) = inner.unconfirmed_kill.take()
+                    && Some(&id) != target_id
+                {
+                    self.mark_killed(&mut inner, session, &id);
                 }
+            } else if let Some(target) = target {
+                inner.unconfirmed_kill = Some(target);
+                inner.unconfirmed_saw_down = false;
             }
         }
+        let klippy = self.moonraker.state().borrow().klippy;
+        self.observe_klippy(klippy);
         self.kill_resolved.send_modify(|n| *n += 1);
+    }
+
+    /// Upgrades a `KillUnconfirmed` run, current or stored, to `Killed`.
+    fn mark_killed(&self, inner: &mut Inner, session: SessionId, id: &RunId) {
+        if let Some(c) = inner.current.as_mut()
+            && &c.run.id == id
+        {
+            if c.run.state == RunState::KillUnconfirmed {
+                self.transition(c, RunState::Killed);
+            }
+            return;
+        }
+        match self.store.read_run(&session, id) {
+            Ok(run) if run.state == RunState::KillUnconfirmed => {
+                let mut q = Queued {
+                    session,
+                    run,
+                    ladder: None,
+                };
+                self.transition(&mut q, RunState::Killed);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(run = %id, error = %e, "cannot confirm the kill"),
+        }
+    }
+
+    /// Clears an unconfirmed kill once it is safe to run again: Klipper reports shutdown,
+    /// which confirms the stop, or comes back ready after being down, as after a firmware
+    /// restart.
+    fn observe_klippy(&self, klippy: KlippyState) {
+        let mut inner = lock(&self.inner);
+        let Some((session, id)) = inner.unconfirmed_kill.clone() else {
+            return;
+        };
+        match klippy {
+            KlippyState::Shutdown => {
+                inner.unconfirmed_kill = None;
+                self.mark_killed(&mut inner, session, &id);
+            }
+            KlippyState::Ready => {
+                if inner.unconfirmed_saw_down {
+                    inner.unconfirmed_kill = None;
+                }
+            }
+            KlippyState::Startup | KlippyState::Disconnected | KlippyState::Error => {
+                inner.unconfirmed_saw_down = true;
+            }
+        }
+    }
+
+    async fn watch_klippy(self: Arc<Self>) {
+        let mut state = self.moonraker.state();
+        loop {
+            let klippy = state.borrow_and_update().klippy;
+            self.observe_klippy(klippy);
+            if state.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::model::Session;
+    use crate::moonraker;
+    use crate::pattern::Pattern;
+    use crate::steppers::ConfigGains;
+
+    struct Stub {
+        scripts: Mutex<Vec<String>>,
+        state: watch::Sender<PrinterState>,
+        gcode: broadcast::Sender<String>,
+    }
+
+    impl MoonrakerApi for Stub {
+        async fn config_root(&self) -> moonraker::Result<PathBuf> {
+            Ok(PathBuf::new())
+        }
+
+        async fn settings(&self) -> moonraker::Result<Value> {
+            Ok(Value::Null)
+        }
+
+        async fn script(&self, gcode: &str) -> moonraker::Result<()> {
+            lock(&self.scripts).push(gcode.to_owned());
+            Ok(())
+        }
+
+        async fn emergency_stop(&self) -> moonraker::Result<()> {
+            Ok(())
+        }
+
+        async fn firmware_restart(&self) -> moonraker::Result<()> {
+            Ok(())
+        }
+
+        fn state(&self) -> watch::Receiver<PrinterState> {
+            self.state.subscribe()
+        }
+
+        fn gcode_responses(&self) -> broadcast::Receiver<String> {
+            self.gcode.subscribe()
+        }
+    }
+
+    fn request(session: &SessionId) -> RunRequest {
+        RunRequest {
+            session: session.clone(),
+            stepper: "stepper_x".into(),
+            kind: RunKind::Probe {
+                speed_mm_s: 195.0,
+                high_gain: 1.3,
+                segments_between_toggles: 3,
+                strokes: 2,
+            },
+            pattern: Pattern {
+                start: (100.0, 100.0),
+                end: (200.0, 200.0),
+            },
+            gains: Gains {
+                velocity_p: 841,
+                velocity_i: 412,
+                position_p: 141,
+                position_i: 0,
+            },
+            filters: Filters {
+                velocity_hz: 500,
+                torque_hz: 1000,
+                position_hz: 500,
+                flux_hz: 1000,
+            },
+            ladder_value: None,
+        }
+    }
+
+    fn stepper() -> Stepper {
+        Stepper {
+            name: "stepper_x".into(),
+            mcu: "boarda".into(),
+            channel: 0,
+            serial: "2600AAAA".into(),
+            kinematics: "corexy".into(),
+            motor_rotation_distance_mm: 40.0,
+            axis: 'x',
+            position_min: 0.0,
+            position_max: 300.0,
+            encoder_ppr: 1000,
+            electrical_model_present: true,
+            config_gains: ConfigGains::default(),
+            unusable: None,
+        }
+    }
+
+    /// A `Shared` whose current run is in `state`, plus its stub and data directory.
+    fn shared_with_run(state: RunState) -> (Shared<Stub>, Arc<Stub>, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Store::open(dir.path().to_owned()).unwrap();
+        let req = request(&SessionId::parse("s1").unwrap());
+        let session = Session {
+            format_version: FORMAT_VERSION,
+            name: "guard".into(),
+            created_unix_s: 0,
+            stepper: req.stepper.clone(),
+            kind: req.kind.clone(),
+            pattern: req.pattern,
+            gains: req.gains,
+            filters: req.filters,
+            ladder: None,
+        };
+        let mut run = Shared::<Stub>::new_run(req.clone(), 0, &session);
+        run.state = state;
+        let printer = PrinterState {
+            klippy: KlippyState::Ready,
+            homed_axes: "xyz".into(),
+            idle_state: String::new(),
+            print_state: String::new(),
+            max_velocity: 300.0,
+            max_accel: 3000.0,
+        };
+        let stub = Arc::new(Stub {
+            scripts: Mutex::new(Vec::new()),
+            state: watch::channel(printer).0,
+            gcode: broadcast::channel(4).0,
+        });
+        let shared = Shared {
+            moonraker: stub.clone(),
+            live: Arc::default(),
+            frames: broadcast::channel(4).0,
+            store,
+            config: EngineConfig::default(),
+            inner: Mutex::new(Inner {
+                current: Some(Queued {
+                    session: req.session,
+                    run,
+                    ladder: None,
+                }),
+                ..Inner::default()
+            }),
+            wake: Notify::new(),
+            events: broadcast::channel(4).0,
+            kill_requested: watch::channel(0).0,
+            kill_resolved: watch::channel(0).0,
+            next_ladder: AtomicU64::new(0),
+        };
+        (shared, stub, dir)
+    }
+
+    async fn sent_by_every_path(state: RunState) -> Vec<String> {
+        let (shared, stub, _dir) = shared_with_run(state);
+        let req = request(&SessionId::parse("s1").unwrap());
+        let _ = shared.gcode("M400").await;
+        let _ = shared.send_stimulus("G90", &mut RunCtx::default()).await;
+        let ctx = RunCtx {
+            prior_mode: Some(TraceMode::Dormant),
+            critical_sent: true,
+            script_sent: true,
+            ..RunCtx::default()
+        };
+        shared.cleanup(&req, &stepper(), &ctx).await;
+        lock(&stub.scripts).clone()
+    }
+
+    #[tokio::test]
+    async fn no_gcode_follows_a_kill_on_any_path() {
+        for state in [
+            RunState::Killing,
+            RunState::KillUnconfirmed,
+            RunState::Killed,
+        ] {
+            assert_eq!(
+                sent_by_every_path(state.clone()).await,
+                Vec::<String>::new(),
+                "{state:?}"
+            );
+        }
+        assert_eq!(
+            sent_by_every_path(RunState::Moving).await,
+            vec![
+                "M400".to_owned(),
+                "G90".to_owned(),
+                feedforward_reset_line("stepper_x"),
+                "FOCI_TRACE_MODE STEPPER=stepper_x MODE=dormant".to_owned(),
+            ]
+        );
     }
 }
