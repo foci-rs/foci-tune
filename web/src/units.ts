@@ -6,6 +6,10 @@ export function cornerHz(velocityIRaw: number, pwmHz: number): number | null {
   return (velocityIRaw * pwmHz) / (2 * Math.PI * POSITION_UNITS_PER_REV);
 }
 
+export function velocityIRaw(cornerHz: number, pwmHz: number): number {
+  return Math.round((cornerHz * 2 * Math.PI * POSITION_UNITS_PER_REV) / pwmHz);
+}
+
 export function pGain(raw: number): string {
   return (raw / P_GAIN_DIVISOR).toFixed(3);
 }

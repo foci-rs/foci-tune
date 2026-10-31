@@ -108,18 +108,29 @@ export interface PreconditionView {
   failing: string[];
 }
 
-export type RunState =
-  | { state: "queued" | "preparing" | "writing_gains" | "baseline" | "recording" }
-  | { state: "moving" | "draining" | "verifying" | "analyzing" | "done" | "aborted" }
-  | { state: "killing" | "kill_unconfirmed" | "killed" }
-  | { state: "not_comparable" | "failed" | "skipped"; reason: string };
+export type ReasonlessState =
+  | "queued"
+  | "preparing"
+  | "writing_gains"
+  | "baseline"
+  | "recording"
+  | "moving"
+  | "draining"
+  | "verifying"
+  | "analyzing"
+  | "done"
+  | "aborted"
+  | "killing"
+  | "kill_unconfirmed"
+  | "killed";
 
-export interface CurrentRunView {
-  session: SessionId;
-  run: RunId;
-  state: RunState["state"];
-  reason?: string;
-}
+export type ReasonState = "not_comparable" | "failed" | "skipped";
+
+export type RunState = { state: ReasonlessState } | { state: ReasonState; reason: string };
+
+export type RunStateName = RunState["state"];
+
+export type CurrentRunView = { session: SessionId; run: RunId } & RunState;
 
 export interface EngineView {
   current: CurrentRunView | null;
@@ -160,16 +171,9 @@ export interface LadderDef {
 }
 
 export type RunKind =
-  | { Tracking: { speeds_mm_s: number[]; strokes: number } }
-  | {
-      Probe: {
-        speed_mm_s: number;
-        high_gain: number;
-        segments_between_toggles: number;
-        strokes: number;
-      };
-    }
-  | { Standstill: { rests: number; dwell_s: number } };
+  | { Tracking: TrackingParameters }
+  | { Probe: ProbeParameters }
+  | { Standstill: StandstillParameters };
 
 export interface Session {
   format_version: number;
@@ -193,30 +197,198 @@ export interface RunRequest {
   ladder_value: number | null;
 }
 
-export type Run = {
+export interface RunRegime {
+  motor_rotation_distance_mm: number;
+  encoder_counts_per_rev: number;
+  pwm_hz: number;
+  clock_freq: number;
+}
+
+export interface ChannelBaseline {
+  channel: number;
+  control: ControlSnapshot;
+}
+
+export interface StreamInfo {
+  protocol_version: number;
+  firmware_id: string;
+  product: string;
+  serial: string;
+  clock_freq: number;
+  critical_hz: number;
+}
+
+export interface StepTime {
+  step: string;
+  unix_ms: number;
+}
+
+export interface CaptureInfo {
+  frames: number;
+  file_bytes: number;
+}
+
+export type VerificationCheck = "channel_moved" | "baseline_contiguous" | "no_drop_gaps" | "edge_count";
+
+export interface Verification {
+  check: VerificationCheck;
+  passed: boolean;
+  detail: string;
+}
+
+export type FitOutcome =
+  | {
+      status: "fit";
+      damped_hz: number;
+      zeta: number;
+      amplitude: number;
+      phase: number;
+      offset: number;
+      tau_s: number;
+      residual_rms: number;
+    }
+  | { status: "failed"; reason: string };
+
+export interface TrackingRecord {
+  speed_mm_s: number;
+  cruise_mean_abs_um: number | null;
+  sd_um: number | null;
+  p99_um: number | null;
+  reversal_peak_um: number | null;
+  reversal_count: number;
+  moving_samples: number;
+}
+
+export interface ProbeRecord {
+  velocity: FitOutcome;
+  torque: FitOutcome;
+  position_error: FitOutcome;
+  edges: number;
+  stderr_at_peak: number | null;
+  torque_psd_peak_hz: number | null;
+}
+
+export interface RestRecord {
+  index: number;
+  samples: number;
+  torque_sd: number | null;
+  position_pp_um: number | null;
+}
+
+export interface StandstillRecord {
+  rests: RestRecord[];
+  worst_torque_sd: number | null;
+}
+
+export interface ChannelMetrics {
+  channel: number;
+  declared: boolean;
+  tracking: TrackingRecord[];
+  probe: ProbeRecord | null;
+  standstill: StandstillRecord | null;
+}
+
+export interface Metrics {
+  channels: ChannelMetrics[];
+}
+
+export interface RunRecord {
   format_version: number;
   id: RunId;
   request: RunRequest;
   created_unix_s: number;
   declared_channel: number;
-  regime: unknown;
-  baselines: unknown[];
-  stream: unknown;
-  steps: unknown[];
+  regime: RunRegime | null;
+  baselines: ChannelBaseline[];
+  stream: StreamInfo | null;
+  steps: StepTime[];
   clamped_speeds: [number, number][];
   applied_speeds: number[];
-  capture: unknown;
-  verification: unknown[];
-  metrics: unknown;
+  capture: CaptureInfo | null;
+  verification: Verification[];
+  metrics: Metrics | null;
   notes: string[];
-} & ({ state: RunState["state"]; reason?: undefined } | { state: RunState["state"]; reason: string });
-
-export interface RunEntry {
-  id: RunId;
-  state: RunState["state"];
-  reason?: string;
-  run: Run | null;
 }
+
+export type Run = RunRecord & RunState;
+
+export type RunEntry = { id: RunId; run: Run | null } & RunState;
+
+export interface EnsemblePlot {
+  edges: number;
+  mean: (number | null)[];
+  fit: (number | null)[] | null;
+}
+
+export interface ProbePlot {
+  t_s: number[];
+  velocity: EnsemblePlot;
+  torque: EnsemblePlot;
+  position_error: EnsemblePlot;
+}
+
+export interface PsdPlot {
+  freq_hz: number[];
+  power: (number | null)[];
+}
+
+export interface ChannelPlot {
+  channel: number;
+  t_s: (number | null)[];
+  position_error_um: (number | null)[];
+  velocity_mm_s: (number | null)[];
+  torque: (number | null)[];
+  ff_offset: (number | null)[];
+  probe: ProbePlot | null;
+  torque_psd: PsdPlot | null;
+}
+
+export interface Series {
+  format_version: number;
+  decimation: number;
+  channels: ChannelPlot[];
+}
+
+export type LadderAxis = "velocity_p" | "velocity_i_corner_hz" | "position_p";
+
+export interface TrackingParameters {
+  speeds_mm_s: number[];
+  strokes: number;
+}
+
+export interface ProbeParameters {
+  speed_mm_s: number;
+  high_gain: number;
+  segments_between_toggles: number;
+  strokes: number;
+}
+
+export interface StandstillParameters {
+  rests: number;
+  dwell_s: number;
+}
+
+export type RunSetup =
+  | { type: "tracking"; parameters: TrackingParameters }
+  | { type: "probe"; parameters: ProbeParameters }
+  | { type: "standstill"; parameters: StandstillParameters };
+
+export type RunRequestBody = {
+  session: SessionId | null;
+  name?: string;
+  stepper: string;
+  pattern: Pattern;
+  gains: { velocity_p: number; velocity_i: number; position_p: number };
+  filters: Filters;
+} & RunSetup;
+
+export type LadderRequestBody = RunRequestBody & {
+  axis: LadderAxis;
+  values: number[];
+  repeats: number;
+  floor: number;
+  marginal: number;
+};
 
 export interface SessionView {
   id: SessionId;
@@ -251,7 +423,7 @@ export interface LiveBatch {
 
 export type ServerMessage =
   | ({ type: "printer" } & PrinterView)
-  | { type: "run_state"; session: SessionId; run: RunId; state: RunState["state"]; reason?: string }
+  | ({ type: "run_state"; session: SessionId; run: RunId } & RunState)
   | { type: "run_result"; session: SessionId; run: Run }
   | { type: "queue"; runs: RunId[] }
   | ({ type: "live" } & LiveBatch)
@@ -332,6 +504,46 @@ export const getSessions = () => request<SessionView[]>("GET", "/api/sessions");
 
 export const getSession = (id: SessionId) =>
   request<SessionView>("GET", `/api/sessions/${encodeURIComponent(id)}`);
+
+export const postRun = (body: RunRequestBody) =>
+  request<{ session: SessionId; run: RunId }>("POST", "/api/runs", body);
+
+export const postLadder = (body: LadderRequestBody) =>
+  request<{ session: SessionId; runs: RunId[] }>("POST", "/api/ladders", body);
+
+export const postAbort = (run: RunId) =>
+  request<{ run: RunId; aborted: RunId[] }>("POST", `/api/runs/${encodeURIComponent(run)}/abort`);
+
+export const postRevert = (session: SessionId) =>
+  request<{ session: SessionId; reverted: true }>(
+    "POST",
+    `/api/sessions/${encodeURIComponent(session)}/revert`,
+  );
+
+export const getRun = (id: RunId) => request<Run>("GET", `/api/runs/${encodeURIComponent(id)}`);
+
+export const getSeries = (id: RunId) =>
+  request<Series>("GET", `/api/runs/${encodeURIComponent(id)}/series`);
+
+export async function getConfigBlock(id: RunId): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/runs/${encodeURIComponent(id)}/config-block`);
+  } catch (e) {
+    throw new ApiRequestError(0, e instanceof Error ? e.message : "network error");
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    let message = text || response.statusText;
+    try {
+      message = (JSON.parse(text) as { error?: string }).error ?? message;
+    } catch {
+      // A non-JSON error body is shown as it is.
+    }
+    throw new ApiRequestError(response.status, message);
+  }
+  return text;
+}
 
 const MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "printer",
