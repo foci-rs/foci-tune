@@ -6,7 +6,8 @@ fn check_flag_exits_zero_without_network_or_usb() {
         .unwrap()
         .arg("--check")
         .assert()
-        .success();
+        .success()
+        .stdout(predicates::str::contains("index.html"));
 }
 
 #[test]

@@ -2,13 +2,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use foci_tune::assets;
 use foci_tune::verify::{Kind, verify_archive};
-use rust_embed::RustEmbed;
-
-#[derive(RustEmbed)]
-#[folder = "assets/"]
-#[exclude = ".gitkeep"]
-struct Assets;
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -50,8 +45,17 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     if cli.check {
-        let _assets = Assets::iter().count();
-        return ExitCode::SUCCESS;
+        let index = assets::index_html();
+        let ok = assets::check_report(
+            index.as_ref().map(|a| &*a.data),
+            &assets::list(),
+            &mut std::io::stdout().lock(),
+        );
+        return if matches!(ok, Ok(true)) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
 
     match cli.command {

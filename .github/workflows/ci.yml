@@ -18,10 +18,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92
         with:
           components: clippy, rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci && npm test && npm run build
 
   build:
     runs-on: ubuntu-latest
@@ -45,6 +64,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}

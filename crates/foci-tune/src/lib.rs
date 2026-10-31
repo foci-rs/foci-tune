@@ -1,6 +1,7 @@
 //! FOCI tuning service: Moonraker and trace interfaces, the run engine, the store and
 //! archive verification.
 
+pub mod assets;
 pub mod capture;
 pub mod capture_read;
 pub mod engine;
