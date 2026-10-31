@@ -202,7 +202,11 @@ async fn printer_names_the_failing_precondition_per_stepper() {
 
     let x = find(&p["preconditions"], "stepper", "stepper_x");
     assert_eq!(x["ok"], false);
-    assert_eq!(x["reason"], "axis x is not homed");
+    assert_eq!(x["failing"], json!(["axis x is not homed"]));
+    assert_eq!(
+        find(&p["preconditions"], "stepper", "stepper_y")["failing"],
+        json!([])
+    );
     assert_eq!(
         find(&p["preconditions"], "stepper", "stepper_y")["ok"],
         true
@@ -949,4 +953,27 @@ async fn oversized_requests_are_400_naming_the_parameter() {
     assert_eq!(ladder.json()["field"], "values");
     assert!(rig.scripts().is_empty());
     assert_eq!(rig.store.scan().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn printer_names_every_failing_precondition_of_a_stepper() {
+    let rig = rig_with(Options {
+        homed: "y",
+        electrical_model: false,
+        ..Options::default()
+    })
+    .await;
+    let app = app(&rig);
+
+    let p = get(&app, "/api/printer").await.json();
+
+    let x = find(&p["preconditions"], "stepper", "stepper_x");
+    assert_eq!(x["ok"], false);
+    assert_eq!(
+        x["failing"],
+        json!([
+            "axis x is not homed",
+            "the stepper has no identified electrical model"
+        ])
+    );
 }

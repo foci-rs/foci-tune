@@ -327,8 +327,8 @@ pub struct PreconditionView {
     pub stepper: String,
     /// True when every precondition holds.
     pub ok: bool,
-    /// The first failing precondition.
-    pub reason: Option<String>,
+    /// Every failing precondition, in the order a run request would report them.
+    pub failing: Vec<String>,
 }
 
 /// The run in flight.
@@ -662,11 +662,11 @@ impl<M: MoonrakerApi + 'static> Api<M> {
         let limits = BedLimits::from_steppers(&steppers);
         let mut preconditions = Vec::new();
         for s in &steppers {
-            let result = self.engine.check(&s.name).await;
+            let failing = self.engine.preconditions(&s.name).await;
             preconditions.push(PreconditionView {
                 stepper: s.name.clone(),
-                ok: result.is_ok(),
-                reason: result.err().map(|p| p.to_string()),
+                ok: failing.is_empty(),
+                failing: failing.iter().map(ToString::to_string).collect(),
             });
         }
         let steppers = steppers

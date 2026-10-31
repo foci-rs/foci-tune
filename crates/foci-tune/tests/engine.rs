@@ -1141,3 +1141,24 @@ async fn oversized_ladders_are_rejected_before_anything_is_queued() {
     assert!(rig.engine.is_idle());
     assert!(rig.store.scan().unwrap()[0].runs.is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn preconditions_list_every_failing_item_and_check_reports_the_first() {
+    let rig = rig_with(Options {
+        homed: "y",
+        electrical_model: false,
+        ..Options::default()
+    })
+    .await;
+
+    let x = rig.engine.preconditions("stepper_x").await;
+    let y = rig.engine.preconditions("stepper_y").await;
+    let first = rig.engine.check("stepper_x").await;
+
+    assert_eq!(
+        x,
+        vec![Precondition::NotHomed('x'), Precondition::NoElectricalModel]
+    );
+    assert!(y.is_empty(), "{y:?}");
+    assert_eq!(first, Err(Precondition::NotHomed('x')));
+}

@@ -251,6 +251,19 @@ impl Inner {
     fn busy(&self) -> bool {
         self.current.is_some() || !self.queue.is_empty() || self.reverting
     }
+
+    /// The engine-wide preconditions, the same for every stepper: an unconfirmed kill and a
+    /// run or write in flight.
+    fn admission_failures(&self) -> Vec<Precondition> {
+        let mut failing = Vec::new();
+        if self.unconfirmed_kill.is_some() {
+            failing.push(Precondition::KillUnconfirmed);
+        }
+        if self.busy() {
+            failing.push(Precondition::Busy);
+        }
+        failing
+    }
 }
 
 struct Resolved {
@@ -666,16 +679,20 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
     /// # Errors
     /// The first failing [`Precondition`].
     pub async fn check(&self, stepper: &str) -> Result<(), Precondition> {
-        {
-            let inner = lock(&self.shared.inner);
-            if inner.unconfirmed_kill.is_some() {
-                return Err(Precondition::KillUnconfirmed);
-            }
-            if inner.busy() {
-                return Err(Precondition::Busy);
-            }
+        match self.preconditions(stepper).await.into_iter().next() {
+            Some(first) => Err(first),
+            None => Ok(()),
         }
-        self.shared.check_run(stepper).await.map(|_| ())
+    }
+
+    /// Every failing precondition for a run on `stepper`, in the order [`Engine::check`]
+    /// reports them; empty when a run could start now.
+    pub async fn preconditions(&self, stepper: &str) -> Vec<Precondition> {
+        let mut failing = lock(&self.shared.inner).admission_failures();
+        if let Err(run) = self.shared.run_failures(stepper).await {
+            failing.extend(run);
+        }
+        failing
     }
 
     /// Forgets the stepper table, so the next use reads `configfile.settings` again. The
@@ -719,11 +736,8 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             .map_err(|e| format!("session {session}: {e}"))?;
         {
             let mut inner = lock(&s.inner);
-            if inner.unconfirmed_kill.is_some() {
-                return Err(Precondition::KillUnconfirmed.to_string());
-            }
-            if inner.busy() {
-                return Err(Precondition::Busy.to_string());
+            if let Some(first) = inner.admission_failures().into_iter().next() {
+                return Err(first.to_string());
             }
             inner.reverting = true;
         }
@@ -831,14 +845,8 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     /// refuse a request that a kill overtook while it was being checked.
     async fn admit(&self, req: &RunRequest) -> Result<(Resolved, Session, u64), Precondition> {
         let generation = *self.kill_requested.borrow();
-        {
-            let inner = lock(&self.inner);
-            if inner.unconfirmed_kill.is_some() {
-                return Err(Precondition::KillUnconfirmed);
-            }
-            if inner.busy() {
-                return Err(Precondition::Busy);
-            }
+        if let Some(first) = lock(&self.inner).admission_failures().into_iter().next() {
+            return Err(first);
         }
         let session = self
             .store
@@ -880,14 +888,15 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         generation: u64,
     ) -> Result<(), Precondition> {
         let mut inner = lock(&self.inner);
-        if inner.unconfirmed_kill.is_some() {
+        let admission = inner.admission_failures();
+        if admission.contains(&Precondition::KillUnconfirmed) {
             return Err(Precondition::KillUnconfirmed);
         }
         if *self.kill_requested.borrow() != generation {
             return Err(Precondition::KillPressed);
         }
-        if inner.busy() {
-            return Err(Precondition::Busy);
+        if let Some(first) = admission.into_iter().next() {
+            return Err(first);
         }
         let slots = match ladder {
             Some((slots, id, track)) => {
@@ -947,35 +956,20 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             .collect()
     }
 
-    async fn resolve(&self, stepper: &str) -> Result<Resolved, Precondition> {
+    /// The stepper and the table it comes from; fails when Klipper is not ready or the stepper
+    /// is not in the table, after which nothing else about it can be checked.
+    async fn lookup(&self, stepper: &str) -> Result<Resolved, Precondition> {
         let printer = self.moonraker.state().borrow().clone();
         if printer.klippy != KlippyState::Ready {
             return Err(Precondition::KlippyNotReady);
         }
         let settings = self.settings().await?;
-        let open = self.open_serials();
-        let protocol: HashMap<String, Option<u8>> = lock(&self.live)
-            .boards
-            .iter()
-            .map(|(serial, b)| (serial.clone(), b.protocol_version))
-            .collect();
-        let steppers = derive_steppers(&settings, &open);
+        let steppers = derive_steppers(&settings, &self.open_serials());
         let found = steppers
             .iter()
             .find(|s| s.name == stepper)
             .cloned()
             .ok_or_else(|| Precondition::UnknownStepper(stepper.to_owned()))?;
-        if !open.contains(&found.serial) {
-            return Err(Precondition::TraceNotOpen);
-        }
-        match protocol.get(&found.serial) {
-            Some(Some(PROTOCOL_VERSION)) => {}
-            Some(Some(version)) => return Err(Precondition::ProtocolVersion(*version)),
-            Some(None) | None => return Err(Precondition::NoTraceFrames),
-        }
-        if let Some(reason) = &found.unusable {
-            return Err(Precondition::StepperUnusable(reason.clone()));
-        }
         Ok(Resolved {
             printer,
             limits: BedLimits::from_steppers(&steppers),
@@ -984,26 +978,71 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         })
     }
 
-    async fn check_run(&self, stepper: &str) -> Result<Resolved, Precondition> {
-        let printer = self.moonraker.state().borrow().clone();
-        if printer.klippy != KlippyState::Ready {
-            return Err(Precondition::KlippyNotReady);
+    /// Why the stepper's board cannot be used, if it cannot: each reason makes the later ones
+    /// meaningless, so at most one is reported.
+    fn trace_failure(&self, stepper: &Stepper) -> Option<Precondition> {
+        let (open, protocol) = {
+            let live = lock(&self.live);
+            let board = live.boards.get(&stepper.serial);
+            (
+                board.is_some_and(|b| b.open),
+                board.and_then(|b| b.protocol_version),
+            )
+        };
+        if !open {
+            return Some(Precondition::TraceNotOpen);
         }
-        if matches!(printer.print_state.as_str(), "printing" | "paused") {
-            return Err(Precondition::Printing);
+        match protocol {
+            Some(PROTOCOL_VERSION) => {}
+            Some(version) => return Some(Precondition::ProtocolVersion(version)),
+            None => return Some(Precondition::NoTraceFrames),
         }
-        let resolved = self.resolve(stepper).await?;
+        stepper
+            .unusable
+            .as_ref()
+            .map(|reason| Precondition::StepperUnusable(reason.clone()))
+    }
+
+    async fn resolve(&self, stepper: &str) -> Result<Resolved, Precondition> {
+        let resolved = self.lookup(stepper).await?;
+        match self.trace_failure(&resolved.stepper) {
+            Some(p) => Err(p),
+            None => Ok(resolved),
+        }
+    }
+
+    /// Every failing per-stepper precondition, in check order, or the resolved stepper.
+    async fn run_failures(&self, stepper: &str) -> Result<Resolved, Vec<Precondition>> {
+        let resolved = self.lookup(stepper).await.map_err(|p| vec![p])?;
+        let mut failing = Vec::new();
+        if matches!(resolved.printer.print_state.as_str(), "printing" | "paused") {
+            failing.push(Precondition::Printing);
+        }
+        failing.extend(self.trace_failure(&resolved.stepper));
         if !resolved.printer.homed_axes.contains(resolved.stepper.axis) {
-            return Err(Precondition::NotHomed(resolved.stepper.axis));
+            failing.push(Precondition::NotHomed(resolved.stepper.axis));
         }
         if !resolved.stepper.electrical_model_present {
-            return Err(Precondition::NoElectricalModel);
+            failing.push(Precondition::NoElectricalModel);
         }
         let free = self.store.free_bytes().unwrap_or(0);
         if free < self.config.min_free_bytes {
-            return Err(Precondition::LowDisk(free));
+            failing.push(Precondition::LowDisk(free));
         }
-        Ok(resolved)
+        if failing.is_empty() {
+            Ok(resolved)
+        } else {
+            Err(failing)
+        }
+    }
+
+    async fn check_run(&self, stepper: &str) -> Result<Resolved, Precondition> {
+        self.run_failures(stepper).await.map_err(|failing| {
+            failing
+                .into_iter()
+                .next()
+                .expect("run_failures fails only with at least one failure")
+        })
     }
 
     /// Sends G-code unless a kill owns the current run; nothing may follow a kill.
