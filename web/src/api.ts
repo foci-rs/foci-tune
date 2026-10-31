@@ -540,7 +540,6 @@ export async function getConfigBlock(id: RunId): Promise<string> {
     try {
       message = (JSON.parse(text) as { error?: string }).error ?? message;
     } catch {
-      // A non-JSON error body is shown as it is.
     }
     throw new ApiRequestError(response.status, message);
   }

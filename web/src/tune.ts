@@ -544,7 +544,6 @@ export function savePattern(storage: PatternStorage | null, stepper: string, pat
   try {
     storage?.setItem(patternKey(stepper), JSON.stringify(pattern));
   } catch {
-    // Remembering the pattern is a convenience; a refused write changes nothing else.
   }
 }
 
