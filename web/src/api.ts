@@ -272,17 +272,34 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+const KILL_TIMEOUT_MS = 3000;
+
+async function request<T>(
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+): Promise<T> {
   let response: Response;
+  const controller = new AbortController();
+  const timer = timeoutMs === undefined ? null : setTimeout(() => controller.abort(), timeoutMs);
   try {
     response = await fetch(path, {
       method,
       headers: body === undefined ? undefined : { "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
     });
   } catch (e) {
-    throw new ApiRequestError(0, e instanceof Error ? e.message : "network error");
+    if (timer !== null) clearTimeout(timer);
+    const message = controller.signal.aborted
+      ? "request timed out"
+      : e instanceof Error
+        ? e.message
+        : "network error";
+    throw new ApiRequestError(0, message);
   }
+  if (timer !== null) clearTimeout(timer);
   const text = await response.text();
   let parsed: unknown = null;
   try {
@@ -306,7 +323,7 @@ export const getPrinter = () => request<PrinterView>("GET", "/api/printer");
 export const postTraceMode = (board: string, mode: TraceModeCommand) =>
   request<{ board: string; mode: TraceModeCommand }>("POST", "/api/trace-mode", { board, mode });
 
-export const postKill = () => request<KillResponse>("POST", "/api/kill");
+export const postKill = () => request<KillResponse>("POST", "/api/kill", undefined, KILL_TIMEOUT_MS);
 
 export const postFirmwareRestart = () =>
   request<{ ok: true }>("POST", "/api/firmware-restart");
@@ -379,9 +396,10 @@ export function connectEvents(options: EventClientOptions): EventClient {
   let delay = base;
   let closed = false;
   let live = false;
+  let isOpen = false;
 
   const sendMessage = (message: ClientMessage) => {
-    socket?.send(JSON.stringify(message));
+    if (isOpen) socket?.send(JSON.stringify(message));
   };
 
   const open = () => {
@@ -389,6 +407,7 @@ export function connectEvents(options: EventClientOptions): EventClient {
     const current = create(options.url);
     socket = current;
     current.onopen = () => {
+      isOpen = true;
       delay = base;
       options.onStatus?.(true);
       if (live) sendMessage({ subscribe: "live" });
@@ -400,7 +419,10 @@ export function connectEvents(options: EventClientOptions): EventClient {
       options.onMessage(message);
     };
     current.onclose = () => {
-      if (socket === current) socket = null;
+      if (socket === current) {
+        socket = null;
+        isOpen = false;
+      }
       options.onStatus?.(false);
       if (closed) return;
       timer = setTimeout(open, delay);

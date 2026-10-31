@@ -14,6 +14,9 @@ class StubSocket {
   }
   send() {}
   close() {}
+  deliver(obj: unknown) {
+    this.onmessage?.({ data: JSON.stringify(obj) });
+  }
 }
 
 function printerView(over: Partial<PrinterView["moonraker"]> = {}, unconfirmed: string | null = null): PrinterView {
@@ -111,4 +114,33 @@ test("firmware restart appears on shutdown", async () => {
   respond(printerView({ klippy: "shutdown" }));
   await mount();
   expect(await screen.findByRole("button", { name: "Firmware restart" })).toBeInTheDocument();
+});
+
+async function killOnce() {
+  respond(printerView(), () => new Response(JSON.stringify({ run: null, state: "killed" })));
+  await mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Kill" }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Press again to kill" }));
+  });
+  await screen.findByText("Stop confirmed");
+}
+
+test("the confirmed stop clears when klipper returns to ready", async () => {
+  await killOnce();
+  const socket = StubSocket.last!;
+  act(() => socket.deliver({ type: "printer", ...printerView({ klippy: "shutdown" }) }));
+  await screen.findByText("Klipper shutdown");
+  expect(screen.getByText("Stop confirmed")).toBeInTheDocument();
+  act(() => socket.deliver({ type: "printer", ...printerView() }));
+  await screen.findByText("Klipper ready");
+  expect(screen.queryByText("Stop confirmed")).toBeNull();
+});
+
+test("the confirmed stop clears when a new run starts", async () => {
+  await killOnce();
+  act(() =>
+    StubSocket.last!.deliver({ type: "run_state", session: "s", run: "r", state: "preparing" }),
+  );
+  expect(screen.queryByText("Stop confirmed")).toBeNull();
 });

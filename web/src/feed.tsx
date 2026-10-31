@@ -14,10 +14,10 @@ import {
   eventsUrl,
   getPrinter,
   postKill,
-  type EventClient,
   type PrinterView,
   type ServerMessage,
 } from "./api";
+import { createLiveSubscriptions } from "./liveSubscription";
 
 export type KillStatus = "idle" | "killing" | "killed" | "kill_unconfirmed";
 
@@ -49,8 +49,8 @@ export function FeedProvider({ children }: { children: ReactNode }) {
   const [killStatus, setKillStatus] = useState<KillStatus>("idle");
   const [killError, setKillError] = useState<string | null>(null);
   const listeners = useRef(new Set<(message: ServerMessage) => void>());
-  const client = useRef<EventClient | null>(null);
-  const liveUsers = useRef(0);
+  const live = useRef(createLiveSubscriptions());
+  const lastKlippy = useRef<string | undefined>(undefined);
 
   const refetch = useCallback(() => {
     getPrinter().then(
@@ -74,13 +74,16 @@ export function FeedProvider({ children }: { children: ReactNode }) {
           setPrinter(view);
           setLoadError(null);
         }
+        if (message.type === "run_state" && message.state === "preparing") {
+          setKillStatus((s) => (s === "killed" ? "idle" : s));
+        }
         listeners.current.forEach((listener) => listener(message));
       },
     });
-    client.current = events;
+    live.current.attach(events);
     return () => {
+      live.current.attach(null);
       events.close();
-      client.current = null;
     };
   }, [refetch]);
 
@@ -103,16 +106,16 @@ export function FeedProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const subscribeLive = useCallback(() => {
-    liveUsers.current += 1;
-    if (liveUsers.current === 1) client.current?.subscribe("live");
-    return () => {
-      liveUsers.current -= 1;
-      if (liveUsers.current === 0) client.current?.unsubscribe("live");
-    };
-  }, []);
+  const subscribeLive = useCallback(() => live.current.acquire(), []);
 
   const klippy = printer?.moonraker.klippy;
+  useEffect(() => {
+    const previous = lastKlippy.current;
+    lastKlippy.current = klippy;
+    if (klippy === "ready" && previous !== undefined && previous !== "ready") {
+      setKillStatus((s) => (s === "killed" ? "idle" : s));
+    }
+  }, [klippy]);
   const killUnconfirmed =
     printer?.engine.unconfirmed_kill != null ||
     (killStatus === "kill_unconfirmed" && klippy !== "shutdown");

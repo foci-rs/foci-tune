@@ -13,17 +13,21 @@ class FakeSocket implements SocketLike {
   onclose: (() => void) | null = null;
   sent: string[] = [];
   closed = false;
+  readyState = 0;
   constructor(readonly url: string) {
     FakeSocket.all.push(this);
   }
   send(data: string) {
+    if (this.readyState !== 1) throw new Error("InvalidStateError");
     this.sent.push(data);
   }
   close() {
     this.closed = true;
+    this.readyState = 3;
     this.onclose?.();
   }
   open() {
+    this.readyState = 1;
     this.onopen?.();
   }
   deliver(obj: unknown) {
@@ -106,6 +110,39 @@ describe("event client", () => {
     client.subscribe("live");
     expect(FakeSocket.all[0]!.sent).toEqual([JSON.stringify({ subscribe: "live" })]);
     FakeSocket.all[0]!.onclose?.();
+    vi.advanceTimersByTime(500);
+    FakeSocket.all[1]!.open();
+    expect(FakeSocket.all[1]!.sent).toEqual([JSON.stringify({ subscribe: "live" })]);
+  });
+
+  test("subscribing while connecting does not throw and is sent once on open", () => {
+    const { client } = start();
+    const s = FakeSocket.all[0]!;
+    expect(() => client.subscribe("live")).not.toThrow();
+    expect(s.sent).toEqual([]);
+    s.open();
+    expect(s.sent).toEqual([JSON.stringify({ subscribe: "live" })]);
+  });
+
+  test("unsubscribing while disconnected does not throw and is not replayed", () => {
+    const { client } = start();
+    FakeSocket.all[0]!.open();
+    client.subscribe("live");
+    FakeSocket.all[0]!.readyState = 3;
+    FakeSocket.all[0]!.onclose?.();
+    expect(() => client.unsubscribe("live")).not.toThrow();
+    vi.advanceTimersByTime(500);
+    FakeSocket.all[1]!.open();
+    expect(FakeSocket.all[1]!.sent).toEqual([]);
+  });
+
+  test("the subscription is replayed exactly once per reconnect", () => {
+    const { client } = start();
+    FakeSocket.all[0]!.open();
+    client.subscribe("live");
+    FakeSocket.all[0]!.readyState = 3;
+    FakeSocket.all[0]!.onclose?.();
+    client.subscribe("live");
     vi.advanceTimersByTime(500);
     FakeSocket.all[1]!.open();
     expect(FakeSocket.all[1]!.sent).toEqual([JSON.stringify({ subscribe: "live" })]);
