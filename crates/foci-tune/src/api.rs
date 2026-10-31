@@ -997,6 +997,12 @@ async fn create_ladder<M: MoonrakerApi + 'static>(
     body: Result<Json<Value>, JsonRejection>,
 ) -> ApiResult<Json<Value>> {
     let body = json_body(body)?;
+    if body.get("session").is_some() {
+        return Err(ApiError::bad_field(
+            "session",
+            "a ladder always opens its own session; leave session out",
+        ));
+    }
     let input = parse_run(&body)?;
     let ladder = parse_ladder(&body)?;
     let prepared = api.prepare(&input, Some(&ladder)).await?;

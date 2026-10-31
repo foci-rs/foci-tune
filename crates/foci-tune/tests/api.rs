@@ -325,6 +325,30 @@ async fn a_new_session_starts_from_the_live_control_state() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ladder_naming_a_session_is_400_and_a_single_run_may_reuse_it() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let (session, first) = submit(&app, tracking_body()).await;
+    finish(&rig, &app, &first).await;
+    let sessions_before = rig.store.scan().unwrap().len();
+
+    let mut ladder = ladder_body(tracking_body(), "velocity_p", &[841.0, 941.0]);
+    ladder["session"] = json!(session);
+    let refused = post(&app, "/api/ladders", ladder).await;
+    let mut single = tracking_body();
+    single["session"] = json!(session);
+    let (reused, second) = submit(&app, single).await;
+    finish(&rig, &app, &second).await;
+
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert_eq!(refused.json()["field"], "session");
+    assert_eq!(rig.store.scan().unwrap().len(), sessions_before);
+    assert_eq!(reused, session);
+    let s = get(&app, &format!("/api/sessions/{session}")).await.json();
+    assert_eq!(s["runs"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_config_block_renders_the_run_values_with_units() {
     let rig = rig().await;
     let app = app(&rig);
