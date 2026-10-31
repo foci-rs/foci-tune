@@ -18,7 +18,7 @@ pub struct ChannelSeries {
     pub position_error_um: Vec<f64>,
     /// Finite-difference velocity of the actual position in mm/s; element 0 is 0.
     pub velocity_mm_s: Vec<f64>,
-    /// Interim PID-input target torque.
+    /// Torque target at the torque controller input.
     pub torque: Vec<i32>,
     /// Cached velocity feedforward offset.
     pub ff_offset: Vec<i32>,
@@ -50,7 +50,7 @@ pub fn channel_series(frames: &[(FrameHeader, Critical)], regime: &Regime) -> Ch
         s.position_error_um
             .push(regime.position_um(c.position_error));
         s.velocity_mm_s.push(velocity);
-        s.torque.push(c.interim_pidin_target_torque);
+        s.torque.push(i32::from(c.torque_target));
         s.ff_offset.push(c.cached_pid_velocity_offset);
         s.drop_gap
             .push(h.flags & FLAG_DROP_GAP_BEFORE_THIS_FRAME != 0);

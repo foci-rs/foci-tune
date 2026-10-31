@@ -71,8 +71,11 @@ pub struct Critical {
     pub velocity_error: i32,
     /// Sample flag bits.
     pub sample_flags: u8,
-    /// Interim PID-input target torque (signed).
-    pub interim_pidin_target_torque: i32,
+    /// Torque target at the torque controller input, the high half of
+    /// `PID_TORQUE_TARGET_TORQUE_ACTUAL`.
+    pub torque_target: i16,
+    /// Measured torque current, the low half of `PID_TORQUE_TARGET_TORQUE_ACTUAL`.
+    pub torque_actual: i16,
 }
 
 /// Applied control-state payload.
@@ -239,6 +242,7 @@ fn decode_critical(p: &[u8]) -> Result<Critical, DecodeError> {
     if p.len() < CRITICAL_LEN {
         return Err(DecodeError::Truncated);
     }
+    let torque = u32_at(p, 64)?;
     Ok(Critical {
         step_position: i32_at(p, 0)?,
         tmc_position_actual: i32_at(p, 4)?,
@@ -248,7 +252,8 @@ fn decode_critical(p: &[u8]) -> Result<Critical, DecodeError> {
         cached_pid_velocity_offset: i32_at(p, 20)?,
         velocity_error: i32_at(p, 24)?,
         sample_flags: u8_at(p, 29)?,
-        interim_pidin_target_torque: i32_at(p, 60)?,
+        torque_target: (torque >> 16) as u16 as i16,
+        torque_actual: torque as u16 as i16,
     })
 }
 

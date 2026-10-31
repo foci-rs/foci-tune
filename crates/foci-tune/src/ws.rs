@@ -53,7 +53,7 @@ pub struct LiveChannel {
     pub tmc_position: Vec<i32>,
     /// Position error, position units.
     pub position_error: Vec<i32>,
-    /// Interim PID-input target torque, raw.
+    /// Torque target at the torque controller input, raw.
     pub torque: Vec<i32>,
     /// Cached velocity feedforward offset, raw.
     pub ff_offset: Vec<i32>,
@@ -187,7 +187,7 @@ impl LiveFeed {
         ch.step_position.push(c.step_position);
         ch.tmc_position.push(c.tmc_position_actual);
         ch.position_error.push(c.position_error);
-        ch.torque.push(c.interim_pidin_target_torque);
+        ch.torque.push(i32::from(c.torque_target));
         ch.ff_offset.push(c.cached_pid_velocity_offset);
     }
 }

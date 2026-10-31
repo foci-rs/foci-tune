@@ -318,7 +318,8 @@ fn probe_payload(position: i32, error: i32, ff: i32, torque: i32) -> Vec<u8> {
     p[4..8].copy_from_slice(&position.to_le_bytes());
     p[8..12].copy_from_slice(&error.to_le_bytes());
     p[20..24].copy_from_slice(&ff.to_le_bytes());
-    p[60..64].copy_from_slice(&torque.to_le_bytes());
+    let target = u32::from(i16::try_from(torque).unwrap() as u16) << 16;
+    p[64..68].copy_from_slice(&target.to_le_bytes());
     p
 }
 

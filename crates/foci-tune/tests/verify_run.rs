@@ -33,7 +33,8 @@ fn critical(channel: u8, sequence: u32, step: i32, tmc: i32) -> Frame {
             cached_pid_velocity_offset: 0,
             velocity_error: 0,
             sample_flags: 0,
-            interim_pidin_target_torque: 0,
+            torque_target: 0,
+            torque_actual: 0,
         },
     )
 }

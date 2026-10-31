@@ -37,7 +37,8 @@ fn critical(pos: i32) -> Critical {
         cached_pid_velocity_offset: 0,
         velocity_error: 0,
         sample_flags: 0,
-        interim_pidin_target_torque: 0,
+        torque_target: 0,
+        torque_actual: 0,
     }
 }
 
@@ -93,7 +94,8 @@ fn series_maps_fields_and_marks_drop_gaps() {
     let mut c = critical(100);
     c.position_error = 65536;
     c.cached_pid_velocity_offset = -7;
-    c.interim_pidin_target_torque = -300;
+    c.torque_target = -300;
+    c.torque_actual = 999;
     let frames = vec![(header(0, 0, 0), critical(0)), (header(5, 260_000, 1), c)];
     let s = channel_series(&frames, &r);
     assert_eq!(s.drop_gap, vec![false, true]);

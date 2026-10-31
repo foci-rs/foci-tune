@@ -186,7 +186,8 @@ fn critical_payload(s: &Sample) -> Vec<u8> {
     p[4..8].copy_from_slice(&s.tmc.to_le_bytes());
     p[8..12].copy_from_slice(&s.error.to_le_bytes());
     p[20..24].copy_from_slice(&s.ff.to_le_bytes());
-    p[60..64].copy_from_slice(&s.torque.to_le_bytes());
+    let target = s.torque.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16 as u16;
+    p[64..68].copy_from_slice(&(u32::from(target) << 16).to_le_bytes());
     p
 }
 
