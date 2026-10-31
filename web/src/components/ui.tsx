@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export function Card({
@@ -74,5 +74,54 @@ export function EmptyState({ heading }: { heading: string }) {
     <main className="mx-auto max-w-5xl px-4 py-16 text-center">
       <h1 className="text-lg font-medium text-muted-foreground">{heading}</h1>
     </main>
+  );
+}
+
+/**
+ * A numeric input that reports every parseable value and keeps the operator's text while
+ * focused, so a value derived from the input does not rewrite it mid-typing.
+ */
+export function NumberField({
+  label,
+  value,
+  onValue,
+  step,
+  disabled = false,
+  className,
+}: {
+  label: string;
+  value: number;
+  onValue: (v: number) => void;
+  step?: number;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [text, setText] = useState(String(value));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setText(String(value));
+  }, [value]);
+  return (
+    <input
+      type="number"
+      aria-label={label}
+      step={step}
+      value={text}
+      disabled={disabled}
+      onFocus={() => (focused.current = true)}
+      onBlur={() => {
+        focused.current = false;
+        setText(String(value));
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const v = Number(e.target.value);
+        if (e.target.value.trim() !== "" && Number.isFinite(v)) onValue(v);
+      }}
+      className={cn(
+        "w-24 rounded border bg-background px-1.5 py-0.5 font-mono text-sm text-foreground disabled:opacity-50",
+        className,
+      )}
+    />
   );
 }

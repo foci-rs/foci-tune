@@ -1,9 +1,726 @@
 import { createRoute } from "@tanstack/react-router";
-import { EmptyState } from "@/components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ApiRequestError,
+  getConfigBlock,
+  getSeries,
+  getSession,
+  postAbort,
+  postLadder,
+  postRevert,
+  postRun,
+  type ChannelPlot,
+  type Filters,
+  type Pattern,
+  type PrinterView,
+  type RunSetup,
+  type Series,
+  type SessionId,
+  type SessionView,
+  type StepperView,
+} from "@/api";
+import { BedMap } from "@/components/BedMap";
+import { EnsemblePlot } from "@/components/EnsemblePlot";
+import { gainProblems, GainsBlock, ladderAxisLabel, LadderSetup, RunControls } from "@/components/GainsBlock";
+import { LadderPlot } from "@/components/LadderPlot";
+import { LivePanels } from "@/components/LivePanels";
+import { MAX_OVERLAY, PALETTE } from "@/components/PlotPanel";
+import { PsdPlot } from "@/components/PsdPlot";
+import { RestBars } from "@/components/RestBars";
+import { finishedMs, ResultsTable } from "@/components/ResultsTable";
+import { TracePanels, type OverlayRun } from "@/components/TracePanels";
+import { Button, Card, NumberField } from "@/components/ui";
+import { useFeed } from "@/feed";
+import {
+  assignColors,
+  bedLimits,
+  browserStorage,
+  buildLadderRequest,
+  declaredMetrics,
+  DEFAULT_PARAMETERS,
+  defaultLadderValues,
+  headlineMetric,
+  loadPattern,
+  nextSession,
+  parseNumberList,
+  patternInside,
+  RECORDING_STATES,
+  savePattern,
+  stateLabel,
+  TERMINAL_STATES,
+  type LadderInput,
+  type Limits,
+  type OuterGains,
+  type RunBody,
+  type RunType,
+  type Setup,
+} from "@/tune";
 import { Route as rootRoute } from "./__root";
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tune",
-  component: () => <EmptyState heading="No session open" />,
+  component: TunePage,
 });
+
+const RUN_TYPES: { type: RunType; label: string }[] = [
+  { type: "tracking", label: "Tracking" },
+  { type: "probe", label: "Probe" },
+  { type: "standstill", label: "Standstill" },
+];
+
+const DEFAULT_LADDER: LadderInput = {
+  axis: "velocity_p",
+  text: "",
+  repeats: 2,
+  floor: 0.05,
+  marginal: 0.08,
+};
+
+function errorText(e: unknown): string {
+  if (e instanceof ApiRequestError) return e.field === null ? e.message : `${e.field}: ${e.message}`;
+  return e instanceof Error ? e.message : "request failed";
+}
+
+function channelOf(printer: PrinterView, stepper: StepperView | undefined) {
+  if (stepper === undefined) return undefined;
+  return printer.boards.find((b) => b.serial === stepper.serial)?.channels.find((c) => c.channel === stepper.channel);
+}
+
+function fallbackPattern(limits: Limits): Pattern {
+  const cx = (limits.x[0] + limits.x[1]) / 2;
+  const cy = (limits.y[0] + limits.y[1]) / 2;
+  return { start: [cx - 50, cy], end: [cx + 50, cy] };
+}
+
+/** Refetches a session whenever the engine reports on it, dropping out-of-order replies. */
+function useSessionView(id: SessionId | null) {
+  const { listen } = useFeed();
+  const [view, setView] = useState<SessionView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+
+  const refresh = useCallback(() => {
+    if (id === null) return;
+    const mine = ++generation.current;
+    getSession(id).then(
+      (v) => {
+        if (mine !== generation.current) return;
+        setView(v);
+        setError(null);
+      },
+      (e: unknown) => {
+        if (mine === generation.current) setError(errorText(e));
+      },
+    );
+  }, [id]);
+
+  useEffect(() => {
+    setView(null);
+    refresh();
+  }, [refresh]);
+
+  useEffect(
+    () =>
+      listen((m) => {
+        if ((m.type === "run_state" || m.type === "run_result") && m.session === id) refresh();
+        if (m.type === "resync") refresh();
+      }),
+    [listen, id, refresh],
+  );
+
+  return { view: id === null ? null : view, error, refresh };
+}
+
+function ParametersBlock({
+  type,
+  setup,
+  speedsText,
+  disabled,
+  onSpeedsText,
+  onSetup,
+}: {
+  type: RunType;
+  setup: Setup;
+  speedsText: string;
+  disabled: boolean;
+  onSpeedsText: (t: string) => void;
+  onSetup: (s: Setup) => void;
+}) {
+  const field = (label: string, value: number, apply: (v: number) => Setup, step?: number) => (
+    <label className="flex flex-col text-xs text-muted-foreground">
+      {label}
+      <NumberField label={label} value={value} step={step} disabled={disabled} onValue={(v) => onSetup(apply(v))} />
+    </label>
+  );
+  if (setup.type === "tracking" && type === "tracking") {
+    const p = setup.parameters;
+    return (
+      <div className="flex flex-wrap gap-3">
+        <label className="flex flex-col text-xs text-muted-foreground">
+          Speeds (mm/s)
+          <input
+            type="text"
+            aria-label="Speeds (mm/s)"
+            value={speedsText}
+            disabled={disabled}
+            onChange={(e) => onSpeedsText(e.target.value)}
+            className="w-48 rounded border bg-background px-1.5 py-0.5 font-mono text-sm text-foreground"
+          />
+        </label>
+        {field("Strokes per speed", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}
+      </div>
+    );
+  }
+  if (setup.type === "probe") {
+    const p = setup.parameters;
+    return (
+      <div className="flex flex-wrap gap-3">
+        {field("Speed (mm/s)", p.speed_mm_s, (v) => ({ ...setup, parameters: { ...p, speed_mm_s: v } }))}
+        {field("High gain", p.high_gain, (v) => ({ ...setup, parameters: { ...p, high_gain: v } }), 0.05)}
+        {field("Segments between toggles", p.segments_between_toggles, (v) => ({
+          ...setup,
+          parameters: { ...p, segments_between_toggles: v },
+        }))}
+        {field("Strokes", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}
+      </div>
+    );
+  }
+  if (setup.type === "standstill") {
+    const p = setup.parameters;
+    return (
+      <div className="flex flex-wrap gap-3">
+        {field("Rests", p.rests, (v) => ({ ...setup, parameters: { ...p, rests: v } }))}
+        {field("Dwell (s)", p.dwell_s, (v) => ({ ...setup, parameters: { ...p, dwell_s: v } }), 0.5)}
+      </div>
+    );
+  }
+  return null;
+}
+
+function TunePage() {
+  const { printer, loadError } = useFeed();
+  if (printer === null) {
+    return (
+      <main className="mx-auto max-w-6xl px-4 py-6">
+        <h1 className="text-lg font-medium text-muted-foreground">{loadError ?? "Waiting for the printer snapshot"}</h1>
+      </main>
+    );
+  }
+  if (printer.steppers.length === 0) {
+    return (
+      <main className="mx-auto max-w-6xl px-4 py-6">
+        <h1 className="text-lg font-medium text-muted-foreground">
+          {printer.settings_error ?? "No FOCI steppers found"}
+        </h1>
+      </main>
+    );
+  }
+  return <Workbench printer={printer} />;
+}
+
+function Workbench({ printer }: { printer: PrinterView }) {
+  const storage = useMemo(() => browserStorage(), []);
+  const limits = useMemo(() => bedLimits(printer.steppers), [printer.steppers]);
+  const [stepperName, setStepperName] = useState(
+    () => (printer.steppers.find((s) => s.unusable === null) ?? printer.steppers[0]).name,
+  );
+  const stepper = printer.steppers.find((s) => s.name === stepperName);
+  const channel = channelOf(printer, stepper);
+  const pwmHz = channel !== undefined && channel.control.pwm_hz > 0 ? channel.control.pwm_hz : null;
+
+  const [params, setParams] = useState(DEFAULT_PARAMETERS);
+  const [type, setType] = useState<RunType>("probe");
+  const [patterns, setPatterns] = useState<Record<string, Pattern>>({});
+  const [speedsText, setSpeedsText] = useState(DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "));
+
+  const patternFor = (s: StepperView | undefined): Pattern | null => {
+    if (s === undefined || limits === null) return null;
+    const remembered = patterns[s.name] ?? loadPattern(storage, s.name);
+    if (remembered !== null && patternInside(remembered, limits)) return remembered;
+    return s.proposal.pattern ?? fallbackPattern(limits);
+  };
+  const pattern = patternFor(stepper);
+
+  const speeds = parseNumberList(speedsText, "the speed set");
+  const runSetup: RunSetup =
+    type === "tracking"
+      ? { type, parameters: { ...params.tracking, speeds_mm_s: speeds.ok ? speeds.values : [] } }
+      : type === "probe"
+        ? { type, parameters: params.probe }
+        : { type, parameters: params.standstill };
+  const setup: Setup | null =
+    stepper === undefined || pattern === null ? null : { stepper: stepper.name, pattern, ...runSetup };
+
+  const updateSetup = (next: Setup) => setParams((prev) => ({ ...prev, [next.type]: next.parameters }));
+
+  const setPattern = (p: Pattern) => {
+    if (stepper === undefined) return;
+    setPatterns((prev) => ({ ...prev, [stepper.name]: p }));
+    savePattern(storage, stepper.name, p);
+  };
+
+  const [gains, setGains] = useState<OuterGains | null>(null);
+  const [filters, setFilters] = useState<Filters | null>(null);
+  const seededFor = useRef<string | null>(null);
+  const channelKey = stepper === undefined ? null : `${stepper.serial}:${stepper.channel}`;
+  const seed = useCallback(() => {
+    if (channel === undefined) return;
+    const c = channel.control;
+    setGains({ velocity_p: c.velocity_p, velocity_i: c.velocity_i, position_p: c.position_p });
+    setFilters({
+      velocity_hz: c.velocity_filter_hz,
+      torque_hz: c.torque_filter_hz,
+      position_hz: c.position_filter_hz,
+      flux_hz: c.flux_filter_hz,
+    });
+  }, [channel]);
+  useEffect(() => {
+    if (channel !== undefined && seededFor.current !== channelKey) {
+      seededFor.current = channelKey;
+      seed();
+    }
+  }, [channel, channelKey, seed]);
+
+  const [ladderOn, setLadderOn] = useState(false);
+  const [ladder, setLadder] = useState<LadderInput>(DEFAULT_LADDER);
+
+  const [session, setSession] = useState<{ id: SessionId; setup: Setup } | null>(null);
+  const active = session !== null && setup !== null && !nextSession(session.setup, setup) ? session : null;
+  const { view, error: sessionError, refresh } = useSessionView(active?.id ?? null);
+
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+
+  const current = printer.engine.current;
+  const queue = printer.engine.queue;
+  const precondition = printer.preconditions.find((p) => p.stepper === stepperName);
+
+  const blocked: string[] = [];
+  if (precondition !== undefined && !precondition.ok) blocked.push(...precondition.failing);
+  if (stepper?.unusable) blocked.push(stepper.unusable);
+  if (limits === null) blocked.push("bed limits need stepper_x and stepper_y in the config");
+  if (pattern !== null && limits !== null && !patternInside(pattern, limits)) {
+    blocked.push("the pattern lies outside the bed limits minus the 10 mm margin");
+  }
+  if (gains === null || filters === null) blocked.push("no control-state frame for the stepper's channel yet");
+  if (gains !== null && filters !== null) blocked.push(...gainProblems(gains, filters));
+  if (type === "tracking" && !speeds.ok) blocked.push(speeds.error);
+
+  const runBody = (): RunBody | null =>
+    setup === null || gains === null || filters === null
+      ? null
+      : ({
+          session: active?.id ?? null,
+          stepper: setup.stepper,
+          type: setup.type,
+          pattern: setup.pattern,
+          parameters: setup.parameters,
+          gains,
+          filters,
+        } as RunBody);
+
+  const ladderBuilt = (() => {
+    const base = runBody();
+    return ladderOn && base !== null ? buildLadderRequest(base, ladder, pwmHz) : null;
+  })();
+  if (ladderBuilt !== null && !ladderBuilt.ok) blocked.push(ladderBuilt.error);
+  const uniqueBlocked = [...new Set(blocked)];
+
+  const submit = () => {
+    const base = runBody();
+    if (base === null || setup === null) return;
+    setBusy(true);
+    setMessage(null);
+    const started = setup;
+    const done = (id: SessionId, count: number) => {
+      setSession({ id, setup: started });
+      setMessage({ tone: "ok", text: count === 1 ? "Run queued" : `${count} runs queued` });
+      refresh();
+    };
+    const request =
+      ladderBuilt !== null && ladderBuilt.ok
+        ? postLadder(ladderBuilt.body).then((r) => done(r.session, r.runs.length))
+        : postRun(base).then((r) => done(r.session, 1));
+    request
+      .catch((e: unknown) => setMessage({ tone: "error", text: errorText(e) }))
+      .finally(() => setBusy(false));
+  };
+
+  const revert = () => {
+    if (active === null) return;
+    setMessage(null);
+    postRevert(active.id).then(
+      () => setMessage({ tone: "ok", text: "The session's starting gains and filters were written back" }),
+      (e: unknown) => setMessage({ tone: "error", text: `Revert: ${errorText(e)}` }),
+    );
+  };
+
+  const abort = () => {
+    if (current === null) return;
+    postAbort(current.run).then(
+      (r) => setMessage({ tone: "ok", text: `Aborted ${r.aborted.length} queued runs; the current run finishes` }),
+      (e: unknown) => setMessage({ tone: "error", text: `Abort: ${errorText(e)}` }),
+    );
+  };
+
+  const busyEngine = current !== null || queue.length > 0;
+  const recording =
+    current !== null && active !== null && current.session === active.id && RECORDING_STATES.has(current.state);
+  const pending = (view?.runs ?? []).filter((r) => !TERMINAL_STATES.has(r.state));
+  const currentRecord = current === null ? null : (view?.runs.find((r) => r.id === current.run)?.run ?? null);
+
+  const changedSetup = session !== null && active === null;
+
+  return (
+    <main className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+      <h1 className="sr-only">Tune</h1>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card label="Setup">
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-3">
+              <label className="flex flex-col text-xs text-muted-foreground">
+                Stepper
+                <select
+                  value={stepperName}
+                  disabled={busy}
+                  onChange={(e) => setStepperName(e.target.value)}
+                  className="rounded border bg-background px-1.5 py-1 text-sm text-foreground"
+                >
+                  {printer.steppers.map((s) => (
+                    <option key={s.name} value={s.name}>
+                      {s.name}
+                      {s.unusable !== null ? " (unusable)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div role="radiogroup" aria-label="Run type" className="flex items-end gap-1">
+                {RUN_TYPES.map((t) => (
+                  <button
+                    key={t.type}
+                    type="button"
+                    role="radio"
+                    aria-checked={type === t.type}
+                    disabled={busy}
+                    onClick={() => setType(t.type)}
+                    className={
+                      type === t.type
+                        ? "rounded-full border border-emerald-500 px-3 py-1 text-sm text-emerald-300"
+                        : "rounded-full border px-3 py-1 text-sm text-muted-foreground"
+                    }
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {setup !== null && (
+              <ParametersBlock
+                type={type}
+                setup={setup}
+                speedsText={speedsText}
+                disabled={busy}
+                onSpeedsText={setSpeedsText}
+                onSetup={updateSetup}
+              />
+            )}
+            {stepper?.proposal.refusal != null && (
+              <p className="text-xs text-amber-400">
+                No proposed pattern: {stepper.proposal.refusal}. The pattern is yours to choose.
+              </p>
+            )}
+            {limits !== null && pattern !== null && stepper !== undefined && (
+              <div>
+                <BedMap
+                  limits={limits}
+                  pattern={pattern}
+                  proposal={stepper.proposal.pattern}
+                  disabled={busy}
+                  onChange={setPattern}
+                />
+                {stepper.proposal.pattern !== null && (
+                  <Button className="mt-2 text-xs" disabled={busy} onClick={() => setPattern(stepper.proposal.pattern as Pattern)}>
+                    Use the proposed pattern
+                  </Button>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {active !== null
+                ? `Session ${active.id}. Changing the setup starts a new session.`
+                : changedSetup
+                  ? "The setup differs from the last session; the next run starts a new session."
+                  : "The first run starts a new session."}
+            </p>
+          </div>
+        </Card>
+
+        <Card label="Gains">
+          {gains === null || filters === null ? (
+            <p className="text-sm text-muted-foreground">Waiting for a control-state frame from the channel.</p>
+          ) : (
+            <div className="space-y-4">
+              <GainsBlock
+                gains={gains}
+                filters={filters}
+                positionI={
+                  view?.session != null
+                    ? { value: view.session.gains.position_i, source: "the session's baseline" }
+                    : { value: channel?.control.position_i ?? 0, source: "live; a session holds its baseline" }
+                }
+                pwmHz={pwmHz}
+                disabled={busy}
+                ladder={ladder}
+                ladderOn={ladderOn}
+                ladderDefaults={pwmHz === null && ladder.axis === "velocity_i_corner_hz" ? [] : defaultLadderValues(ladder.axis, gains, pwmHz ?? 0)}
+                onGains={setGains}
+                onFilters={setFilters}
+                onLadder={setLadder}
+              />
+              <Button className="text-xs" disabled={busy || channel === undefined} onClick={seed}>
+                Load the live values
+              </Button>
+              <LadderSetup
+                on={ladderOn}
+                ladder={ladder}
+                probe={type === "probe"}
+                disabled={busy}
+                onToggle={setLadderOn}
+                onLadder={setLadder}
+              />
+            </div>
+          )}
+          <div className="mt-4 flex flex-wrap items-start gap-3 border-t pt-4">
+            <RunControls label={ladderOn ? "Run ladder" : "Run"} blocked={uniqueBlocked} busy={busy} onRun={submit} />
+            <Button disabled={active === null || busyEngine} onClick={revert}>
+              Revert
+            </Button>
+          </div>
+          {message !== null && (
+            <p role="status" className={message.tone === "ok" ? "mt-2 text-sm text-emerald-400" : "mt-2 text-sm text-red-400"}>
+              {message.text}
+            </p>
+          )}
+        </Card>
+      </div>
+
+      {(current !== null || queue.length > 0) && (
+        <Card label="Engine">
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            {current !== null && (
+              <span>
+                Run <span className="font-mono">{current.run}</span>:{" "}
+                <span className="text-emerald-300">{stateLabel(current.state)}</span>
+                {"reason" in current && <span className="text-muted-foreground"> ({current.reason})</span>}
+                {active !== null && current.session !== active.id && (
+                  <span className="text-muted-foreground"> in another session</span>
+                )}
+              </span>
+            )}
+            <span className="text-muted-foreground">{queue.length} queued</span>
+            {current !== null && (
+              <Button onClick={abort}>Abort after this run</Button>
+            )}
+          </div>
+          {pending.length > 0 && (
+            <ol aria-label="Queue" className="mt-2 flex flex-wrap gap-2 text-xs">
+              {pending.map((r) => (
+                <li key={r.id} className="rounded border px-2 py-0.5 font-mono">
+                  {r.run?.request.ladder_value != null ? `${r.run.request.ladder_value}: ` : ""}
+                  {stateLabel(r.state)}
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
+      )}
+
+      {recording && stepper !== undefined && current !== null && (
+        <Card label="Live">
+          <LivePanels key={current.run} stepper={stepper} runRegime={currentRecord?.regime ?? null} />
+        </Card>
+      )}
+
+      {sessionError !== null && <p className="text-sm text-red-400">Session: {sessionError}</p>}
+      {view !== null && view.session !== null && (
+        <SessionResults view={view} />
+      )}
+    </main>
+  );
+}
+
+function setupType(view: SessionView): RunType {
+  const kind = view.session?.kind;
+  if (kind === undefined) return "tracking";
+  return "Tracking" in kind ? "tracking" : "Probe" in kind ? "probe" : "standstill";
+}
+
+/** Ladder plot, results table, overlay plots and Accept for one session. */
+export function SessionResults({ view }: { view: SessionView }) {
+  const type = setupType(view);
+  const entries = useMemo(() => view.runs.filter((r) => TERMINAL_STATES.has(r.state)), [view]);
+  const [checked, setChecked] = useState<string[]>([]);
+  const [colors, setColors] = useState<Map<string, number>>(new Map());
+  const [series, setSeries] = useState<Record<string, Series | { error: string }>>({});
+  const [config, setConfig] = useState<{ run: string; text: string } | { error: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setChecked([]);
+    setColors(new Map());
+    setConfig(null);
+  }, [view.id]);
+
+  const toggle = (id: string, on: boolean) => {
+    const next = on ? [...checked, id].slice(0, MAX_OVERLAY) : checked.filter((c) => c !== id);
+    setChecked(next);
+    setColors((prev) => assignColors(prev, next));
+  };
+
+  useEffect(() => {
+    for (const id of checked) {
+      if (series[id] !== undefined) continue;
+      getSeries(id).then(
+        (s) => setSeries((prev) => ({ ...prev, [id]: s })),
+        (e: unknown) => setSeries((prev) => ({ ...prev, [id]: { error: errorText(e) } })),
+      );
+    }
+  }, [checked, series]);
+
+  const ladder = view.session?.ladder ?? null;
+  const ladderEntries = entries
+    .filter((e) => e.run !== null && e.run.request.ladder_value !== null)
+    .map((e) => ({
+      value: e.run?.request.ladder_value ?? null,
+      metric: e.run === null ? null : headlineMetric(e.run, type).value,
+    }));
+  const headlineLabel = type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (um)" : "Worst torque sd";
+
+  const overlay = useMemo(() => checked.flatMap((id) => {
+    const entry = entries.find((e) => e.id === id);
+    const s = series[id];
+    if (entry?.run == null || s === undefined || "error" in s) return [];
+    const plot = s.channels.find((c) => c.channel === entry.run?.declared_channel);
+    if (plot === undefined) return [];
+    const label = new Date(finishedMs(entry)).toLocaleTimeString([], { hour12: false });
+    return [{ id, label, color: PALETTE[colors.get(id) ?? 0], plot, run: entry.run }];
+  }), [checked, entries, series, colors]);
+  const seriesErrors = checked.flatMap((id) => {
+    const s = series[id];
+    return s !== undefined && "error" in s ? [`${id}: ${s.error}`] : [];
+  });
+  const plots = useMemo(() => {
+    const trace: OverlayRun<ChannelPlot>[] = overlay.map((o) => ({ ...o, value: o.plot }));
+    const ensembles = overlay.flatMap((o) => (o.plot.probe === null ? [] : [{ ...o, value: o.plot.probe }]));
+    const psd = overlay.flatMap((o) => (o.plot.torque_psd === null ? [] : [{ ...o, value: o.plot.torque_psd }]));
+    const rests = overlay.flatMap((o) => {
+      const r = declaredMetrics(o.run)?.standstill?.rests;
+      return r === undefined ? [] : [{ ...o, value: r }];
+    });
+    return { trace, ensembles, psd, rests };
+  }, [overlay]);
+  const { trace, ensembles, psd, rests } = plots;
+
+  const accept = () => {
+    if (checked.length !== 1) return;
+    const run = checked[0];
+    getConfigBlock(run).then(
+      (text) => {
+        setConfig({ run, text });
+        setCopied(false);
+      },
+      (e: unknown) => setConfig({ error: errorText(e) }),
+    );
+  };
+
+  const copy = (text: string) => {
+    try {
+      navigator.clipboard.writeText(text).then(
+        () => setCopied(true),
+        () => setCopied(false),
+      );
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  const acceptedEntry = config !== null && "run" in config ? entries.find((e) => e.id === config.run) : undefined;
+
+  return (
+    <>
+      {ladderEntries.length > 0 && (
+        <Card label="Ladder">
+          <LadderPlot
+            entries={ladderEntries}
+            repeats={ladder?.repeats ?? 1}
+            axisLabel={ladderAxisLabel(ladder?.axis ?? "")}
+            metricLabel={headlineLabel}
+            thresholds={type === "probe" && ladder !== null ? { floor: ladder.floor, marginal: ladder.marginal } : null}
+          />
+        </Card>
+      )}
+      <Card label={`Results, ${view.session?.name ?? view.id}`}>
+        <ResultsTable
+          entries={entries}
+          type={type}
+          ladderAxis={ladder?.axis ?? null}
+          checked={new Set(checked)}
+          colors={colors}
+          onToggle={toggle}
+        />
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button disabled={checked.length !== 1} onClick={accept}>
+            Accept
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {checked.length === 1
+              ? "Shows the config block for the checked run."
+              : "Check exactly one run to accept it."}
+            {checked.length >= MAX_OVERLAY && ` At most ${MAX_OVERLAY} runs overlay at once.`}
+          </span>
+        </div>
+        {config !== null && "error" in config && <p className="mt-2 text-sm text-red-400">Accept: {config.error}</p>}
+        {config !== null && "text" in config && (
+          <div className="mt-3 space-y-2">
+            {acceptedEntry !== undefined && acceptedEntry.state !== "done" && (
+              <p className="text-sm text-amber-400">This run is {stateLabel(acceptedEntry.state)}; check its gains before using them.</p>
+            )}
+            <pre aria-label="Config block" className="overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs select-all">
+              {config.text}
+            </pre>
+            <Button onClick={() => copy(config.text)}>{copied ? "Copied" : "Copy"}</Button>
+          </div>
+        )}
+      </Card>
+      {checked.length > 0 && (
+        <Card label="Plots">
+          {seriesErrors.map((e) => (
+            <p key={e} className="text-sm text-red-400">
+              {e}
+            </p>
+          ))}
+          {trace.length > 0 && <TracePanels runs={trace} />}
+          {ensembles.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">Step-response ensembles</h3>
+              <EnsemblePlot runs={ensembles} />
+            </div>
+          )}
+          {psd.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">Torque PSD</h3>
+              <PsdPlot runs={psd} />
+            </div>
+          )}
+          {rests.length > 0 && (
+            <div className="mt-4">
+              <h3 className="mb-1 text-xs uppercase tracking-wider text-muted-foreground">Rests</h3>
+              <RestBars runs={rests} />
+            </div>
+          )}
+        </Card>
+      )}
+    </>
+  );
+}
