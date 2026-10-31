@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use foci_tune::assets;
+use foci_tune::server::{ServeConfig, serve};
 use foci_tune::verify::{Kind, verify_archive};
 
 #[derive(Parser)]
@@ -70,8 +71,28 @@ fn main() -> ExitCode {
             }
         }
         None => {
-            eprintln!("error: the service is not implemented");
-            ExitCode::FAILURE
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::INFO)
+                .init();
+            let runtime = match tokio::runtime::Runtime::new() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: cannot start the async runtime: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let config = ServeConfig {
+                moonraker_url: cli.moonraker_url,
+                api_key: cli.api_key,
+                listen: cli.listen,
+            };
+            match runtime.block_on(serve(config)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
         }
     }
 }

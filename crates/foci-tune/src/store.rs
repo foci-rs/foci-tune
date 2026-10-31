@@ -185,6 +185,38 @@ impl Store {
         read_json(&self.run_dir(session, run).join(RUN_FILE))
     }
 
+    /// The session holding run `run`, found by its directory name.
+    ///
+    /// # Errors
+    /// I/O errors from listing the sessions.
+    pub fn find_run(&self, run: &RunId) -> io::Result<Option<SessionId>> {
+        for id in child_dirs(&self.root.join(SESSIONS_DIR))? {
+            if let Ok(id) = SessionId::parse(&id)
+                && self.run_dir(&id, run).is_dir()
+            {
+                return Ok(Some(id));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Removes a session directory that holds nothing but its `session.json`, undoing a
+    /// [`Store::new_session`] whose first run was refused. A session with runs is left alone.
+    ///
+    /// # Errors
+    /// I/O errors from listing or removing the directory.
+    pub fn remove_empty_session(&self, session: &SessionId) -> io::Result<bool> {
+        let dir = self.session_dir(session);
+        for entry in std::fs::read_dir(&dir)? {
+            if entry?.file_name() != SESSION_FILE {
+                return Ok(false);
+            }
+        }
+        std::fs::remove_file(dir.join(SESSION_FILE))?;
+        std::fs::remove_dir(&dir)?;
+        Ok(true)
+    }
+
     /// Where the run's capture lives.
     pub fn capture_path(&self, session: &SessionId, run: &RunId) -> PathBuf {
         self.run_dir(session, run).join(CAPTURE_FILE)
@@ -202,27 +234,43 @@ impl Store {
             let Ok(id) = SessionId::parse(&id) else {
                 continue;
             };
-            let (session, error) =
-                match read_json::<Session>(&self.session_dir(&id).join(SESSION_FILE)) {
-                    Ok(s) => (Some(s), None),
-                    Err(e) => (None, Some(format!("session.json: {e}"))),
-                };
-            let mut runs = Vec::new();
-            for run_id in child_dirs(&self.session_dir(&id))? {
-                let Ok(run_id) = RunId::parse(&run_id) else {
-                    continue;
-                };
-                runs.push(self.summarise_run(&id, run_id));
-            }
-            sessions.push(SessionSummary {
-                id,
-                session,
-                error,
-                runs,
-            });
+            sessions.push(self.summarise_session(id)?);
         }
         sessions.sort_by(|a, b| b.id.cmp(&a.id));
         Ok(sessions)
+    }
+
+    /// One session with its runs, as [`Store::scan`] lists it; `None` when there is no such
+    /// session directory.
+    ///
+    /// # Errors
+    /// I/O errors from listing the session's directory.
+    pub fn session_summary(&self, id: &SessionId) -> io::Result<Option<SessionSummary>> {
+        if !self.session_dir(id).is_dir() {
+            return Ok(None);
+        }
+        self.summarise_session(id.clone()).map(Some)
+    }
+
+    fn summarise_session(&self, id: SessionId) -> io::Result<SessionSummary> {
+        let (session, error) = match read_json::<Session>(&self.session_dir(&id).join(SESSION_FILE))
+        {
+            Ok(s) => (Some(s), None),
+            Err(e) => (None, Some(format!("session.json: {e}"))),
+        };
+        let mut runs = Vec::new();
+        for run_id in child_dirs(&self.session_dir(&id))? {
+            let Ok(run_id) = RunId::parse(&run_id) else {
+                continue;
+            };
+            runs.push(self.summarise_run(&id, run_id));
+        }
+        Ok(SessionSummary {
+            id,
+            session,
+            error,
+            runs,
+        })
     }
 
     fn summarise_run(&self, session: &SessionId, id: RunId) -> RunSummary {

@@ -1,5 +1,6 @@
 //! Stepper table derived from Moonraker's `configfile.settings`.
 
+use serde::Serialize;
 use serde_json::Value;
 
 const STEP_PINS: [(&str, u8); 2] = [("STEP0", 0), ("STEP1", 1)];
@@ -7,7 +8,7 @@ const STEP_PINS: [(&str, u8); 2] = [("STEP0", 0), ("STEP1", 1)];
 /// Outer gains and filter cutoffs as written in the `foci <stepper>` section.
 ///
 /// `None` means the option is absent; `klipper-foci` has no default for any of them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ConfigGains {
     /// `pid_position_p`.
     pub position_p: Option<u32>,
@@ -28,7 +29,7 @@ pub struct ConfigGains {
 }
 
 /// One FOCI-driven stepper channel.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Stepper {
     /// Klipper section name, for example `stepper_x`.
     pub name: String,

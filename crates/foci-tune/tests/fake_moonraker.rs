@@ -46,6 +46,7 @@ struct Inner {
     estop_delay: Duration,
     estop_shutdown: Option<Duration>,
     settings_delay: Duration,
+    config_root: String,
 }
 
 struct Shared {
@@ -75,7 +76,7 @@ impl Shared {
         let mut inner = self.inner.lock().unwrap();
         match method {
             "server.files.roots" => Ok(json!([
-                {"name": "config", "path": "/home/pi/printer_data/config", "permissions": "rw"},
+                {"name": "config", "path": inner.config_root, "permissions": "rw"},
                 {"name": "gcodes", "path": "/home/pi/printer_data/gcodes", "permissions": "rw"},
             ])),
             "printer.objects.query" => {
@@ -266,6 +267,7 @@ impl FakeMoonraker {
                 estop_delay: Duration::ZERO,
                 estop_shutdown: None,
                 settings_delay: Duration::ZERO,
+                config_root: "/home/pi/printer_data/config".to_owned(),
             }),
             refuse_ws: AtomicBool::new(false),
             commands,
@@ -290,6 +292,11 @@ impl FakeMoonraker {
 
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
+    }
+
+    /// Path reported as the `config` file root.
+    pub fn set_config_root(&self, path: &str) {
+        self.shared.inner.lock().unwrap().config_root = path.to_owned();
     }
 
     pub fn set_settings(&self, settings: Value) {
