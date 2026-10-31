@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 use foci_tune_analysis::fit::{DampedFit, FitError, fit_damped};
 use foci_tune_analysis::probe::{ensemble, locate_edges, probe_metrics};
 use foci_tune_analysis::protocol::{
-    ControlState, Critical, FRAME_HEADER_LEN, Frame, FrameHeader, Metadata, PROTOCOL_VERSION,
-    decode_frame,
+    ControlState, Critical, Frame, FrameHeader, Metadata, PROTOCOL_VERSION, decode_frame,
 };
 use foci_tune_analysis::signals::{ChannelSeries, channel_series};
 use foci_tune_analysis::standstill::standstill_metrics;
@@ -35,18 +34,15 @@ const ROTATION_DISTANCE_MM: f64 = 40.0;
 pub(crate) const STANDSTILL_SETTLE: usize = 500;
 /// Samples a rest must keep after the settle prefix.
 pub(crate) const STANDSTILL_MIN_LEN: usize = 200;
-const PSD_BIN_HZ: f64 = 1000.0 / 256.0;
 const ARCHIVE_PROTOCOL_VERSION: u8 = 24;
 const FRAME_TYPE_CRITICAL: u8 = 1;
 const FRAME_TYPE_METADATA: u8 = 5;
-const PACKED_TORQUE_OFFSET: usize = 64;
 
 struct ProbeRef {
     prefix: &'static str,
     vel_hz: f64,
     vel_zeta: f64,
     edges: usize,
-    psd_peak_hz: f64,
 }
 
 const PROBE: [ProbeRef; 4] = [
@@ -55,28 +51,24 @@ const PROBE: [ProbeRef; 4] = [
         vel_hz: 319.66,
         vel_zeta: 0.1096,
         edges: 44,
-        psd_peak_hz: 62.50,
     },
     ProbeRef {
         prefix: "foci527-meter1-bq500-posp200-ffstep195-p1500",
         vel_hz: 328.06,
         vel_zeta: 0.0558,
         edges: 44,
-        psd_peak_hz: 62.50,
     },
     ProbeRef {
         prefix: "foci527-meter1-bq500-posp240-ffstep195-p1500",
         vel_hz: 334.17,
         vel_zeta: 0.0215,
         edges: 44,
-        psd_peak_hz: 62.50,
     },
     ProbeRef {
         prefix: "foci527-meter1-posp141-ffstep195-p1100",
         vel_hz: 238.15,
         vel_zeta: 0.0292,
         edges: 44,
-        psd_peak_hz: 62.50,
     },
 ];
 
@@ -207,53 +199,11 @@ struct Loaded {
     criticals: Vec<(FrameHeader, Critical)>,
     series: ChannelSeries,
     regime: Regime,
-    packed_torque_target: Vec<i32>,
-    protocol_24: bool,
-}
-
-/// Torque series a standstill comparison measures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TorqueSource {
-    /// `interim_pidin_target_torque`, the signal the analysis binds.
-    PidinTarget,
-    /// Signed upper half of `interim_pid_torque_target_actual`, the signal `standstill.py`
-    /// measured; protocol 24 captures carry no PID-input torque.
-    PackedTarget,
-}
-
-impl TorqueSource {
-    fn for_capture(loaded: &Loaded) -> Self {
-        if loaded.protocol_24 {
-            Self::PackedTarget
-        } else {
-            Self::PidinTarget
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::PidinTarget => "interim_pidin_target_torque",
-            Self::PackedTarget => "interim_pid_torque_target_actual>>16",
-        }
-    }
-}
-
-/// Signed upper half of the critical frame's `interim_pid_torque_target_actual`, the
-/// torque the standstill reference script measured.
-fn packed_torque_target(frame: &[u8]) -> i32 {
-    let at = FRAME_HEADER_LEN + PACKED_TORQUE_OFFSET;
-    frame
-        .get(at..at + 4)
-        .and_then(|b| b.try_into().ok())
-        .map_or(0, |b| {
-            i32::from((u32::from_le_bytes(b) >> 16) as u16 as i16)
-        })
 }
 
 fn load(path: &Path) -> Result<Loaded, LoadError> {
     let capture = read_capture(path)?;
-    let mut rows = Vec::new();
-    let mut protocol_24 = false;
+    let mut criticals = Vec::new();
     let mut control: Option<ControlState> = None;
     let mut metadata: Option<Metadata> = None;
     let embedded = capture
@@ -262,10 +212,9 @@ fn load(path: &Path) -> Result<Loaded, LoadError> {
         .filter_map(|r| r.device_table_metadata());
     let frames = capture.firmware_frames().map(|r| r.payload.as_slice());
     for bytes in embedded.chain(frames) {
-        protocol_24 |= bytes.get(4) == Some(&ARCHIVE_PROTOCOL_VERSION);
         match decode_frame(&as_protocol_25(bytes)) {
             Ok(Frame::Critical(h, c)) if h.source_index == CHANNEL => {
-                rows.push((h, c, packed_torque_target(bytes)));
+                criticals.push((h, c));
             }
             Ok(Frame::ControlState(h, c)) if h.source_index == CHANNEL && control.is_none() => {
                 control = Some(c);
@@ -274,14 +223,11 @@ fn load(path: &Path) -> Result<Loaded, LoadError> {
             _ => {}
         }
     }
-    if rows.is_empty() {
+    if criticals.is_empty() {
         return Err(LoadError::NoCriticals);
     }
     let metadata = metadata.ok_or(LoadError::NoMetadata)?;
-    rows.sort_by_key(|(h, _, _)| h.timestamp_ticks);
-    let packed_torque_target = rows.iter().map(|(_, _, t)| *t).collect();
-    let criticals: Vec<(FrameHeader, Critical)> =
-        rows.into_iter().map(|(h, c, _)| (h, c)).collect();
+    criticals.sort_by_key(|(h, _)| h.timestamp_ticks);
     // Protocol 24 carries no control-state frame; no verified analysis reads these two.
     let regime = Regime {
         motor_rotation_distance_mm: ROTATION_DISTANCE_MM,
@@ -294,8 +240,6 @@ fn load(path: &Path) -> Result<Loaded, LoadError> {
         criticals,
         series,
         regime,
-        packed_torque_target,
-        protocol_24,
     })
 }
 
@@ -401,31 +345,14 @@ fn verify_probe(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Result<
         Tol::Abs(0.0),
         0,
     );
-    line.check(
-        "psd_peak_hz",
-        m.torque_psd_peak_hz,
-        reference.psd_peak_hz,
-        Tol::Abs(PSD_BIN_HZ),
-        2,
-    );
-    line.note(&format!("| trq {}", describe_fit(&m.torque)));
     line.note(&format!("| perr {}", describe_fit(&m.position_error)));
     line.note(&format!(
-        "| info, not gated: fd-vel {}",
-        describe_fit(&m.velocity)
+        "| info, not gated: fd-vel {}  trq {}  trq_psd_peak {:.2}Hz",
+        describe_fit(&m.velocity),
+        describe_fit(&m.torque),
+        m.torque_psd_peak_hz
     ));
     line.finish(out).map(Some)
-}
-
-/// The series with its torque taken from `source`.
-fn with_torque(loaded: &Loaded, source: TorqueSource) -> ChannelSeries {
-    match source {
-        TorqueSource::PidinTarget => loaded.series.clone(),
-        TorqueSource::PackedTarget => ChannelSeries {
-            torque: loaded.packed_torque_target.clone(),
-            ..loaded.series.clone()
-        },
-    }
 }
 
 /// The damping fit of the chip's `pid_velocity_actual`, the signal `fit.py` fitted.
@@ -476,16 +403,14 @@ fn verify_standstill(name: &str, loaded: &Loaded, out: &mut dyn Write) -> io::Re
     if !matches_prefix(name, STANDSTILL_PREFIX) {
         return Ok(None);
     }
-    let source = TorqueSource::for_capture(loaded);
     let m = standstill_metrics(
-        &with_torque(loaded, source),
+        &loaded.series,
         &loaded.regime,
         STANDSTILL_SETTLE,
         STANDSTILL_MIN_LEN,
     );
     let um_per_unit = ROTATION_DISTANCE_MM / POSITION_UNITS_PER_REV * 1000.0;
     let mut line = Line::new(STANDSTILL_PREFIX);
-    line.note(&format!("torque source {}", source.label()));
     line.check(
         "rests",
         m.rests.len() as f64,

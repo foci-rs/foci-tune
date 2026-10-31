@@ -106,7 +106,10 @@ them. The unit runs it before each start.
 
 `foci-tune verify-archive --kind <probe|tracking|standstill> <capture>...` runs an analysis over
 archived capture files (plain or zstd) and compares the result with the reference table, for
-manual checks of analysis changes.
+manual checks of analysis changes. Probe lines gate the velocity fit and the edge count; the
+torque fit and torque PSD peak are printed for information only, since the reference scripts
+measured no usable torque for them. Torque is the torque controller's target, the high half of
+the TMC4671 `PID_TORQUE_TARGET_TORQUE_ACTUAL` register.
 
 ## License
 
