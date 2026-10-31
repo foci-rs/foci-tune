@@ -569,6 +569,8 @@ struct Rig {
     b: Arc<Board>,
     session: SessionId,
     stop: Arc<AtomicBool>,
+    live: Arc<Mutex<LiveState>>,
+    frames: broadcast::Sender<(String, Bytes)>,
     _dir: TempDir,
 }
 
@@ -654,7 +656,14 @@ async fn rig_with(o: Options) -> Rig {
     .unwrap();
 
     let session = store.new_session(&session_record()).unwrap();
-    let engine = Engine::start(client.clone(), live, frames, store.clone(), o.config).unwrap();
+    let engine = Engine::start(
+        client.clone(),
+        live.clone(),
+        frames.clone(),
+        store.clone(),
+        o.config,
+    )
+    .unwrap();
     Rig {
         fake,
         client,
@@ -664,6 +673,8 @@ async fn rig_with(o: Options) -> Rig {
         b,
         session,
         stop,
+        live,
+        frames,
         _dir: dir,
     }
 }
@@ -773,6 +784,22 @@ impl Rig {
             assert!(Instant::now() < deadline, "stimulus not sent");
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+    }
+
+    /// Runs one stimulus and kills it with an emergency stop that fails, leaving the kill
+    /// unconfirmed; returns the killed run.
+    async fn unconfirmed_kill(&self) -> RunId {
+        self.fake
+            .script_emergency_stop(Some(500), Duration::ZERO, None);
+        let gate = self.hold_stimulus();
+        let mut events = self.engine.events();
+        let id = self.engine.submit(self.request(tracking())).await.unwrap();
+        self.wait_moving(&mut events, &id).await;
+        self.engine.kill().await;
+        assert_eq!(self.finish(&id).await.state, RunState::KillUnconfirmed);
+        self.a.sim(|s| s.gate = None);
+        gate.notify_one();
+        id
     }
 
     fn hold_stimulus(&self) -> Arc<Notify> {
@@ -1278,18 +1305,39 @@ async fn no_run_starts_while_a_kill_is_unconfirmed_until_shutdown_is_seen() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_klipper_restart_cycle_clears_an_unconfirmed_kill() {
     let rig = rig().await;
-    rig.fake
-        .script_emergency_stop(Some(500), Duration::ZERO, None);
-    let _gate = rig.hold_stimulus();
-    let mut events = rig.engine.events();
-    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
-    rig.wait_moving(&mut events, &id).await;
-    rig.engine.kill().await;
-    rig.finish(&id).await;
+    let id = rig.unconfirmed_kill().await;
     assert_eq!(
         rig.engine.submit(rig.request(tracking())).await,
         Err(Precondition::KillUnconfirmed)
     );
+
+    rig.fake.push("notify_klippy_disconnected", json!([]));
+    rig.fake.push("notify_klippy_ready", json!([]));
+    let mut state = rig.client.state();
+    state
+        .wait_for(|s| s.klippy == KlippyState::Ready)
+        .await
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    let next = loop {
+        match rig.engine.submit(rig.request(tracking())).await {
+            Err(Precondition::KillUnconfirmed | Precondition::KlippyNotReady)
+                if Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            other => break other,
+        }
+    };
+
+    assert!(next.is_ok(), "{next:?}");
+    assert_eq!(rig.run(&id).state, RunState::KillUnconfirmed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_websocket_reconnect_does_not_clear_an_unconfirmed_kill() {
+    let rig = rig().await;
+    rig.unconfirmed_kill().await;
 
     rig.fake.drop_websockets();
     let mut state = rig.client.state();
@@ -1301,19 +1349,56 @@ async fn a_klipper_restart_cycle_clears_an_unconfirmed_kill() {
         .wait_for(|s| s.klippy == KlippyState::Ready)
         .await
         .unwrap();
-    rig.a.sim(|s| s.gate = None);
-    let deadline = Instant::now() + WAIT;
-    let next = loop {
-        match rig.engine.submit(rig.request(tracking())).await {
-            Err(Precondition::KillUnconfirmed) if Instant::now() < deadline => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            other => break other,
-        }
-    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    assert!(next.is_ok(), "{next:?}");
-    assert_eq!(rig.run(&id).state, RunState::KillUnconfirmed);
+    assert_eq!(
+        rig.engine.submit(rig.request(tracking())).await,
+        Err(Precondition::KillUnconfirmed)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revert_is_refused_while_a_kill_is_unconfirmed() {
+    let rig = rig().await;
+    rig.unconfirmed_kill().await;
+    let sent = rig.scripts().len();
+
+    let reverted = rig.engine.revert(&rig.session).await;
+
+    assert_eq!(reverted, Err(Precondition::KillUnconfirmed.to_string()));
+    assert_eq!(rig.scripts().len(), sent);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kill_left_unconfirmed_by_a_crash_gates_the_next_engine() {
+    let rig = rig().await;
+    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
+    let mut killing = rig.finish(&id).await;
+    killing.id = RunId::parse("20261030T120002Z-kill").unwrap();
+    killing.state = RunState::Killing;
+    rig.store.write_run(&rig.session, &killing).unwrap();
+
+    let restarted = Engine::start(
+        rig.client.clone(),
+        rig.live.clone(),
+        rig.frames.clone(),
+        rig.store.clone(),
+        fast_config(),
+    )
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let refused = restarted.submit(rig.request(tracking())).await;
+    rig.fake.push("notify_klippy_shutdown", json!([]));
+    let deadline = Instant::now() + WAIT;
+    while rig.run(&killing.id).state != RunState::Killed {
+        assert!(
+            Instant::now() < deadline,
+            "shutdown did not confirm the kill"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(refused, Err(Precondition::KillUnconfirmed));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1354,7 +1439,7 @@ async fn the_stop_request_and_the_shutdown_report_share_one_deadline() {
     let at_return = rig.run(&id).state;
 
     assert_eq!(at_return, RunState::KillUnconfirmed);
-    assert!(elapsed < Duration::from_millis(380), "{elapsed:?}");
+    assert!(elapsed < 2 * fast_config().kill_timeout, "{elapsed:?}");
     let deadline = Instant::now() + WAIT;
     while rig.run(&id).state != RunState::Killed {
         assert!(

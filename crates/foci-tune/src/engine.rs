@@ -198,7 +198,7 @@ struct Inner {
     current: Option<Queued>,
     ladders: HashMap<u64, LadderTrack>,
     unconfirmed_kill: Option<(SessionId, RunId)>,
-    unconfirmed_saw_down: bool,
+    restarts_at_kill: u64,
     reverting: bool,
 }
 
@@ -385,10 +385,18 @@ fn baselines(first: &HashMap<u8, ControlState>) -> Vec<ChannelBaseline> {
 
 /// Marks runs a crashed process left in a non-terminal state as `Failed("interrupted")`,
 /// except `Killing`, which becomes `KillUnconfirmed`: the stop was posted and never confirmed.
+/// [`Engine::start`] keeps new runs gated on such a run until the kill is cleared.
 ///
 /// # Errors
 /// I/O errors from scanning the store or rewriting a run.
 pub fn reconcile_interrupted(store: &Store) -> io::Result<Vec<RunId>> {
+    Ok(reconcile(store)?
+        .into_iter()
+        .map(|(_, run)| run.id)
+        .collect())
+}
+
+fn reconcile(store: &Store) -> io::Result<Vec<(SessionId, Run)>> {
     let mut reconciled = Vec::new();
     for session in store.scan()? {
         for summary in session.runs {
@@ -403,7 +411,7 @@ pub fn reconcile_interrupted(store: &Store) -> io::Result<Vec<RunId>> {
                 _ => RunState::Failed("interrupted".to_owned()),
             };
             store.write_run(&session.id, &run)?;
-            reconciled.push(run.id);
+            reconciled.push((session.id.clone(), run));
         }
     }
     Ok(reconciled)
@@ -452,14 +460,22 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         store: Store,
         config: EngineConfig,
     ) -> io::Result<Self> {
-        reconcile_interrupted(&store)?;
+        let unconfirmed_kill = reconcile(&store)?
+            .into_iter()
+            .rfind(|(_, run)| run.state == RunState::KillUnconfirmed)
+            .map(|(session, run)| (session, run.id));
+        let restarts_at_kill = *moonraker.klippy_restarts().borrow();
         let shared = Arc::new(Shared {
             moonraker,
             live,
             frames,
             store,
             config,
-            inner: Mutex::new(Inner::default()),
+            inner: Mutex::new(Inner {
+                unconfirmed_kill,
+                restarts_at_kill,
+                ..Inner::default()
+            }),
             wake: Notify::new(),
             events: broadcast::channel(EVENT_CAPACITY).0,
             kill_requested: watch::channel(0).0,
@@ -575,6 +591,9 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             .map_err(|e| format!("session {session}: {e}"))?;
         {
             let mut inner = lock(&s.inner);
+            if inner.unconfirmed_kill.is_some() {
+                return Err(Precondition::KillUnconfirmed.to_string());
+            }
             if inner.busy() {
                 return Err(Precondition::Busy.to_string());
             }
@@ -1443,11 +1462,12 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 }
             } else if let Some(target) = target {
                 inner.unconfirmed_kill = Some(target);
-                inner.unconfirmed_saw_down = false;
+                inner.restarts_at_kill = *self.moonraker.klippy_restarts().borrow();
             }
         }
         let klippy = self.moonraker.state().borrow().klippy;
-        self.observe_klippy(klippy);
+        let restarts = *self.moonraker.klippy_restarts().borrow();
+        self.observe_klippy(klippy, restarts);
         self.kill_resolved.send_modify(|n| *n += 1);
     }
 
@@ -1475,37 +1495,31 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         }
     }
 
-    /// Clears an unconfirmed kill once it is safe to run again: Klipper reports shutdown,
-    /// which confirms the stop, or comes back ready after being down, as after a firmware
-    /// restart.
-    fn observe_klippy(&self, klippy: KlippyState) {
+    /// Clears an unconfirmed kill once Klipper reports shutdown, which confirms the stop, or
+    /// Moonraker reports that Klipper restarted after the kill.
+    fn observe_klippy(&self, klippy: KlippyState, restarts: u64) {
         let mut inner = lock(&self.inner);
         let Some((session, id)) = inner.unconfirmed_kill.clone() else {
             return;
         };
-        match klippy {
-            KlippyState::Shutdown => {
-                inner.unconfirmed_kill = None;
-                self.mark_killed(&mut inner, session, &id);
-            }
-            KlippyState::Ready => {
-                if inner.unconfirmed_saw_down {
-                    inner.unconfirmed_kill = None;
-                }
-            }
-            KlippyState::Startup | KlippyState::Disconnected | KlippyState::Error => {
-                inner.unconfirmed_saw_down = true;
-            }
+        if klippy == KlippyState::Shutdown {
+            inner.unconfirmed_kill = None;
+            self.mark_killed(&mut inner, session, &id);
+        } else if restarts > inner.restarts_at_kill {
+            inner.unconfirmed_kill = None;
         }
     }
 
     async fn watch_klippy(self: Arc<Self>) {
         let mut state = self.moonraker.state();
+        let mut restarts = self.moonraker.klippy_restarts();
         loop {
             let klippy = state.borrow_and_update().klippy;
-            self.observe_klippy(klippy);
-            if state.changed().await.is_err() {
-                return;
+            let count = *restarts.borrow_and_update();
+            self.observe_klippy(klippy, count);
+            tokio::select! {
+                changed = state.changed() => if changed.is_err() { return },
+                changed = restarts.changed() => if changed.is_err() { return },
             }
         }
     }
@@ -1557,6 +1571,10 @@ mod tests {
 
         fn gcode_responses(&self) -> broadcast::Receiver<String> {
             self.gcode.subscribe()
+        }
+
+        fn klippy_restarts(&self) -> watch::Receiver<u64> {
+            watch::channel(0).1
         }
     }
 

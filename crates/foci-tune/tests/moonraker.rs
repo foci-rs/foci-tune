@@ -146,3 +146,26 @@ async fn dropped_websocket_reconnects_with_backoff_and_reads_disconnected_meanwh
     fake.refuse_websockets(false);
     wait_for(&mut state, |s| s.klippy == KlippyState::Ready).await;
 }
+
+#[tokio::test]
+async fn only_moonrakers_own_disconnect_and_ready_count_as_a_klipper_restart() {
+    let fake = FakeMoonraker::start().await;
+    let client = MoonrakerClient::connect(client_config(fake.url()));
+    let mut state = client.state();
+    wait_for(&mut state, |s| s.klippy == KlippyState::Ready).await;
+    let restarts = client.klippy_restarts();
+
+    fake.drop_websockets();
+    wait_for(&mut state, |s| s.klippy == KlippyState::Disconnected).await;
+    wait_for(&mut state, |s| s.klippy == KlippyState::Ready).await;
+    let after_reconnect = *restarts.borrow();
+    fake.push("notify_klippy_disconnected", json!([]));
+    fake.push("notify_klippy_ready", json!([]));
+    let mut counted = restarts.clone();
+    tokio::time::timeout(WAIT, counted.wait_for(|n| *n == 1))
+        .await
+        .expect("restart not counted")
+        .unwrap();
+
+    assert_eq!(after_reconnect, 0);
+}

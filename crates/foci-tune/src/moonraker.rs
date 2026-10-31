@@ -146,6 +146,9 @@ pub trait MoonrakerApi: Send + Sync {
     fn state(&self) -> watch::Receiver<PrinterState>;
     /// G-code console lines pushed by Moonraker.
     fn gcode_responses(&self) -> broadcast::Receiver<String>;
+    /// Count of Klipper restarts Moonraker reported: a `notify_klippy_disconnected` followed
+    /// later by `notify_klippy_ready`. The tool's own reconnects never change it.
+    fn klippy_restarts(&self) -> watch::Receiver<u64>;
 }
 
 /// Moonraker client with a background task that keeps the WebSocket subscribed.
@@ -155,6 +158,7 @@ pub struct MoonrakerClient {
     api_key: Option<String>,
     state: watch::Receiver<PrinterState>,
     gcode: broadcast::Sender<String>,
+    restarts: watch::Receiver<u64>,
     task: JoinHandle<()>,
 }
 
@@ -164,13 +168,20 @@ impl MoonrakerClient {
         let base = config.url.trim_end_matches('/').to_owned();
         let (state_tx, state) = watch::channel(PrinterState::disconnected());
         let (gcode, _) = broadcast::channel(256);
-        let task = tokio::spawn(run_socket(config.clone(), state_tx, gcode.clone()));
+        let (restarts_tx, restarts) = watch::channel(0);
+        let task = tokio::spawn(run_socket(
+            config.clone(),
+            state_tx,
+            gcode.clone(),
+            restarts_tx,
+        ));
         Self {
             http: reqwest::Client::new(),
             base,
             api_key: config.api_key,
             state,
             gcode,
+            restarts,
             task,
         }
     }
@@ -263,6 +274,28 @@ impl MoonrakerApi for MoonrakerClient {
     fn gcode_responses(&self) -> broadcast::Receiver<String> {
         self.gcode.subscribe()
     }
+
+    fn klippy_restarts(&self) -> watch::Receiver<u64> {
+        self.restarts.clone()
+    }
+}
+
+/// Counts Klipper restarts from Moonraker's own notifications, across socket sessions.
+struct RestartTracker {
+    count: watch::Sender<u64>,
+    klippy_gone: bool,
+}
+
+impl RestartTracker {
+    fn disconnected(&mut self) {
+        self.klippy_gone = true;
+    }
+
+    fn ready(&mut self) {
+        if std::mem::take(&mut self.klippy_gone) {
+            self.count.send_modify(|n| *n += 1);
+        }
+    }
 }
 
 fn websocket_request(
@@ -305,7 +338,12 @@ async fn run_socket(
     config: ClientConfig,
     state: watch::Sender<PrinterState>,
     gcode: broadcast::Sender<String>,
+    restarts: watch::Sender<u64>,
 ) {
+    let mut restarts = RestartTracker {
+        count: restarts,
+        klippy_gone: false,
+    };
     let Some(request) = websocket_request(&config) else {
         tracing::error!(
             "moonraker url is not usable for a websocket: {}",
@@ -318,7 +356,7 @@ async fn run_socket(
         match tokio_tungstenite::connect_async(request.clone()).await {
             Ok((socket, _)) => {
                 delay = config.backoff_initial;
-                session(socket, &state, &gcode).await;
+                session(socket, &state, &gcode, &mut restarts).await;
             }
             Err(error) => tracing::debug!("moonraker websocket connect failed: {error}"),
         }
@@ -332,6 +370,7 @@ async fn session<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
     state: &watch::Sender<PrinterState>,
     gcode: &broadcast::Sender<String>,
+    restarts: &mut RestartTracker,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -358,6 +397,7 @@ async fn session<S>(
                 }
             }
             Some("notify_klippy_ready") => {
+                restarts.ready();
                 state.send_modify(|s| s.klippy = KlippyState::Ready);
                 resubscribe = true;
             }
@@ -365,6 +405,7 @@ async fn session<S>(
                 state.send_modify(|s| s.klippy = KlippyState::Shutdown);
             }
             Some("notify_klippy_disconnected") => {
+                restarts.disconnected();
                 state.send_modify(|s| s.klippy = KlippyState::Disconnected);
             }
             Some(_) => {}
