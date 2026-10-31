@@ -893,8 +893,8 @@ impl<M: MoonrakerApi + 'static> Api<M> {
 }
 
 /// The router: the API under `/api`, the event stream at `/api/events`, and the embedded UI
-/// for every other path, with `index.html` for paths that are not files so client-side routes
-/// load.
+/// for every other path. A path that names a file (under `assets/`, or with an extension) and
+/// is not embedded is a 404; any other path gets `index.html` so client-side routes load.
 ///
 /// Spawns the one task that builds the printer snapshot for every event-stream client, so it
 /// must be called inside a tokio runtime.
@@ -1197,6 +1197,10 @@ async fn static_or_index(uri: Uri) -> Response {
         && let Some(asset) = assets::get(file)
     {
         return ([(header::CONTENT_TYPE, asset.mime)], asset.data).into_response();
+    }
+    let last = file.rsplit('/').next().unwrap_or_default();
+    if file.starts_with("assets/") || last.contains('.') {
+        return (StatusCode::NOT_FOUND, format!("no file {path}")).into_response();
     }
     match assets::index_html() {
         Some(index) => (

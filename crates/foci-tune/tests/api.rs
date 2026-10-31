@@ -714,15 +714,25 @@ async fn the_ui_is_served_with_spa_fallback_and_unknown_api_paths_are_json_404()
     assert_eq!(api.status, StatusCode::NOT_FOUND);
     assert!(api.content_type.starts_with("application/json"));
     assert!(api.error().contains("/api/nope"), "{}", api.text());
-    if let Some(name) = assets::list().into_iter().find(|n| n.ends_with(".js")) {
-        let js = get(&app, &format!("/{name}")).await;
-        assert_eq!(js.status, StatusCode::OK);
-        assert!(
-            js.content_type.contains("javascript"),
-            "{}",
-            js.content_type
-        );
+    let missing_asset = get(&app, "/assets/index-missing.js").await;
+    let missing_file = get(&app, "/favicon-missing.ico").await;
+    assert_eq!(missing_asset.status, StatusCode::NOT_FOUND);
+    assert_eq!(missing_file.status, StatusCode::NOT_FOUND);
+    if assets::is_skipped_stub() {
+        eprintln!("web UI skipped at build time: no bundled script to check");
+        return;
     }
+    let name = assets::list()
+        .into_iter()
+        .find(|n| n.starts_with("assets/") && n.ends_with(".js"))
+        .expect("a built UI bundles a script under assets/");
+    let js = get(&app, &format!("/{name}")).await;
+    assert_eq!(js.status, StatusCode::OK);
+    assert!(
+        js.content_type.contains("javascript"),
+        "{}",
+        js.content_type
+    );
 }
 
 type Socket =
@@ -1102,4 +1112,41 @@ async fn firmware_restart_is_offered_only_once_klipper_is_shut_down() {
     assert!(ready.error().contains("shutdown"), "{}", ready.error());
     assert_eq!(shutdown.status, StatusCode::OK, "{}", shutdown.text());
     assert_eq!(rig.fake.firmware_restarts(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lagging_live_subscriber_gets_resync_and_stays_connected() {
+    let rig = rig_with(Options {
+        frames_capacity: 8,
+        ..Options::default()
+    })
+    .await;
+    let app = app(&rig);
+    let (addr, server) = serve_app(&app).await;
+    let mut ws = connect(addr).await;
+    ws.send(Message::text(json!({"subscribe": "live"}).to_string()))
+        .await
+        .unwrap();
+    next_of_type(&mut ws, "subscribed", WAIT)
+        .await
+        .expect("subscribed");
+
+    let frame = bytes::Bytes::from_static(&[0u8; 32]);
+    for _ in 0..20_000 {
+        let _ = rig.frames.send((SERIAL_A.to_owned(), frame.clone()));
+    }
+    let resync = next_of_type(&mut ws, "resync", WAIT)
+        .await
+        .expect("resync after lagging");
+    ws.send(Message::text(json!({"unsubscribe": "live"}).to_string()))
+        .await
+        .unwrap();
+    let still_open = next_of_type(&mut ws, "unsubscribed", WAIT).await;
+
+    assert!(
+        resync["reason"].as_str().unwrap().contains("dropped"),
+        "{resync}"
+    );
+    assert!(still_open.is_some(), "connection closed after the lag");
+    server.abort();
 }
