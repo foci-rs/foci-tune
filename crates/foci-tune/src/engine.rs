@@ -45,6 +45,11 @@ const FILTER_REQUESTS: [(u8, &str); 4] =
     [(3, "velocity"), (4, "torque"), (5, "position"), (6, "flux")];
 const CHANNEL_SOURCE_KIND: u8 = 1;
 const EVENT_CAPACITY: usize = 1024;
+const OUTSIDE_SHUTDOWN: &str =
+    "Klipper shut down during the run (emergency stop from outside foci-tune)";
+const OUTSIDE_ERROR: &str = "Klipper entered its error state during the run";
+const RESTART_NOTE: &str = "Klipper was shut down; gains return to the config values and the \
+                            trace mode to dormant after a firmware restart";
 
 /// Timeouts and limits of the run sequence.
 #[derive(Debug, Clone)]
@@ -61,10 +66,14 @@ pub struct EngineConfig {
     pub min_free_bytes: u64,
     /// How often a run checks the trace interface between Moonraker state changes.
     pub loss_poll: Duration,
+    /// How long a failed run waits for a Klipper shutdown report, which can trail the reply
+    /// of the command the shutdown failed.
+    pub shutdown_notice: Duration,
 }
 
 impl Default for EngineConfig {
-    /// The spec's values: 2 s write and kill timeouts, 500 ms drain, 200 MB free.
+    /// The spec's values: 2 s write and kill timeouts, 500 ms drain, 200 MB free; 1 s for a
+    /// shutdown report.
     fn default() -> Self {
         Self {
             confirm_timeout: Duration::from_secs(2),
@@ -73,6 +82,7 @@ impl Default for EngineConfig {
             kill_timeout: Duration::from_secs(2),
             min_free_bytes: 200_000_000,
             loss_poll: Duration::from_millis(50),
+            shutdown_notice: Duration::from_secs(1),
         }
     }
 }
@@ -1546,9 +1556,32 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             .map_err(|e| format!("stimulus failed: {e}"))
     }
 
+    /// Why Klipper refuses every G-code until a firmware restart, when it does.
+    fn klippy_unavailable_for_gcode(&self) -> Option<&'static str> {
+        match self.moonraker.state().borrow().klippy {
+            KlippyState::Shutdown => Some(OUTSIDE_SHUTDOWN),
+            KlippyState::Error => Some(OUTSIDE_ERROR),
+            KlippyState::Ready | KlippyState::Startup | KlippyState::Disconnected => None,
+        }
+    }
+
+    async fn await_shutdown_notice(&self) {
+        let mut state = self.moonraker.state();
+        let _ = timeout(
+            self.config.shutdown_notice,
+            state.wait_for(|s| s.klippy != KlippyState::Ready),
+        )
+        .await;
+    }
+
     /// G-code after a run that was not killed: the feedforward gain when a script that
     /// changes it did not finish, then the trace mode when the board was known dormant.
+    /// Nothing is sent to a Klipper that refuses G-code; a firmware restart resets both.
     async fn cleanup(&self, req: &RunRequest, stepper: &Stepper, ctx: &RunCtx) {
+        if self.klippy_unavailable_for_gcode().is_some() {
+            self.note(RESTART_NOTE.to_owned());
+            return;
+        }
         let toggles_feedforward = !matches!(req.kind, RunKind::Standstill { .. });
         if ctx.script_sent
             && !ctx.script_ok
@@ -1727,7 +1760,10 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         let resolved = match self.check_run(&request.stepper).await {
             Ok(r) => r,
             Err(p) => {
-                self.end_run(Some(RunState::Failed(p.to_string())), &mut resolved_rx)
+                let reason = self
+                    .klippy_unavailable_for_gcode()
+                    .map_or_else(|| p.to_string(), str::to_owned);
+                self.end_run(Some(RunState::Failed(reason)), &mut resolved_rx)
                     .await;
                 return;
             }
@@ -1765,8 +1801,16 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         let state = match (killed, outcome) {
             (true, _) | (false, Outcome::Killed) => None,
             (false, Outcome::Failed(reason)) => {
-                self.cleanup(&request, &resolved.stepper, &ctx).await;
-                Some(RunState::Failed(reason))
+                self.await_shutdown_notice().await;
+                if self.kill_engaged() {
+                    None
+                } else {
+                    let reason = self
+                        .klippy_unavailable_for_gcode()
+                        .map_or(reason, str::to_owned);
+                    self.cleanup(&request, &resolved.stepper, &ctx).await;
+                    Some(RunState::Failed(reason))
+                }
             }
             (false, Outcome::Recorded) => {
                 self.cleanup(&request, &resolved.stepper, &ctx).await;

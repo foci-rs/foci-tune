@@ -48,6 +48,8 @@ struct Inner {
     settings_delay: Duration,
     settings_queries: u32,
     config_root: String,
+    shutdown_on: Option<(String, Duration)>,
+    shut_down: bool,
 }
 
 struct Shared {
@@ -146,6 +148,32 @@ async fn query(
 }
 
 async fn script(State(shared): State<Arc<Shared>>, Json(body): Json<Value>) -> Response {
+    let notice = {
+        let mut inner = shared.inner.lock().unwrap();
+        let script = body["script"].as_str().unwrap_or_default().to_owned();
+        let trigger = match &inner.shutdown_on {
+            Some((prefix, notice)) if script.starts_with(prefix.as_str()) => Some(*notice),
+            _ => None,
+        };
+        if inner.shut_down || trigger.is_some() {
+            inner.scripts.push(script);
+            inner.shut_down = true;
+            inner.shutdown_on = None;
+            Some(trigger)
+        } else {
+            None
+        }
+    };
+    if let Some(trigger) = notice {
+        if let Some(after) = trigger {
+            let shared = shared.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                shared.push("notify_klippy_shutdown", json!([]));
+            });
+        }
+        return http_reply(Err("Unknown".to_owned()));
+    }
     let hook = shared.hook.lock().unwrap().clone();
     let Some(hook) = hook else {
         return http_reply(shared.call("printer.gcode.script", &body));
@@ -274,6 +302,8 @@ impl FakeMoonraker {
                 settings_delay: Duration::ZERO,
                 settings_queries: 0,
                 config_root: "/home/pi/printer_data/config".to_owned(),
+                shutdown_on: None,
+                shut_down: false,
             }),
             refuse_ws: AtomicBool::new(false),
             commands,
@@ -346,6 +376,13 @@ impl FakeMoonraker {
         inner.estop_status = status;
         inner.estop_delay = delay;
         inner.estop_shutdown = shutdown;
+    }
+
+    /// Shuts Klipper down from another client when the first script starting with `prefix`
+    /// arrives: that script and every later one fail as Moonraker answers them in shutdown,
+    /// and the shutdown notice follows on the socket `notice` later.
+    pub fn shut_down_on(&self, prefix: &str, notice: Duration) {
+        self.shared.inner.lock().unwrap().shutdown_on = Some((prefix.to_owned(), notice));
     }
 
     /// How many `configfile.settings` queries have arrived, answered or not.

@@ -799,6 +799,85 @@ async fn a_failed_stimulus_restores_the_feedforward_gain() {
     );
 }
 
+fn assert_outside_stop(run: &foci_tune::model::Run) {
+    let RunState::Failed(reason) = &run.state else {
+        panic!("{:?}", run.state);
+    };
+    assert!(
+        reason.contains("shut down") && reason.contains("outside foci-tune"),
+        "{reason}"
+    );
+    assert_eq!(run.notes.len(), 1, "{:?}", run.notes);
+    assert!(run.notes[0].contains("firmware restart"), "{:?}", run.notes);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_outside_stop_failing_the_stimulus_skips_the_cleanup() {
+    let rig = rig().await;
+    rig.fake.shut_down_on("G90", Duration::from_millis(100));
+
+    let run = rig.run_once(probe()).await;
+
+    assert_outside_stop(&run);
+    let scripts = rig.scripts();
+    assert!(scripts.last().unwrap().starts_with("G90"), "{scripts:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_outside_stop_reported_before_the_stimulus_fails_skips_the_cleanup() {
+    let rig = rig().await;
+    let gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(probe())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+
+    rig.fake.push("notify_klippy_shutdown", json!([]));
+    let run = rig.finish(&id).await;
+    gate.notify_one();
+
+    assert_outside_stop(&run);
+    let scripts = rig.scripts();
+    assert!(scripts.last().unwrap().starts_with("G90"), "{scripts:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_outside_stop_while_writing_gains_fails_without_cleanup() {
+    let rig = rig().await;
+    rig.fake
+        .shut_down_on("FOCI_SET_GAINS", Duration::from_millis(100));
+    let ids = rig
+        .engine
+        .submit_ladder(rig.ladder(probe(), "velocity_p", &[841.0, 941.0], 1))
+        .await
+        .unwrap();
+
+    let run = rig.finish(&ids[0]).await;
+
+    assert_outside_stop(&run);
+    assert_eq!(rig.scripts().last().map(String::as_str), Some(GAINS_LINE));
+    assert!(matches!(rig.run(&ids[1]).state, RunState::Skipped(_)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_tools_kill_racing_an_outside_stop_stays_killed() {
+    let rig = rig().await;
+    rig.fake.script_emergency_stop(None, Duration::ZERO, None);
+    let _gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(probe())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+    let sent_before_kill = rig.scripts().len();
+
+    let outside = async { rig.fake.push("notify_klippy_shutdown", json!([])) };
+    let (outcome, ()) = tokio::join!(rig.engine.kill(), outside);
+    let run = rig.finish(&id).await;
+
+    assert_eq!(outcome.state, RunState::Killed);
+    assert_eq!(run.state, RunState::Killed);
+    assert!(run.notes.is_empty(), "{:?}", run.notes);
+    assert_eq!(rig.scripts().len(), sent_before_kill, "{:?}", rig.scripts());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_streaming_board_is_left_in_critical_with_a_note() {
     let rig = rig_with(Options {

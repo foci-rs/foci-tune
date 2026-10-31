@@ -548,6 +548,7 @@ pub fn fast_config() -> EngineConfig {
         kill_timeout: Duration::from_millis(300),
         min_free_bytes: 0,
         loss_poll: Duration::from_millis(10),
+        shutdown_notice: Duration::from_millis(300),
     }
 }
 
