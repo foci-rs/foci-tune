@@ -39,3 +39,12 @@ fn welch_peak_of_short_or_nan_input_is_nan() {
     assert!(welch_peak_hz(&[1.0; 100], 1000.0, (60.0, 490.0)).is_nan());
     assert!(welch_peak_hz(&[f64::NAN; 1000], 1000.0, (60.0, 490.0)).is_nan());
 }
+
+#[test]
+fn welch_peak_ties_resolve_to_the_lowest_bin_in_band() {
+    let flat = [3.0; 1000];
+
+    let peak = welch_peak_hz(&flat, 1000.0, (60.0, 490.0));
+
+    assert_eq!(peak, 62.5);
+}

@@ -22,7 +22,8 @@ pub(crate) fn moving_mean_detrend(x: &[f64], window: usize) -> Vec<f64> {
 
 /// Frequency in Hz of the largest Welch PSD bin strictly inside `band`.
 ///
-/// Uses 256-sample periodic Hann segments with 50% overlap, each mean-removed.
+/// Uses 256-sample periodic Hann segments with 50% overlap, each mean-removed. Equal bins
+/// resolve to the lowest frequency, as numpy's `argmax` in the reference script does.
 /// Returns NaN when `x` is shorter than one segment or no finite bin lies in `band`.
 pub fn welch_peak_hz(x: &[f64], fs_hz: f64, band: (f64, f64)) -> f64 {
     if x.len() < SEGMENT {
@@ -54,6 +55,6 @@ pub fn welch_peak_hz(x: &[f64], fs_hz: f64, band: (f64, f64)) -> f64 {
         .enumerate()
         .map(|(k, &p)| (k as f64 * bin_hz, p))
         .filter(|&(f, p)| f > band.0 && f < band.1 && p.is_finite())
-        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .reduce(|best, bin| if bin.1 > best.1 { bin } else { best })
         .map_or(f64::NAN, |(f, _)| f)
 }
