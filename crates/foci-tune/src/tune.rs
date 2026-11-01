@@ -1,13 +1,29 @@
-//! Tune records: the plan, per-step progress and per-rung results of an automated tune.
+//! Tune records and the scheduler that runs one step of a tune: its ladder of rungs, one rung
+//! at a time in ascending gain order, with a verdict after every rung.
+
+use std::collections::HashMap;
+use std::io;
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use foci_tune_analysis::ladder::{LadderAxis, RungOutcome};
-use foci_tune_analysis::recommend::Recommended;
-use foci_tune_analysis::verdict::{Gates, LadderAssessment, RepeatResult};
+use foci_tune_analysis::recommend::{Recommended, recommend};
+use foci_tune_analysis::rungs::{Rungs, SeedRefused, rung_values, seed_from};
+use foci_tune_analysis::verdict::{Gates, Halt, LadderAssessment, RepeatResult, assess_ladder};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
+use crate::engine::{CommandError, Engine, EngineEvent, Precondition};
 pub use crate::model::TuneId;
-use crate::model::{ChannelMetrics, Filters, FitOutcome, Gains, Run, RunId, RunState, SessionId};
+use crate::model::{
+    ChannelMetrics, ControlSnapshot, FORMAT_VERSION, Filters, FitOutcome, Gains, Run, RunId,
+    RunRequest, RunState, Session, SessionId,
+};
+use crate::moonraker::MoonrakerApi;
 use crate::pattern::Pattern;
+use crate::stimulus::RunKind;
+use crate::store::{Store, StoreError};
 
 /// Probe run parameters for every step of a tune.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -199,6 +215,91 @@ pub struct Tune {
     pub created_unix_s: u64,
 }
 
+const AXES: [LadderAxis; 3] = [
+    LadderAxis::VelocityP,
+    LadderAxis::VelocityICornerHz,
+    LadderAxis::PositionP,
+];
+const MAX_SPEEDS: usize = 3;
+const STORE_POLL: Duration = Duration::from_millis(50);
+
+/// Where a step's seed comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Seed {
+    /// The axis' live gain, read when the step is prepared.
+    Live,
+    /// A value in the axis' display unit: raw for velocity P and position P, Hz for the
+    /// velocity I corner.
+    Typed(f64),
+}
+
+/// The operator's setup of one step.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StepRequest {
+    /// Seed of the ladder.
+    pub seed: Seed,
+    /// Repeats per rung, at least one.
+    pub repeats: u32,
+    /// Lowest rung exponent.
+    pub lower_k: i32,
+    /// Highest rung exponent, at least `lower_k`.
+    pub upper_k: i32,
+}
+
+/// A prepared step, announced to the operator before it is confirmed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepPlan {
+    /// Axis the ladder varies.
+    pub axis: LadderAxis,
+    /// Planned rungs and the reasons any were left out.
+    pub rungs: Rungs,
+    /// Runs the step submits, including the drift re-run of the seed rung.
+    pub run_count: usize,
+    /// What will happen, meant for display before the operator confirms.
+    pub announcement: String,
+}
+
+/// Why a tune operation was refused or failed.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum TuneError {
+    /// The stepper's control state could not be read; the text says why.
+    #[error("no control state: {0}")]
+    NoControlState(String),
+    /// The seed cannot start a ladder.
+    #[error(transparent)]
+    SeedRefused(#[from] SeedRefused),
+    /// The stepper already has a tune that is not done or abandoned.
+    #[error("the stepper already has the unfinished tune {0}")]
+    StepperBusy(TuneId),
+    /// The operation does not fit the tune's progress; the text says why.
+    #[error("{0}")]
+    OutOfOrder(String),
+    /// No step is announced, so there is nothing to confirm.
+    #[error("no step is announced")]
+    NotAnnounced,
+    /// No such tune in the store.
+    #[error("unknown tune {0}")]
+    NotFound(TuneId),
+    /// The engine refused or failed; the text is its reason.
+    #[error("{0}")]
+    Engine(String),
+    /// A run precondition failed.
+    #[error(transparent)]
+    Precondition(#[from] Precondition),
+    /// The setup or step request is not valid; the text says why.
+    #[error("{0}")]
+    InvalidRequest(String),
+    /// The store failed; the text is the I/O error.
+    #[error("tune store: {0}")]
+    Store(String),
+}
+
+impl From<io::Error> for TuneError {
+    fn from(e: io::Error) -> Self {
+        Self::Store(e.to_string())
+    }
+}
+
 /// Measurements of one repeat from its runs, each `None` when the run is missing.
 ///
 /// `tracking` holds one run per chosen speed, in the setup's order. Only a `Done` run
@@ -237,4 +338,792 @@ pub fn repeat_result(
 fn done_channel(run: Option<&Run>) -> Option<&ChannelMetrics> {
     let run = run.filter(|r| r.state == RunState::Done)?;
     run.metrics.as_ref()?.channels.iter().find(|c| c.declared)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+fn now_s() -> u64 {
+    now_ms() / 1000
+}
+
+fn axis_name(axis: LadderAxis) -> &'static str {
+    match axis {
+        LadderAxis::VelocityP => "velocity P",
+        LadderAxis::VelocityICornerHz => "velocity I corner (Hz)",
+        LadderAxis::PositionP => "position P",
+    }
+}
+
+fn shown_text(axis: LadderAxis, shown: f64) -> String {
+    match axis {
+        LadderAxis::VelocityICornerHz => format!("{shown:.1} Hz"),
+        LadderAxis::VelocityP | LadderAxis::PositionP => format!("{shown:.0}"),
+    }
+}
+
+fn halt_text(halt: Halt, gates: &Gates) -> String {
+    match halt {
+        Halt::BelowFloor { median } => format!(
+            "median damping {median:.3} is below the floor {}",
+            gates.damping_floor
+        ),
+        Halt::DampingUnassessable => "damping unassessable".to_owned(),
+        Halt::StandstillBaselineUnassessable => "standstill baseline unassessable".to_owned(),
+    }
+}
+
+fn stop_text(run: &Run) -> Option<String> {
+    let id = &run.id;
+    match &run.state {
+        RunState::Done | RunState::NotComparable(_) => None,
+        RunState::Failed(r) => Some(format!("run {id} failed: {r}")),
+        RunState::Skipped(r) => Some(format!("run {id} skipped: {r}")),
+        other => Some(format!("run {id} ended {}", other.name())),
+    }
+}
+
+fn snapshot_of(c: &ControlSnapshot) -> (Gains, Filters) {
+    (
+        Gains {
+            velocity_p: c.velocity_p,
+            velocity_i: c.velocity_i,
+            position_p: c.position_p,
+            position_i: c.position_i,
+        },
+        Filters {
+            velocity_hz: c.velocity_filter_hz,
+            torque_hz: c.torque_filter_hz,
+            position_hz: c.position_filter_hz,
+            flux_hz: c.flux_filter_hz,
+        },
+    )
+}
+
+fn with_axis(mut gains: Gains, axis: LadderAxis, raw: i32) -> Gains {
+    match axis {
+        LadderAxis::VelocityP => gains.velocity_p = raw,
+        LadderAxis::VelocityICornerHz => gains.velocity_i = raw,
+        LadderAxis::PositionP => gains.position_p = raw,
+    }
+    gains
+}
+
+fn live_seed(axis: LadderAxis, gains: &Gains, pwm_hz: u32) -> Result<i32, SeedRefused> {
+    match axis {
+        LadderAxis::VelocityP => seed_from(axis, f64::from(gains.velocity_p), pwm_hz),
+        LadderAxis::PositionP => seed_from(axis, f64::from(gains.position_p), pwm_hz),
+        LadderAxis::VelocityICornerHz => Ok(gains.velocity_i),
+    }
+}
+
+fn rung_record(shown: f64, raw: i32) -> RungRecord {
+    RungRecord {
+        shown,
+        raw,
+        run_ids: Vec::new(),
+        started_unix_ms: None,
+        ended_unix_ms: None,
+        skipped: None,
+        repeat_values: Vec::new(),
+        run_times: Vec::new(),
+    }
+}
+
+fn runs_per_repeat(setup: &TuneSetup) -> usize {
+    setup.speeds_mm_s.len() + 2
+}
+
+/// Index of the rung at `k = 0`, if the ladder holds it.
+fn seed_index(step: &TuneStep) -> Option<usize> {
+    let seed = rung_values(step.axis, step.seed_raw, step.pwm_hz, 0, 0);
+    let raw = seed.values.first()?.raw;
+    step.rungs.iter().position(|r| r.raw == raw)
+}
+
+fn assess(step: &TuneStep, setup: &TuneSetup) -> LadderAssessment {
+    let results: Vec<Vec<RepeatResult>> =
+        step.rungs.iter().map(|r| r.repeat_values.clone()).collect();
+    assess_ladder(
+        &results,
+        step.repeats as usize,
+        &setup.gates,
+        setup.include_marginal,
+    )
+}
+
+fn drift_records(
+    first: &LadderAssessment,
+    seed: usize,
+    rerun: &RepeatResult,
+    speeds: &[f64],
+) -> Vec<DriftRecord> {
+    let Some(medians) = first.medians.get(seed) else {
+        return Vec::new();
+    };
+    let rerun_zeta = match rerun.zeta {
+        RungOutcome::Assessed(z) => Some(z),
+        RungOutcome::Unassessable => None,
+    };
+    let mut out = vec![DriftRecord {
+        metric: "zeta".to_owned(),
+        first: medians.zeta,
+        rerun: rerun_zeta,
+    }];
+    out.extend(speeds.iter().enumerate().map(|(s, speed)| DriftRecord {
+        metric: format!("p99 {speed} mm/s"),
+        first: medians.p99_by_speed.get(s).copied().flatten(),
+        rerun: rerun.p99_by_speed.get(s).copied().flatten(),
+    }));
+    out.push(DriftRecord {
+        metric: "worst torque sd".to_owned(),
+        first: medians.worst_torque_sd,
+        rerun: rerun.worst_torque_sd,
+    });
+    out
+}
+
+/// Which record of the running step a repeat's runs are filed in.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    Rung(usize),
+    Drift,
+}
+
+/// What a step needs from its tune while it runs; fixed between confirm and the step's end.
+struct StepContext {
+    tune: TuneId,
+    setup: TuneSetup,
+    index: usize,
+    axis: LadderAxis,
+    repeats: u32,
+    sessions: StepSessions,
+    base: (Gains, Filters),
+}
+
+impl StepContext {
+    fn new(tune: &Tune) -> Option<Self> {
+        let index = tune.steps.len().checked_sub(1)?;
+        let step = &tune.steps[index];
+        Some(Self {
+            tune: tune.id.clone(),
+            setup: tune.setup.clone(),
+            index,
+            axis: step.axis,
+            repeats: step.repeats,
+            sessions: step.sessions.clone(),
+            base: step.base,
+        })
+    }
+
+    fn request(&self, kind: RunKind, shown: f64, raw: i32) -> RunRequest {
+        let session = match &kind {
+            RunKind::Probe { .. } => &self.sessions.probe,
+            RunKind::Tracking { .. } => &self.sessions.tracking,
+            RunKind::Standstill { .. } => &self.sessions.standstill,
+        };
+        RunRequest {
+            session: session.clone(),
+            stepper: self.setup.stepper.clone(),
+            kind,
+            pattern: self.setup.pattern,
+            gains: with_axis(self.base.0, self.axis, raw),
+            filters: self.base.1,
+            ladder_value: Some(shown),
+        }
+    }
+}
+
+/// How a step's run loop ended.
+enum Ended {
+    /// Every rung ran, or the ladder halted on a gate.
+    Completed { halted: bool },
+    /// A run did not finish; the reason is recorded on the step.
+    Stopped(String),
+    /// The tune left `Running` under the loop, so it records nothing more.
+    Superseded,
+}
+
+struct Shared<M> {
+    engine: Arc<Engine<M>>,
+    store: Store,
+    steppers: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+/// Runs tune steps: prepares and announces a step, starts it on the operator's confirmation,
+/// and submits its core runs one at a time.
+///
+/// Every state transition of a tune holds its stepper's async mutex, so of two concurrent
+/// transitions on one stepper exactly one succeeds. The scheduler only submits core runs; it
+/// never sends motion or enable commands of its own.
+pub struct TuneScheduler<M> {
+    shared: Arc<Shared<M>>,
+}
+
+impl<M> Clone for TuneScheduler<M> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
+    /// A scheduler over `engine` and `store`; tunes are read from and written to `store`.
+    pub fn new(engine: Arc<Engine<M>>, store: Store) -> Self {
+        Self {
+            shared: Arc::new(Shared {
+                engine,
+                store,
+                steppers: StdMutex::default(),
+            }),
+        }
+    }
+
+    /// Creates a tune for `setup.stepper` with the stepper's live gains and filters as its
+    /// snapshot, written to the store before returning.
+    ///
+    /// # Errors
+    /// [`TuneError::InvalidRequest`] for a setup without one to three speeds,
+    /// [`TuneError::Precondition`] for a locked stepper or a refused read,
+    /// [`TuneError::StepperBusy`] while the stepper has an unfinished tune,
+    /// [`TuneError::NoControlState`] when the control state cannot be read, and store errors.
+    pub async fn create(&self, setup: TuneSetup) -> Result<TuneId, TuneError> {
+        if setup.speeds_mm_s.is_empty() || setup.speeds_mm_s.len() > MAX_SPEEDS {
+            return Err(TuneError::InvalidRequest(format!(
+                "a tune needs one to {MAX_SPEEDS} tracking speeds"
+            )));
+        }
+        let s = &self.shared;
+        let _held = s.hold(&setup.stepper).await;
+        s.refuse_locked(&setup.stepper)?;
+        if let Some(busy) = s.store.nonterminal_tune_for(&setup.stepper)? {
+            return Err(TuneError::StepperBusy(busy));
+        }
+        let control = s.read_control_state(&setup.stepper).await?;
+        let tune = Tune {
+            format_version: FORMAT_VERSION,
+            id: TuneId::generate(SystemTime::now()),
+            setup,
+            snapshot: snapshot_of(&control),
+            steps: Vec::new(),
+            state: TuneState::Ready,
+            created_unix_s: now_s(),
+        };
+        s.store.write_tune(&tune)?;
+        Ok(tune.id)
+    }
+
+    /// Plans the tune's next step (velocity P, then velocity I, then position P) from a fresh
+    /// read of the stepper's control state, creates its sessions and announces it. Nothing
+    /// runs until [`TuneScheduler::confirm_step`].
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the tune is ready and the previous step has a chosen
+    /// value, [`TuneError::InvalidRequest`] for zero repeats, an empty exponent range or no
+    /// writable rung, [`TuneError::NoControlState`], [`TuneError::SeedRefused`], and store
+    /// errors.
+    pub async fn prepare_step(
+        &self,
+        tune: &TuneId,
+        request: StepRequest,
+    ) -> Result<StepPlan, TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        let axis = next_axis(&record)?;
+        if request.repeats == 0 || request.lower_k > request.upper_k {
+            return Err(TuneError::InvalidRequest(
+                "a step needs at least one repeat and lower_k at most upper_k".to_owned(),
+            ));
+        }
+        let stepper = record.setup.stepper.clone();
+        s.refuse_locked(&stepper)?;
+        let control = s.read_control_state(&stepper).await?;
+        let base = snapshot_of(&control);
+        let seed_raw = match request.seed {
+            Seed::Live => live_seed(axis, &base.0, control.pwm_hz)?,
+            Seed::Typed(shown) => seed_from(axis, shown, control.pwm_hz)?,
+        };
+        let rungs = rung_values(
+            axis,
+            seed_raw,
+            control.pwm_hz,
+            request.lower_k,
+            request.upper_k,
+        );
+        let (Some(lowest), Some(highest)) = (rungs.values.first(), rungs.values.last()) else {
+            return Err(TuneError::InvalidRequest(
+                "no rung of the ladder can be written".to_owned(),
+            ));
+        };
+        let announcement_range = (lowest.shown, highest.shown);
+        let sessions = s.create_sessions(&record, record.steps.len() + 1, base)?;
+        let step = TuneStep {
+            axis,
+            seed_raw,
+            repeats: request.repeats,
+            lower_k: request.lower_k,
+            upper_k: request.upper_k,
+            pwm_hz: control.pwm_hz,
+            base,
+            sessions,
+            rungs: rungs
+                .values
+                .iter()
+                .map(|v| rung_record(v.shown, v.raw))
+                .collect(),
+            chosen: None,
+            started_unix_ms: None,
+            ended_unix_ms: None,
+            failed: None,
+            assessment: None,
+            recommendation: None,
+            drift_rung: None,
+            drift: Vec::new(),
+        };
+        let per_repeat = runs_per_repeat(&record.setup);
+        let ladder_runs = step.rungs.len() * request.repeats as usize * per_repeat;
+        let run_count = ladder_runs + seed_index(&step).map_or(0, |_| per_repeat);
+        let announcement = format!(
+            "{stepper}: {} ladder of {} rungs from {} to {}, {} repeats each, {run_count} runs. \
+             The machine will move once the step is confirmed.",
+            axis_name(axis),
+            step.rungs.len(),
+            shown_text(axis, announcement_range.0),
+            shown_text(axis, announcement_range.1),
+            request.repeats,
+        );
+        record.steps.push(step);
+        record.state = TuneState::Announced;
+        s.store.write_tune(&record)?;
+        Ok(StepPlan {
+            axis,
+            rungs,
+            run_count,
+            announcement,
+        })
+    }
+
+    /// The operator's start of the announced step: checks the run preconditions, marks the
+    /// tune running and starts submitting the step's runs on a task of its own.
+    ///
+    /// A run that ends failed, killed or aborted, or is refused, stops the step: the rungs not
+    /// yet run are recorded skipped, the step failed with the reason and without a
+    /// recommendation, and the tune awaits a choice, so the operator can pick a measured rung
+    /// or abandon. A `not comparable` run does not stop it.
+    ///
+    /// # Errors
+    /// [`TuneError::NotAnnounced`] unless a step is announced, [`TuneError::Precondition`]
+    /// when a run could not start now (a locked stepper among them), and store errors.
+    pub async fn confirm_step(&self, tune: &TuneId) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if record.state != TuneState::Announced {
+            return Err(TuneError::NotAnnounced);
+        }
+        s.engine.check(&record.setup.stepper).await?;
+        let Some(step) = record.steps.last_mut() else {
+            return Err(TuneError::NotAnnounced);
+        };
+        step.started_unix_ms = Some(now_ms());
+        let order = (0..step.rungs.len()).collect();
+        record.state = TuneState::Running;
+        s.store.write_tune(&record)?;
+        let Some(ctx) = StepContext::new(&record) else {
+            return Err(TuneError::NotAnnounced);
+        };
+        tokio::spawn(s.clone().execute(ctx, order, true));
+        Ok(())
+    }
+}
+
+fn next_axis(tune: &Tune) -> Result<LadderAxis, TuneError> {
+    let busy = match &tune.state {
+        TuneState::Ready => None,
+        TuneState::Announced => Some("a step is already announced"),
+        TuneState::Running => Some("a step is running"),
+        TuneState::AwaitingChoice => Some("the last step awaits a choice"),
+        TuneState::Done => Some("the tune is done"),
+        TuneState::Abandoned => Some("the tune was abandoned"),
+        TuneState::RestorePending | TuneState::RestoreFailed(_) => {
+            Some("the tune awaits its restore")
+        }
+    };
+    if let Some(reason) = busy {
+        return Err(TuneError::OutOfOrder(reason.to_owned()));
+    }
+    if tune.steps.last().is_some_and(|s| s.chosen.is_none()) {
+        return Err(TuneError::OutOfOrder(
+            "the previous step has no chosen value".to_owned(),
+        ));
+    }
+    AXES.get(tune.steps.len())
+        .copied()
+        .ok_or_else(|| TuneError::OutOfOrder("every step of the tune is complete".to_owned()))
+}
+
+impl<M: MoonrakerApi + 'static> Shared<M> {
+    async fn hold(&self, stepper: &str) -> OwnedMutexGuard<()> {
+        let mutex = self
+            .steppers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(stepper.to_owned())
+            .or_default()
+            .clone();
+        mutex.lock_owned().await
+    }
+
+    async fn hold_tune(&self, tune: &TuneId) -> Result<OwnedMutexGuard<()>, TuneError> {
+        let stepper = self.read(tune)?.setup.stepper;
+        Ok(self.hold(&stepper).await)
+    }
+
+    fn read(&self, tune: &TuneId) -> Result<Tune, TuneError> {
+        self.store.read_tune(tune).map_err(|e| match e {
+            StoreError::Io(io) if io.kind() == io::ErrorKind::NotFound => {
+                TuneError::NotFound(tune.clone())
+            }
+            other => TuneError::Store(other.to_string()),
+        })
+    }
+
+    fn refuse_locked(&self, stepper: &str) -> Result<(), TuneError> {
+        match self.engine.lock_state(stepper) {
+            Some(lock) => Err(Precondition::TuneLocked(lock.reason).into()),
+            None => Ok(()),
+        }
+    }
+
+    async fn read_control_state(&self, stepper: &str) -> Result<ControlSnapshot, TuneError> {
+        self.engine
+            .read_control_state(stepper)
+            .await
+            .map_err(|e| match e {
+                CommandError::Precondition(p) => TuneError::Precondition(p),
+                other => TuneError::NoControlState(other.to_string()),
+            })
+    }
+
+    fn create_sessions(
+        &self,
+        tune: &Tune,
+        number: usize,
+        base: (Gains, Filters),
+    ) -> io::Result<StepSessions> {
+        let setup = &tune.setup;
+        let create = |label: &str, kind: RunKind| {
+            self.store.new_session(&Session {
+                format_version: FORMAT_VERSION,
+                name: format!("{} step {number} {label}", tune.id),
+                created_unix_s: now_s(),
+                stepper: setup.stepper.clone(),
+                kind,
+                pattern: setup.pattern,
+                gains: base.0,
+                filters: base.1,
+                ladder: None,
+            })
+        };
+        Ok(StepSessions {
+            probe: create("probe", probe_kind(setup))?,
+            tracking: create(
+                "tracking",
+                RunKind::Tracking {
+                    speeds_mm_s: setup.speeds_mm_s.clone(),
+                    strokes: setup.tracking_strokes,
+                },
+            )?,
+            standstill: create("standstill", standstill_kind(setup))?,
+        })
+    }
+
+    /// Applies `change` to the running tune under its stepper's mutex and persists it.
+    /// Returns false, changing nothing, once the tune has left `Running`.
+    async fn update(
+        &self,
+        ctx: &StepContext,
+        change: impl FnOnce(&mut Tune),
+    ) -> Result<bool, TuneError> {
+        let _held = self.hold(&ctx.setup.stepper).await;
+        let mut tune = self.read(&ctx.tune)?;
+        if tune.state != TuneState::Running || tune.steps.len() != ctx.index + 1 {
+            return Ok(false);
+        }
+        change(&mut tune);
+        self.store.write_tune(&tune)?;
+        Ok(true)
+    }
+
+    async fn execute(self: Arc<Self>, ctx: StepContext, order: Vec<usize>, drift: bool) {
+        if let Err(e) = self.execute_step(&ctx, order, drift).await {
+            tracing::warn!(tune = %ctx.tune, error = %e, "tune step stopped");
+        }
+    }
+
+    async fn execute_step(
+        &self,
+        ctx: &StepContext,
+        order: Vec<usize>,
+        drift: bool,
+    ) -> Result<(), TuneError> {
+        let failed = match self.run_rungs(ctx, &order).await? {
+            Ended::Superseded => return Ok(()),
+            Ended::Stopped(reason) => Some(reason),
+            Ended::Completed { halted: true } => None,
+            Ended::Completed { halted: false } if drift => match self.run_drift(ctx).await? {
+                Ended::Superseded => return Ok(()),
+                Ended::Stopped(reason) => Some(reason),
+                Ended::Completed { .. } => None,
+            },
+            Ended::Completed { halted: false } => None,
+        };
+        self.update(ctx, |tune| {
+            let setup = tune.setup.clone();
+            let step = &mut tune.steps[ctx.index];
+            let assessment = assess(step, &setup);
+            let shown: Vec<f64> = step.rungs.iter().map(|r| r.shown).collect();
+            step.recommendation = failed.is_none().then(|| recommend(&assessment, &shown));
+            step.assessment = Some(assessment);
+            step.failed = failed;
+            step.ended_unix_ms = Some(now_ms());
+            tune.state = TuneState::AwaitingChoice;
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Runs the rungs in `order`, all repeats of one before the next, and assesses the ladder
+    /// after each rung.
+    async fn run_rungs(&self, ctx: &StepContext, order: &[usize]) -> Result<Ended, TuneError> {
+        for (n, &index) in order.iter().enumerate() {
+            let started = self
+                .update(ctx, |t| {
+                    t.steps[ctx.index].rungs[index].started_unix_ms = Some(now_ms());
+                })
+                .await?;
+            if !started {
+                return Ok(Ended::Superseded);
+            }
+            let (shown, raw) = {
+                let tune = self.read(&ctx.tune)?;
+                let rung = &tune.steps[ctx.index].rungs[index];
+                (rung.shown, rung.raw)
+            };
+            for _ in 0..ctx.repeats {
+                match self
+                    .run_repeat(ctx, Target::Rung(index), shown, raw)
+                    .await?
+                {
+                    Ended::Completed { .. } => {}
+                    Ended::Stopped(reason) => {
+                        let rest = order[n + 1..].to_vec();
+                        let skipped = format!("not run: {reason}");
+                        self.update(ctx, |t| {
+                            let step = &mut t.steps[ctx.index];
+                            step.rungs[index].ended_unix_ms = Some(now_ms());
+                            for i in rest {
+                                step.rungs[i].skipped = Some(skipped.clone());
+                            }
+                        })
+                        .await?;
+                        return Ok(Ended::Stopped(reason));
+                    }
+                    Ended::Superseded => return Ok(Ended::Superseded),
+                }
+            }
+            let mut halt = None;
+            let ok = self
+                .update(ctx, |t| {
+                    let setup = t.setup.clone();
+                    let step = &mut t.steps[ctx.index];
+                    step.rungs[index].ended_unix_ms = Some(now_ms());
+                    halt = assess(step, &setup).halt;
+                    if let Some((at, h)) = halt {
+                        let reason = format!("not run: {}", halt_text(h, &setup.gates));
+                        for rung in step.rungs.iter_mut().skip(at + 1) {
+                            if rung.run_ids.is_empty() && rung.skipped.is_none() {
+                                rung.skipped = Some(reason.clone());
+                            }
+                        }
+                    }
+                })
+                .await?;
+            if !ok {
+                return Ok(Ended::Superseded);
+            }
+            if let Some((_, h)) = halt {
+                let damping = !matches!(h, Halt::StandstillBaselineUnassessable);
+                return Ok(Ended::Completed { halted: damping });
+            }
+        }
+        Ok(Ended::Completed { halted: false })
+    }
+
+    /// Runs the seed rung once more and records each metric's drift from its first median.
+    async fn run_drift(&self, ctx: &StepContext) -> Result<Ended, TuneError> {
+        let tune = self.read(&ctx.tune)?;
+        let step = &tune.steps[ctx.index];
+        let Some(seed) = seed_index(step) else {
+            return Ok(Ended::Completed { halted: false });
+        };
+        if step.rungs[seed].repeat_values.len() < ctx.repeats as usize {
+            return Ok(Ended::Completed { halted: false });
+        }
+        let (shown, raw) = (step.rungs[seed].shown, step.rungs[seed].raw);
+        let mut record = rung_record(shown, raw);
+        record.started_unix_ms = Some(now_ms());
+        if !self
+            .update(ctx, |t| t.steps[ctx.index].drift_rung = Some(record))
+            .await?
+        {
+            return Ok(Ended::Superseded);
+        }
+        let ended = self.run_repeat(ctx, Target::Drift, shown, raw).await?;
+        if !matches!(ended, Ended::Completed { .. }) {
+            return Ok(ended);
+        }
+        let ok = self
+            .update(ctx, |t| {
+                let setup = t.setup.clone();
+                let step = &mut t.steps[ctx.index];
+                let first = assess(step, &setup);
+                if let Some(rung) = step.drift_rung.as_mut() {
+                    rung.ended_unix_ms = Some(now_ms());
+                    if let Some(rerun) = rung.repeat_values.first() {
+                        step.drift = drift_records(&first, seed, rerun, &setup.speeds_mm_s);
+                    }
+                }
+            })
+            .await?;
+        Ok(if ok {
+            Ended::Completed { halted: false }
+        } else {
+            Ended::Superseded
+        })
+    }
+
+    /// Submits one repeat: the probe, one tracking run per chosen speed, then the standstill
+    /// run, each after the previous one finished. Files every run and the repeat's result in
+    /// `target`.
+    async fn run_repeat(
+        &self,
+        ctx: &StepContext,
+        target: Target,
+        shown: f64,
+        raw: i32,
+    ) -> Result<Ended, TuneError> {
+        let setup = &ctx.setup;
+        let mut kinds = vec![probe_kind(setup)];
+        kinds.extend(setup.speeds_mm_s.iter().map(|&speed| RunKind::Tracking {
+            speeds_mm_s: vec![speed],
+            strokes: setup.tracking_strokes,
+        }));
+        kinds.push(standstill_kind(setup));
+        let mut runs = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            let request = ctx.request(kind, shown, raw);
+            let mut events = self.engine.events();
+            let started = now_ms();
+            let run = match self.engine.submit(request).await {
+                Ok(id) => self.wait_finished(&id, &mut events).await?,
+                Err(p) => return Ok(Ended::Stopped(format!("run refused: {p}"))),
+            };
+            let time = RunTime {
+                id: run.id.clone(),
+                started_unix_ms: started,
+                ended_unix_ms: now_ms(),
+            };
+            let filed = self
+                .update(ctx, |t| {
+                    let step = &mut t.steps[ctx.index];
+                    if let Some(rung) = target_rung(step, target) {
+                        rung.run_ids.push(time.id.clone());
+                        rung.run_times.push(time);
+                    }
+                })
+                .await?;
+            if !filed {
+                return Ok(Ended::Superseded);
+            }
+            if let Some(reason) = stop_text(&run) {
+                return Ok(Ended::Stopped(reason));
+            }
+            runs.push(run);
+        }
+        let speeds = setup.speeds_mm_s.len();
+        let tracking: Vec<Option<&Run>> = runs[1..=speeds].iter().map(Some).collect();
+        let result = repeat_result(runs.first(), &tracking, runs.get(speeds + 1));
+        let filed = self
+            .update(ctx, |t| {
+                if let Some(rung) = target_rung(&mut t.steps[ctx.index], target) {
+                    rung.repeat_values.push(result);
+                }
+            })
+            .await?;
+        Ok(if filed {
+            Ended::Completed { halted: false }
+        } else {
+            Ended::Superseded
+        })
+    }
+
+    /// Waits for `run`'s final state. Falls back to polling the store when the event stream
+    /// lagged past it.
+    async fn wait_finished(
+        &self,
+        run: &RunId,
+        events: &mut tokio::sync::broadcast::Receiver<EngineEvent>,
+    ) -> Result<Run, TuneError> {
+        loop {
+            match events.recv().await {
+                Ok(EngineEvent::Finished(done)) if done.id == *run => return Ok(*done),
+                Ok(_) => {}
+                Err(RecvError::Lagged(_)) => return self.poll_finished(run).await,
+                Err(RecvError::Closed) => {
+                    return Err(TuneError::Engine("the engine stopped".to_owned()));
+                }
+            }
+        }
+    }
+
+    async fn poll_finished(&self, run: &RunId) -> Result<Run, TuneError> {
+        loop {
+            if let Some(session) = self.store.find_run(run)?
+                && let Ok(found) = self.store.read_run(&session, run)
+                && found.state.is_terminal()
+            {
+                return Ok(found);
+            }
+            tokio::time::sleep(STORE_POLL).await;
+        }
+    }
+}
+
+fn target_rung(step: &mut TuneStep, target: Target) -> Option<&mut RungRecord> {
+    match target {
+        Target::Rung(i) => step.rungs.get_mut(i),
+        Target::Drift => step.drift_rung.as_mut(),
+    }
+}
+
+fn probe_kind(setup: &TuneSetup) -> RunKind {
+    RunKind::Probe {
+        speed_mm_s: setup.probe.speed_mm_s,
+        high_gain: setup.probe.high_gain,
+        segments_between_toggles: setup.probe.segments_between_toggles,
+        strokes: setup.probe.strokes,
+    }
+}
+
+fn standstill_kind(setup: &TuneSetup) -> RunKind {
+    RunKind::Standstill {
+        rests: setup.standstill.rests,
+        dwell_s: setup.standstill.dwell_s,
+    }
 }
