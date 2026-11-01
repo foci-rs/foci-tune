@@ -246,6 +246,7 @@ export type FitOutcome =
       offset: number;
       tau_s: number;
       residual_rms: number;
+      admissible_starts?: number;
     }
   | { status: "failed"; reason: string };
 
@@ -449,14 +450,33 @@ export interface RungRecord {
   skipped: string | null;
   repeat_values: RepeatResult[];
   run_times: RunTime[];
+  waived: { unix_ms: number; reason: Pause } | null;
+  superseded: RungAttempt[];
 }
+
+export interface RungAttempt {
+  run_ids: RunId[];
+  run_times: RunTime[];
+  repeat_values: RepeatResult[];
+  ended_unix_ms: number | null;
+}
+
+export type Pause = "DampingUnassessable" | "StandstillBaselineUnassessable";
+
+export interface PauseRecord {
+  rung: number;
+  reason: Pause;
+  unix_ms: number;
+}
+
+export type TuneDecision = "continue" | "rerun" | "stop";
 
 export type RungNote =
   | { OutOfRange: number }
   | { RoundedToZero: number }
   | { Merged: { shown: number; into: number } };
 
-export type UnscoredReason = "TrackingMissing" | "StandstillMissing";
+export type UnscoredReason = "TrackingMissing" | "StandstillMissing" | "DampingWaived";
 export type InadmissibleReason = "DampingBelowFloor" | "StandstillHigh";
 
 export interface RungVerdict {
@@ -481,6 +501,7 @@ export interface LadderAssessment {
   verdicts: RungVerdict[];
   medians: RungMedians[];
   halt: [number, Halt] | null;
+  pause?: [number, Pause] | null;
 }
 
 export type Recommendation =
@@ -523,6 +544,8 @@ export interface TuneStep {
   recommendation: Recommended | null;
   drift_rung: RungRecord | null;
   drift: TuneDrift[];
+  paused: PauseRecord | null;
+  standstill_gate_off: number | null;
 }
 
 export type TuneState =
@@ -530,6 +553,7 @@ export type TuneState =
   | "Announced"
   | "Running"
   | "AwaitingChoice"
+  | "Paused"
   | "Done"
   | "Abandoned"
   | "RestorePending"
@@ -717,6 +741,9 @@ export const postTuneExtension = (id: TuneId, direction: "below" | "above") =>
 
 export const postTuneChoice = (id: TuneId, choice: TuneChoiceBody) =>
   request<{ tune: TuneId; chosen: true }>("POST", tunePath(id, "/choice"), { choice });
+
+export const postTuneDecision = (id: TuneId, decision: TuneDecision) =>
+  request<unknown>("POST", tunePath(id, "/decision"), { decision });
 
 export const postTuneAbandon = (id: TuneId) => request<unknown>("POST", tunePath(id, "/abandon"));
 

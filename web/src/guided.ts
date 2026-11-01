@@ -1,6 +1,7 @@
 import type {
   Halt,
   LadderAssessment,
+  Pause,
   InadmissibleReason,
   RungNote,
   Tune,
@@ -73,6 +74,7 @@ export interface RungView {
 const UNSCORED_TEXT: Record<UnscoredReason, string> = {
   TrackingMissing: "tracking missing",
   StandstillMissing: "standstill missing",
+  DampingWaived: "damping waived",
 };
 
 const INADMISSIBLE_TEXT: Record<InadmissibleReason, string> = {
@@ -80,10 +82,12 @@ const INADMISSIBLE_TEXT: Record<InadmissibleReason, string> = {
   StandstillHigh: "standstill high",
 };
 
+function pauseText(reason: Pause): string {
+  return reason === "DampingUnassessable" ? "damping unassessable" : "standstill baseline unassessable";
+}
+
 function haltText(halt: Halt): string {
-  if (typeof halt === "string") {
-    return halt === "DampingUnassessable" ? "damping unassessable" : "standstill baseline unassessable";
-  }
+  if (typeof halt === "string") return pauseText(halt);
   return `damping median ${halt.BelowFloor.median.toFixed(3)} below the floor`;
 }
 
@@ -98,6 +102,7 @@ export interface StepSummary {
   recommendation: RecommendationView | null;
   extend: "Below" | "Above" | null;
   halt: string | null;
+  pause: string | null;
   failed: string | null;
 }
 
@@ -129,12 +134,14 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
     } else recommendation = { kind: "none" };
   }
   const halt = usableAssessment(s)?.halt ?? null;
+  const pause = s.paused !== null ? ([s.paused.rung, s.paused.reason] as const) : (usableAssessment(s)?.pause ?? null);
   return {
     axis: s.axis,
     notes: s.notes.map(noteText),
     recommendation,
     extend: usableAssessment(s) === null ? null : (s.recommendation?.extend ?? null),
     halt: halt === null ? null : `Assessment stopped at rung ${halt[0] + 1}: ${haltText(halt[1])}`,
+    pause: pause === null ? null : `Paused at rung ${pause[0] + 1}: ${pauseText(pause[1])}`,
     failed: s.failed,
   };
 }
@@ -145,6 +152,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
   const assessment = usableAssessment(s);
   const choice = assessment === null ? undefined : s.recommendation?.choice;
   const halt = assessment?.halt ?? null;
+  const pause = assessment?.pause ?? null;
   return s.rungs.map((rung, index) => {
     const verdict = assessment?.verdicts[index];
     const medians = assessment?.medians[index];
@@ -153,13 +161,18 @@ export function rungView(tune: Tune, step: number): RungView[] {
 
     let text: string;
     if (rung.skipped !== null) text = `Skipped: ${rung.skipped}`;
+    else if (rung.waived !== null) text = `Waived: ${pauseText(rung.waived.reason)}`;
     else if (verdict?.inadmissible != null) text = `Inadmissible: ${INADMISSIBLE_TEXT[verdict.inadmissible]}`;
     else if (verdict?.unscored != null) text = `Unscored: ${UNSCORED_TEXT[verdict.unscored]}`;
     else if (verdict?.marginal) text = "Marginal damping";
     else if (verdict?.score != null) text = "Admissible";
     else if (assessment !== null && !flagged) {
       text =
-        halt !== null && index > halt[0]
+        pause !== null && index === pause[0]
+          ? `Not assessed: ${pauseText(pause[1])}`
+          : pause !== null && index > pause[0]
+            ? `Not assessed: paused at rung ${pause[0] + 1}`
+            : halt !== null && index > halt[0]
           ? `Not assessed: assessment stopped at rung ${halt[0] + 1}`
           : halt !== null && index === halt[0]
             ? `Not assessed: ${haltText(halt[1])}`
@@ -167,6 +180,8 @@ export function rungView(tune: Tune, step: number): RungView[] {
     } else if (repeatsDone >= s.repeats) text = "Measured, awaiting verdict";
     else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
     else text = "Pending";
+
+    if (s.standstill_gate_off !== null) text = `${text} (Standstill gate off)`;
 
     let recommended: RecommendationKind | null = null;
     if (choice !== undefined && "Measured" in choice && choice.Measured.rung === index) recommended = "measured";
@@ -211,6 +226,7 @@ export interface Actions {
   prepare: boolean;
   start: boolean;
   choose: boolean;
+  decide: boolean;
   extension: boolean;
   abandon: boolean;
   restore: boolean;
@@ -223,6 +239,7 @@ export function availableActions(tune: Tune, lock: string | null): Actions {
     prepare: false,
     start: false,
     choose: false,
+    decide: false,
     extension: false,
     abandon: false,
     restore: false,
@@ -238,6 +255,8 @@ export function availableActions(tune: Tune, lock: string | null): Actions {
       return { ...off, abandon: true };
     case "AwaitingChoice":
       return { ...off, choose: true, extension: true, abandon: true };
+    case "Paused":
+      return { ...off, decide: true, abandon: true };
     default:
       return off;
   }
@@ -277,6 +296,7 @@ export function stateText(state: TuneState): string {
     Announced: "Step announced",
     Running: "Running",
     AwaitingChoice: "Awaiting your choice",
+    Paused: "Paused: waiting for your decision",
     Done: "Done",
     Abandoned: "Abandoned",
     RestorePending: "Awaiting its restore",

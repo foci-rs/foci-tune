@@ -27,6 +27,8 @@ function rung(index: number, over: Partial<Tune["steps"][0]["rungs"][0]> = {}) {
     skipped: null,
     repeat_values: [],
     run_times: [],
+    waived: null,
+    superseded: [],
     ...over,
   };
 }
@@ -53,6 +55,8 @@ function step(over: Partial<TuneStep> = {}): TuneStep {
     recommendation: null,
     drift_rung: null,
     drift: [],
+    paused: null,
+    standstill_gate_off: null,
     ...over,
   };
 }
@@ -243,6 +247,7 @@ describe("availableActions", () => {
       prepare: false,
       start: false,
       choose: false,
+      decide: false,
       extension: false,
       abandon: false,
       restore: true,
@@ -405,5 +410,43 @@ describe("curve", () => {
     const t = tune("AwaitingChoice", [measured]);
     expect(recommendedGain(t, 0)).toEqual({ gain: t.steps[0].rungs[3].shown, kind: "measured" });
     expect(recommendedGain(tune("AwaitingChoice", [assessed()]), 0)).toBeNull();
+  });
+});
+
+describe("a paused step", () => {
+  test("offers decide and abandon only", () => {
+    const actions = availableActions(tune("Paused"), null);
+    expect(actions).toMatchObject({ decide: true, abandon: true, choose: false, extension: false, prepare: false });
+  });
+  test("summarises the pause with its rung and reason", () => {
+    const t = tune("Paused");
+    t.steps[0].paused = { rung: 1, reason: "DampingUnassessable", unix_ms: 1 };
+    t.steps[0].assessment = { verdicts: [], medians: [], halt: null, pause: [1, "DampingUnassessable"] };
+    expect(stepSummary(t, 0).pause).toBe("Paused at rung 2: damping unassessable");
+  });
+  test("explains a waived rung and a paused rung", () => {
+    const t = tune("Running");
+    t.steps[0].rungs[1].waived = { unix_ms: 1, reason: "DampingUnassessable" };
+    t.steps[0].assessment = {
+      verdicts: [none, { ...none, unscored: "DampingWaived", score: null }, none, none],
+      medians: [medians([null]), medians([null]), medians([null]), medians([null])],
+      halt: null,
+      pause: [2, "StandstillBaselineUnassessable"],
+    };
+    const rows = rungView(t, 0);
+    expect(rows[1].verdict).toContain("Waived: damping unassessable");
+    expect(rows[2].verdict).toContain("Not assessed: standstill baseline unassessable");
+  });
+  test("a halt of DampingUnassessable from an old record still reads as a halt", () => {
+    const t = tune("AwaitingChoice");
+    t.steps[0].assessment = { verdicts: [], medians: [], halt: [1, "DampingUnassessable"] };
+    t.steps[0].assessment.verdicts = [none, none, none, none];
+    t.steps[0].assessment.medians = [medians([]), medians([]), medians([]), medians([])];
+    expect(stepSummary(t, 0).halt).toContain("damping unassessable");
+  });
+  test("names the standstill gate as off", () => {
+    const t = tune("Running");
+    t.steps[0].standstill_gate_off = 5;
+    expect(rungView(t, 0)[0].verdict).toContain("Standstill gate off");
   });
 });

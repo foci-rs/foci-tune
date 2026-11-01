@@ -43,6 +43,8 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
               skipped: null,
               repeat_values: [],
               run_times: [],
+              waived: null,
+              superseded: [],
             })),
             notes: [],
             chosen: null,
@@ -55,6 +57,8 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
             recommendation: null,
             drift_rung: null,
             drift: [],
+            paused: null,
+            standstill_gate_off: null,
           },
         ]
       : [],
