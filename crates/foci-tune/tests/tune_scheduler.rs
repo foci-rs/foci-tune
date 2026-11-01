@@ -1115,3 +1115,63 @@ async fn final_step_produces_the_config_block_with_three_accepted_values() {
     let after = sched.choose(&id, Choice::Rung(0)).await;
     assert!(matches!(after, Err(TuneError::OutOfOrder(_))));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_extension_clears_the_assessment_while_its_rung_runs() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        for (raw, lag) in [(668, 60), (841, 40), (1060, 20), (1335, 30)] {
+            s.lag_by_velocity_p.insert(raw, lag);
+        }
+    });
+    let sched = scheduler(&rig);
+    let tune = run_step(&rig, &sched, step(-1, 1, 1)).await;
+    let id = tune.id.clone();
+    assert!(tune.steps[0].assessment.is_some());
+    let stimuli = rig.stimuli();
+
+    let gate = rig.hold_stimulus();
+    sched
+        .confirm_extension(&id, Extension::Above)
+        .await
+        .unwrap();
+    wait_stimuli(&rig, stimuli + 1).await;
+
+    let running = rig.store.read_tune(&id).unwrap();
+    let step = &running.steps[0];
+    assert_eq!(step.rungs.len(), 4);
+    assert!(step.assessment.is_none());
+    assert!(step.recommendation.is_none());
+
+    release(&rig, &gate);
+    let done = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    assert_eq!(done.steps[0].assessment.as_ref().unwrap().verdicts.len(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stored_run_count_is_the_announced_one() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    let plan = sched.prepare_step(&id, step(-1, 1, 2)).await.unwrap();
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().steps[0].run_count,
+        Some(plan.run_count)
+    );
+
+    sched.confirm_step(&id).await.unwrap();
+    let mut tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    tune.steps[0].chosen = Some(841);
+    tune.state = TuneState::Ready;
+    rig.store.write_tune(&tune).unwrap();
+    rig.a.sim(|s| s.channels[0].gains[1] = 0);
+
+    let plan = sched.prepare_step(&id, step(-1, 1, 2)).await.unwrap();
+
+    assert_eq!(plan.axis, LadderAxis::VelocityICornerHz);
+    let stored = rig.store.read_tune(&id).unwrap();
+    assert_eq!(stored.steps[1].seed_raw, 0);
+    assert!(stored.steps[1].rungs.iter().all(|r| r.raw != 0));
+    assert_eq!(stored.steps[1].run_count, Some(plan.run_count));
+    assert_eq!(plan.run_count, (3 * 2 + 1) * 3);
+}

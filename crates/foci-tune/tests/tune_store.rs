@@ -97,6 +97,7 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
             started_unix_ms: Some(1_700_000_000_000),
             ended_unix_ms: None,
             failed: None,
+            run_count: None,
             assessment: None,
             recommendation: None,
             drift_rung: None,

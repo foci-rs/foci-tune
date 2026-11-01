@@ -167,7 +167,12 @@ pub struct TuneStep {
     /// Why the step stopped early on a run that did not finish, if it did.
     #[serde(default)]
     pub failed: Option<String>,
-    /// Verdicts over the measured rungs, set when the step ends.
+    /// Runs the step announced when it was prepared, including the drift re-run; absent in
+    /// records written before it was stored.
+    #[serde(default)]
+    pub run_count: Option<usize>,
+    /// Verdicts over the measured rungs, set when the step ends and cleared when an extension
+    /// adds a rung, so verdicts always line up with `rungs`.
     #[serde(default)]
     pub assessment: Option<LadderAssessment>,
     /// Recommendation from `assessment`; absent after a failed run.
@@ -761,7 +766,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         };
         let announcement_range = (lowest.shown, highest.shown);
         let sessions = s.create_sessions(&record, record.steps.len() + 1, base)?;
-        let step = TuneStep {
+        let mut step = TuneStep {
             axis,
             seed_raw,
             repeats: request.repeats,
@@ -786,10 +791,12 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             drift_rung: None,
             drift: Vec::new(),
             notes: rungs.notes.clone(),
+            run_count: None,
         };
         let per_repeat = runs_per_repeat(&record.setup);
         let ladder_runs = step.rungs.len() * request.repeats as usize * per_repeat;
         let run_count = ladder_runs + seed_index(&step).map_or(0, |_| per_repeat);
+        step.run_count = Some(run_count);
         let announcement = format!(
             "{stepper}: {} ladder of {} rungs from {} to {}, {} repeats each, {run_count} runs. \
              The machine will move once the step is confirmed.",
@@ -902,6 +909,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             }
         };
         step.recommendation = None;
+        step.assessment = None;
         step.starts += 1;
         record.state = TuneState::Running;
         s.save(&record)?;
