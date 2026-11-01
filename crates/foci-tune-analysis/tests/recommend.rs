@@ -14,6 +14,7 @@ fn assessment(scores: &[Option<f64>], halt: Option<(usize, Halt)>) -> LadderAsse
             .collect(),
         medians: scores.iter().map(|_| RungMedians::default()).collect(),
         halt,
+        pause: None,
     }
 }
 

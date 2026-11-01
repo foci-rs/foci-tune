@@ -1,6 +1,7 @@
 use foci_tune_analysis::ladder::RungOutcome;
 use foci_tune_analysis::verdict::{
-    Gates, Halt, InadmissibleReason, RepeatResult, UnscoredReason, assess_ladder,
+    Gates, Halt, InadmissibleReason, LadderAssessment, Pause, RepeatResult, RungVerdict,
+    UnscoredReason, Waivers, assess_ladder, assess_ladder_with,
 };
 
 fn rep(zeta: f64, p99: &[Option<f64>], sd: Option<f64>) -> RepeatResult {
@@ -232,4 +233,145 @@ fn no_scored_rung_is_representable() {
 
     assert!(a.verdicts.iter().all(|v| v.score.is_none()));
     assert!(a.halt.is_none());
+}
+
+#[test]
+fn unassessable_damping_pauses_the_new_entry_point() {
+    let mut r1 = rung(0.2, [70.0, 70.0], 1.0, 3);
+    r1[1].zeta = RungOutcome::Unassessable;
+    let rungs = vec![
+        rung(0.2, [80.0, 80.0], 1.0, 3),
+        r1,
+        rung(0.2, [60.0, 60.0], 1.0, 3),
+    ];
+
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+
+    assert_eq!(a.pause, Some((1, Pause::DampingUnassessable)));
+    assert_eq!(a.halt, None);
+    assert_eq!(
+        a.verdicts[2],
+        RungVerdict::default(),
+        "rungs above a pause are not assessed"
+    );
+}
+
+#[test]
+fn a_waived_rung_is_unscored_and_assessment_continues_above_it() {
+    let mut r1 = rung(0.2, [70.0, 70.0], 1.0, 3);
+    r1[1].zeta = RungOutcome::Unassessable;
+    let rungs = vec![
+        rung(0.2, [80.0, 80.0], 1.0, 3),
+        r1,
+        rung(0.2, [60.0, 60.0], 1.0, 3),
+    ];
+    let waivers = Waivers {
+        continued: vec![false, true],
+        standstill_gate_off: false,
+    };
+
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &waivers);
+
+    assert_eq!(a.pause, None);
+    assert_eq!(a.verdicts[1].unscored, Some(UnscoredReason::DampingWaived));
+    assert_eq!(a.verdicts[1].score, None);
+    assert!(
+        a.verdicts[2].score.is_some(),
+        "the rung above the waived one is scored"
+    );
+}
+
+#[test]
+fn a_waived_rung_zero_still_provides_the_standstill_baseline() {
+    let mut r0 = rung(0.2, [80.0, 80.0], 1.0, 3);
+    r0[0].zeta = RungOutcome::Unassessable;
+    let rungs = vec![r0, rung(0.2, [70.0, 70.0], 5.0, 3)];
+    let waivers = Waivers {
+        continued: vec![true],
+        standstill_gate_off: false,
+    };
+
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &waivers);
+
+    assert_eq!(a.pause, None);
+    assert_eq!(a.verdicts[0].unscored, Some(UnscoredReason::DampingWaived));
+    assert_eq!(
+        a.verdicts[1].inadmissible,
+        Some(InadmissibleReason::StandstillHigh),
+        "5.0 > 2 x 1.0"
+    );
+}
+
+#[test]
+fn a_waived_rung_zero_without_a_usable_standstill_still_pauses_for_the_baseline() {
+    let mut r0 = vec![rep(0.2, &[Some(80.0), Some(80.0)], None); 3];
+    r0[0].zeta = RungOutcome::Unassessable;
+    let rungs = vec![r0, rung(0.2, [70.0, 70.0], 1.0, 3)];
+    let waivers = Waivers {
+        continued: vec![true],
+        standstill_gate_off: false,
+    };
+
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &waivers);
+
+    assert_eq!(a.pause, Some((0, Pause::StandstillBaselineUnassessable)));
+}
+
+#[test]
+fn below_floor_still_halts_under_the_new_entry_point() {
+    let rungs = vec![
+        rung(0.2, [80.0, 80.0], 1.0, 3),
+        rung(0.04, [70.0, 70.0], 1.0, 3),
+    ];
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    assert_eq!(a.halt, Some((1, Halt::BelowFloor { median: 0.04 })));
+    assert_eq!(a.pause, None);
+}
+
+#[test]
+fn an_unusable_standstill_baseline_pauses_and_the_disabled_gate_scores_without_one() {
+    let rungs = vec![
+        vec![rep(0.2, &[Some(80.0), Some(80.0)], None); 3],
+        rung(0.2, [70.0, 70.0], 5.0, 3),
+    ];
+
+    let paused = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    assert_eq!(
+        paused.pause,
+        Some((0, Pause::StandstillBaselineUnassessable))
+    );
+
+    let off = Waivers {
+        continued: vec![],
+        standstill_gate_off: true,
+    };
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &off);
+    assert_eq!(a.pause, None);
+    assert_eq!(
+        a.verdicts[0].unscored,
+        Some(UnscoredReason::StandstillMissing)
+    );
+    assert_eq!(
+        a.verdicts[1].inadmissible, None,
+        "no baseline, no StandstillHigh"
+    );
+    assert!(a.verdicts[1].score.is_some());
+}
+
+#[test]
+fn the_old_entry_point_folds_a_pause_into_a_halt() {
+    let mut r1 = rung(0.2, [70.0, 70.0], 1.0, 3);
+    r1[1].zeta = RungOutcome::Unassessable;
+    let rungs = vec![rung(0.2, [80.0, 80.0], 1.0, 3), r1];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.halt, Some((1, Halt::DampingUnassessable)));
+    assert_eq!(a.pause, None);
+}
+
+#[test]
+fn an_assessment_without_a_pause_field_deserialises() {
+    let v = serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"]});
+    let a: LadderAssessment = serde_json::from_value(v).unwrap();
+    assert_eq!(a.halt, Some((1, Halt::DampingUnassessable)));
+    assert_eq!(a.pause, None);
 }
