@@ -347,9 +347,10 @@ fn an_unusable_standstill_baseline_pauses_and_the_disabled_gate_scores_without_o
     };
     let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &off);
     assert_eq!(a.pause, None);
-    assert_eq!(
-        a.verdicts[0].unscored,
-        Some(UnscoredReason::StandstillMissing)
+    assert_eq!(a.verdicts[0].unscored, None);
+    assert!(
+        a.verdicts[0].score.is_some(),
+        "rung 0 is scored without its standstill"
     );
     assert_eq!(
         a.verdicts[1].inadmissible, None,
@@ -374,4 +375,21 @@ fn an_assessment_without_a_pause_field_deserialises() {
     let a: LadderAssessment = serde_json::from_value(v).unwrap();
     assert_eq!(a.halt, Some((1, Halt::DampingUnassessable)));
     assert_eq!(a.pause, None);
+}
+
+#[test]
+fn a_later_rung_without_a_standstill_metric_is_scored_when_the_gate_is_off() {
+    let rungs = vec![
+        rung(0.2, [80.0, 80.0], 1.0, 3),
+        vec![rep(0.2, &[Some(70.0), Some(70.0)], None); 3],
+    ];
+    let off = Waivers {
+        continued: vec![],
+        standstill_gate_off: true,
+    };
+
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &off);
+
+    assert_eq!(a.verdicts[1].unscored, None);
+    assert!(a.verdicts[1].score.is_some());
 }

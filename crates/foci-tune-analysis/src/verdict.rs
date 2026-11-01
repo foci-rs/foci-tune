@@ -256,7 +256,7 @@ pub fn assess_ladder_with(
             let tracking_complete = n_speeds > 0 && m.p99_by_speed.iter().all(Option::is_some);
             if !tracking_complete {
                 verdicts[i].unscored = Some(UnscoredReason::TrackingMissing);
-            } else if m.worst_torque_sd.is_none() {
+            } else if m.worst_torque_sd.is_none() && !waivers.standstill_gate_off {
                 verdicts[i].unscored = Some(UnscoredReason::StandstillMissing);
             }
         }
