@@ -118,6 +118,10 @@ id_type!(
     /// Identifier of a run; its directory name inside the session.
     RunId
 );
+id_type!(
+    /// Identifier of a tune; its file name under `tunes/`.
+    TuneId
+);
 
 fn finite(v: f64) -> Option<f64> {
     v.is_finite().then_some(v)

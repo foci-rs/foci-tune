@@ -21,6 +21,7 @@ pub mod steppers;
 pub mod stimulus;
 pub mod store;
 pub mod trace;
+pub mod tune;
 pub mod verify;
 pub mod verify_run;
 pub mod ws;

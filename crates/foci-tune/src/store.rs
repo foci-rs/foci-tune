@@ -1,7 +1,8 @@
 //! On-disk store: sessions, runs, series and captures under the data directory.
 //!
 //! Layout: `sessions/<session>/session.json`, `sessions/<session>/<run>/run.json`,
-//! `series.json` and `capture.bin.zst`; restore locks in `locks/<stepper>.json`. JSON files are
+//! `series.json` and `capture.bin.zst`; restore locks in `locks/<stepper>.json`; tunes in
+//! `tunes/<tune>.json`. JSON files are
 //! written to a temporary name and renamed.
 
 use std::collections::BTreeMap;
@@ -21,13 +22,16 @@ use crate::capture_read::read_capture;
 pub use crate::model::new_id;
 use crate::model::{
     ChannelPlot, EnsemblePlot, FitOutcome, Lock, ProbePlot, PsdPlot, Run, RunId, RunState,
-    SERIES_FORMAT_VERSION, Series, Session, SessionId,
+    SERIES_FORMAT_VERSION, Series, Session, SessionId, TuneId,
 };
 use crate::stimulus::RunKind;
+use crate::tune::Tune;
 
 const SESSIONS_DIR: &str = "sessions";
 const LOCKS_DIR: &str = "locks";
+const TUNES_DIR: &str = "tunes";
 const LOCK_EXTENSION: &str = ".json";
+const TUNE_EXTENSION: &str = ".json";
 const SESSION_FILE: &str = "session.json";
 const RUN_FILE: &str = "run.json";
 const SERIES_FILE: &str = "series.json";
@@ -113,14 +117,78 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StoreError> {
 }
 
 impl Store {
-    /// Opens the store at `root`, creating `sessions/` and `locks/`.
+    /// Opens the store at `root`, creating `sessions/`, `locks/` and `tunes/`.
     ///
     /// # Errors
     /// I/O errors from creating the directories.
     pub fn open(root: PathBuf) -> io::Result<Self> {
         std::fs::create_dir_all(root.join(SESSIONS_DIR))?;
         std::fs::create_dir_all(root.join(LOCKS_DIR))?;
+        std::fs::create_dir_all(root.join(TUNES_DIR))?;
         Ok(Self { root })
+    }
+
+    fn tune_path(&self, tune: &TuneId) -> PathBuf {
+        self.root
+            .join(TUNES_DIR)
+            .join(format!("{tune}{TUNE_EXTENSION}"))
+    }
+
+    /// Persists `tune`, replacing any earlier record under its id.
+    ///
+    /// # Errors
+    /// See [`write_json_atomic`].
+    pub fn write_tune(&self, tune: &Tune) -> io::Result<()> {
+        write_json_atomic(&self.tune_path(&tune.id), tune)
+    }
+
+    /// Reads a tune record.
+    ///
+    /// # Errors
+    /// I/O errors, including a missing tune, and unreadable JSON.
+    pub fn read_tune(&self, tune: &TuneId) -> Result<Tune, StoreError> {
+        read_json(&self.tune_path(tune))
+    }
+
+    /// Every stored tune, newest first.
+    ///
+    /// # Errors
+    /// I/O errors from listing `tunes/`, and an unreadable tune file, as `InvalidData` naming
+    /// the file.
+    pub fn scan_tunes(&self) -> io::Result<Vec<Tune>> {
+        let mut tunes = Vec::new();
+        for entry in std::fs::read_dir(self.root.join(TUNES_DIR))? {
+            let entry = entry?;
+            let is_tune = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.strip_suffix(TUNE_EXTENSION))
+                .is_some_and(|id| TuneId::parse(id).is_ok());
+            if is_tune && entry.file_type()?.is_file() {
+                let path = entry.path();
+                let tune = read_json(&path).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("tune file {}: {e}", path.display()),
+                    )
+                })?;
+                tunes.push(tune);
+            }
+        }
+        tunes.sort_by(|a: &Tune, b: &Tune| b.id.cmp(&a.id));
+        Ok(tunes)
+    }
+
+    /// The id of a tune on `stepper` that is not yet terminal, if any.
+    ///
+    /// # Errors
+    /// See [`Store::scan_tunes`].
+    pub fn nonterminal_tune_for(&self, stepper: &str) -> io::Result<Option<TuneId>> {
+        Ok(self
+            .scan_tunes()?
+            .into_iter()
+            .find(|t| t.setup.stepper == stepper && !t.state.is_terminal())
+            .map(|t| t.id))
     }
 
     fn lock_path(&self, stepper: &str) -> io::Result<PathBuf> {
