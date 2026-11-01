@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use foci_tune_analysis::ladder::{LadderAxis, LadderValue, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation, Recommended, recommend};
-use foci_tune_analysis::rungs::{Rungs, SeedRefused, rung_values, seed_from};
+use foci_tune_analysis::rungs::{RungNote, Rungs, SeedRefused, rung_values, seed_from};
 use foci_tune_analysis::verdict::{Gates, Halt, LadderAssessment, RepeatResult, assess_ladder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -148,6 +148,9 @@ pub struct TuneStep {
     pub sessions: StepSessions,
     /// Rungs in ladder order.
     pub rungs: Vec<RungRecord>,
+    /// Why rungs of the planned ladder were left out.
+    #[serde(default)]
+    pub notes: Vec<RungNote>,
     /// Raw value the operator chose.
     pub chosen: Option<i32>,
     /// The chosen value in the axis' display unit.
@@ -267,6 +270,7 @@ const AXES: [LadderAxis; 3] = [
 const MAX_SPEEDS: usize = 3;
 const STORE_POLL: Duration = Duration::from_millis(50);
 const IDLE_WAIT: Duration = Duration::from_secs(10);
+const CHANGE_CAPACITY: usize = 64;
 const IDLE_POLL: Duration = Duration::from_millis(50);
 
 /// Where a step's seed comes from.
@@ -293,7 +297,7 @@ pub struct StepRequest {
 }
 
 /// A prepared step, announced to the operator before it is confirmed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StepPlan {
     /// Axis the ladder varies.
     pub axis: LadderAxis,
@@ -619,6 +623,8 @@ struct Shared<M> {
     tasks: StdMutex<HashMap<TuneId, watch::Receiver<bool>>>,
     /// The task that marks a tune abandoned when its stepper's restore lock clears.
     listener: OnceLock<JoinHandle<()>>,
+    /// Every tune record as it is persisted.
+    changes: broadcast::Sender<Arc<Tune>>,
 }
 
 impl<M> Drop for Shared<M> {
@@ -661,10 +667,17 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             steppers: StdMutex::default(),
             tasks: StdMutex::default(),
             listener: OnceLock::new(),
+            changes: broadcast::channel(CHANGE_CAPACITY).0,
         });
         let listener = tokio::spawn(watch_lock_cleared(Arc::downgrade(&shared), events));
         let _ = shared.listener.set(listener);
         Self { shared }
+    }
+
+    /// Subscribes to tune records, each sent as it is persisted: a rung finishing, a state
+    /// change, a choice. A subscriber that falls behind gets `Lagged` and should refetch.
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Tune>> {
+        self.shared.changes.subscribe()
     }
 
     /// Creates a tune for `setup.stepper` with the stepper's live gains and filters as its
@@ -698,7 +711,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             created_unix_s: now_s(),
             notes: Vec::new(),
         };
-        s.store.write_tune(&tune)?;
+        s.save(&tune)?;
         Ok(tune.id)
     }
 
@@ -771,6 +784,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             recommendation: None,
             drift_rung: None,
             drift: Vec::new(),
+            notes: rungs.notes.clone(),
         };
         let per_repeat = runs_per_repeat(&record.setup);
         let ladder_runs = step.rungs.len() * request.repeats as usize * per_repeat;
@@ -786,7 +800,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         );
         record.steps.push(step);
         record.state = TuneState::Announced;
-        s.store.write_tune(&record)?;
+        s.save(&record)?;
         Ok(StepPlan {
             axis,
             rungs,
@@ -821,7 +835,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         step.starts += 1;
         let order = (0..step.rungs.len()).collect();
         record.state = TuneState::Running;
-        s.store.write_tune(&record)?;
+        s.save(&record)?;
         let Some(ctx) = StepContext::new(&record) else {
             return Err(TuneError::NotAnnounced);
         };
@@ -889,7 +903,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         step.recommendation = None;
         step.starts += 1;
         record.state = TuneState::Running;
-        s.store.write_tune(&record)?;
+        s.save(&record)?;
         let Some(ctx) = StepContext::new(&record) else {
             return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
         };
@@ -947,7 +961,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         } else {
             TuneState::Ready
         };
-        s.store.write_tune(&record)?;
+        s.save(&record)?;
         Ok(())
     }
 
@@ -999,7 +1013,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         record.notes.push(TuneNote::now(
             "the operator acknowledged the pending restore",
         ));
-        s.store.write_tune(&record)?;
+        s.save(&record)?;
         Ok(())
     }
 
@@ -1031,7 +1045,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 state_text(&tune.state)
             )));
             tune.state = TuneState::RestorePending;
-            s.store.write_tune(&tune)?;
+            s.save(&tune)?;
             recovered.push(tune.id);
         }
         Ok(recovered)
@@ -1211,7 +1225,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             }
             self.ensure_locked(&record, "abandon in progress");
             record.state = TuneState::RestorePending;
-            self.store.write_tune(&record)?;
+            self.save(&record)?;
         }
         if let Some(mut done) = self.live_task(tune) {
             self.engine.abort().await;
@@ -1282,7 +1296,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             None => TuneState::Abandoned,
             Some(reason) => TuneState::RestoreFailed(reason.clone()),
         };
-        self.store.write_tune(&record)?;
+        self.save(&record)?;
         failure.map_or(Ok(()), |reason| Err(TuneError::Engine(reason)))
     }
 
@@ -1294,9 +1308,16 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 tune.notes.push(TuneNote::now(
                     "the board reported the starting gains; the restore lock cleared",
                 ));
-                self.store.write_tune(&tune)?;
+                self.save(&tune)?;
             }
         }
+        Ok(())
+    }
+
+    /// Persists `tune`, then announces it to the subscribers.
+    fn save(&self, tune: &Tune) -> io::Result<()> {
+        self.store.write_tune(tune)?;
+        let _ = self.changes.send(Arc::new(tune.clone()));
         Ok(())
     }
 
@@ -1380,7 +1401,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             return Ok(None);
         };
         let out = change(&mut tune)?;
-        self.store.write_tune(&tune)?;
+        self.save(&tune)?;
         Ok(Some(out))
     }
 
@@ -1441,7 +1462,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 return Ok(());
             };
             conclude(&mut record, ctx.index, Some(reason));
-            Ok(self.store.write_tune(&record)?)
+            Ok(self.save(&record)?)
         });
         if let Err(e) = written {
             tracing::error!(tune = %ctx.tune, error = %e, "failed step not recorded");

@@ -76,6 +76,7 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
                 tracking: session.clone(),
                 standstill: session,
             },
+            notes: Vec::new(),
             rungs: vec![RungRecord {
                 shown: 1500.0,
                 raw: 1500,
