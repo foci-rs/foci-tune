@@ -8,7 +8,8 @@ use foci_tune::engine::{Engine, EngineEvent, Precondition};
 use foci_tune::model::RunState;
 use foci_tune::moonraker::MoonrakerClient;
 use foci_tune::tune::{
-    ProbeSettings, Seed, StandstillSettings, StepRequest, TuneScheduler, TuneSetup, TuneState,
+    PauseDecision, ProbeSettings, Seed, StandstillSettings, StepRequest, TuneError, TuneId,
+    TuneScheduler, TuneSetup, TuneState,
 };
 use foci_tune_analysis::verdict::Gates;
 use rig::*;
@@ -40,6 +41,22 @@ const STEP: StepRequest = StepRequest {
     lower_k: 1,
     upper_k: 1,
 };
+
+async fn wait_tune_state(rig: &Rig, id: &TuneId, state: TuneState) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let tune = rig.store.read_tune(id).unwrap();
+        if tune.state == state && rig.engine.is_idle() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "tune stuck in {:?}, wanted {state:?}",
+            tune.state
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
 
 fn restart_note(notes: &[foci_tune::tune::TuneNote]) -> bool {
     notes.iter().any(|n| n.text.contains("restart"))
@@ -168,4 +185,47 @@ async fn restart_in_every_other_nonterminal_state_locks_and_never_resumes() {
     let restarted = TuneScheduler::new(rig.engine.clone(), rig.store.clone());
     assert!(restarted.recover().await.unwrap().is_empty());
     assert_eq!(rig.engine.lock_state("stepper_x"), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_while_paused_marks_restore_pending_and_locks() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.profile_by_velocity_p.insert(
+            841,
+            Profile {
+                probe_edges: 0,
+                ..Profile::default()
+            },
+        );
+    });
+    let before = TuneScheduler::new(rig.engine.clone(), rig.store.clone());
+    let id = before.create(setup()).await.unwrap();
+    before
+        .prepare_step(
+            &id,
+            StepRequest {
+                seed: Seed::Live,
+                repeats: 1,
+                lower_k: 0,
+                upper_k: 0,
+            },
+        )
+        .await
+        .unwrap();
+    before.confirm_step(&id).await.unwrap();
+    wait_tune_state(&rig, &id, TuneState::Paused).await;
+
+    let after = TuneScheduler::new(rig.engine.clone(), rig.store.clone());
+    let recovered = after.recover().await.unwrap();
+
+    assert_eq!(recovered, vec![id.clone()]);
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::RestorePending);
+    assert!(restart_note(&tune.notes), "{:?}", tune.notes);
+    assert!(rig.engine.lock_state("stepper_x").is_some());
+    assert!(matches!(
+        after.decide(&id, PauseDecision::Continue).await,
+        Err(TuneError::OutOfOrder(_))
+    ));
 }
