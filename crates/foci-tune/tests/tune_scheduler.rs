@@ -789,6 +789,42 @@ async fn abandon_mid_rung_aborts_waits_and_restores() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropping_an_abandon_keeps_the_stepper_locked_and_still_restores() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 1).await;
+
+    let abandon = tokio::spawn({
+        let (sched, id) = (sched.clone(), id.clone());
+        async move { sched.abandon(&id).await }
+    });
+    wait_disk_state(&rig, &id, TuneState::RestorePending).await;
+    abandon.abort();
+    assert!(abandon.await.unwrap_err().is_cancelled());
+
+    assert_eq!(
+        rig.engine.lock_state("stepper_x").map(|l| l.snapshot),
+        Some(BASE)
+    );
+    let failing = rig.engine.preconditions("stepper_x").await;
+    assert!(
+        failing
+            .iter()
+            .any(|p| matches!(p, Precondition::TuneLocked(_))),
+        "{failing:?}"
+    );
+    release(&rig, &gate);
+    wait_disk_state(&rig, &id, TuneState::Abandoned).await;
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+    assert_eq!(board(&rig), raw_of(&BASE));
+    assert_eq!(rig.stimuli(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn abandon_between_two_runs_submits_nothing_more() {
     let rig = rig().await;
     let sched = scheduler(&rig);

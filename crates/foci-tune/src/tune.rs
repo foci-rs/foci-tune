@@ -266,6 +266,8 @@ const AXES: [LadderAxis; 3] = [
 ];
 const MAX_SPEEDS: usize = 3;
 const STORE_POLL: Duration = Duration::from_millis(50);
+const IDLE_WAIT: Duration = Duration::from_secs(10);
+const IDLE_POLL: Duration = Duration::from_millis(50);
 
 /// Where a step's seed comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -951,44 +953,32 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
 
     /// Gives the tune up and restores the gains and filters it started from.
     ///
-    /// The tune is marked restore-pending first, so its step submits no further run. A step
-    /// in progress then has the engine's queue aborted and is waited for, the run in flight
-    /// included, before the snapshot is written. A failed or unconfirmed restore leaves the
-    /// tune restore-failed and its stepper locked against every run.
+    /// The stepper is locked with the tune's snapshot and the tune marked restore-pending
+    /// first, so neither its step nor any other route submits a further run. A step in
+    /// progress then has the engine's queue aborted and is waited for, the run in flight
+    /// included, before the snapshot is written; only a confirmed restore removes the lock,
+    /// and a failed or unconfirmed one leaves the tune restore-failed. The work runs on a task
+    /// of its own, so dropping the returned future does not stop it halfway.
     ///
     /// # Errors
     /// [`TuneError::OutOfOrder`] for a tune that is done or abandoned, [`TuneError::Engine`]
     /// when the restore failed, and store errors.
     pub async fn abandon(&self, tune: &TuneId) -> Result<(), TuneError> {
-        let s = &self.shared;
-        {
-            let _held = s.hold_tune(tune).await?;
-            let mut record = s.read(tune)?;
-            if record.state.is_terminal() {
-                return Err(TuneError::OutOfOrder("the tune is already over".to_owned()));
-            }
-            record.state = TuneState::RestorePending;
-            s.store.write_tune(&record)?;
-        }
-        if s.live_task(tune).is_some() {
-            s.engine.abort().await;
-            self.wait_idle(tune).await;
-        }
-        match s.restore_pending(tune).await {
-            Err(TuneError::OutOfOrder(_)) if s.read(tune)?.state == TuneState::Abandoned => Ok(()),
-            other => other,
-        }
+        let (shared, tune) = (self.shared.clone(), tune.clone());
+        detached(async move { shared.abandon(&tune).await }).await
     }
 
     /// Writes the snapshot of a tune that awaits its restore again, with the outcomes of
     /// [`TuneScheduler::abandon`]: abandoned when confirmed, restore-failed and locked
-    /// otherwise.
+    /// otherwise. The stepper is locked before anything is written, and the work runs on a
+    /// task of its own.
     ///
     /// # Errors
     /// [`TuneError::OutOfOrder`] unless the tune is restore-pending or restore-failed,
     /// [`TuneError::Engine`] when the restore failed, and store errors.
     pub async fn restore(&self, tune: &TuneId) -> Result<(), TuneError> {
-        self.shared.restore_pending(tune).await
+        let (shared, tune) = (self.shared.clone(), tune.clone());
+        detached(async move { shared.restore_held(&tune, false).await }).await
     }
 
     /// Records the operator's acknowledgement of a tune that awaits its restore. It changes
@@ -1070,6 +1060,14 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             pwm_hz,
         ))
     }
+}
+
+async fn detached(
+    work: impl Future<Output = Result<(), TuneError>> + Send + 'static,
+) -> Result<(), TuneError> {
+    tokio::spawn(work)
+        .await
+        .unwrap_or_else(|e| Err(TuneError::Engine(format!("the restore task failed: {e}"))))
 }
 
 fn awaits_restore(state: &TuneState) -> bool {
@@ -1204,18 +1202,61 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             .cloned()
     }
 
-    /// Restores the snapshot of a tune that awaits its restore, holding its stepper's
-    /// transition lock throughout so concurrent restores and the lock-cleared update queue
-    /// behind it. A failure that left the stepper unlocked, because the engine refused before
-    /// writing anything, takes the lock here.
-    async fn restore_pending(&self, tune: &TuneId) -> Result<(), TuneError> {
+    async fn abandon(&self, tune: &TuneId) -> Result<(), TuneError> {
+        {
+            let _held = self.hold_tune(tune).await?;
+            let mut record = self.read(tune)?;
+            if record.state.is_terminal() {
+                return Err(TuneError::OutOfOrder("the tune is already over".to_owned()));
+            }
+            self.ensure_locked(&record, "abandon in progress");
+            record.state = TuneState::RestorePending;
+            self.store.write_tune(&record)?;
+        }
+        if let Some(mut done) = self.live_task(tune) {
+            self.engine.abort().await;
+            let _ = done.wait_for(|finished| *finished).await;
+        }
+        self.wait_engine_idle().await;
+        self.restore_held(tune, true).await
+    }
+
+    /// Waits a bounded time for the engine to finish persisting the last run, so the restore
+    /// is not refused as busy; the lock already covers a restore that still is.
+    async fn wait_engine_idle(&self) {
+        let deadline = tokio::time::Instant::now() + IDLE_WAIT;
+        while !self.engine.is_idle() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(IDLE_POLL).await;
+        }
+    }
+
+    /// Locks the tune's stepper with its snapshot unless the stepper already has a lock.
+    fn ensure_locked(&self, record: &Tune, reason: &str) {
+        let stepper = &record.setup.stepper;
+        if self.engine.lock_state(stepper).is_none()
+            && let Err(e) = self
+                .engine
+                .lock_stepper(stepper, reason.to_owned(), record.snapshot)
+        {
+            tracing::error!(stepper, error = %e, "restore lock not persisted");
+        }
+    }
+
+    /// Restores the snapshot of a tune that awaits its restore (or, `after_abandon`, one the
+    /// lock-cleared update already marked abandoned), holding its stepper's transition lock
+    /// throughout so concurrent restores and the lock-cleared update queue behind it. The
+    /// stepper is locked with the snapshot before anything is written; a failure re-locks it
+    /// with the reason unless it holds a lock on another snapshot.
+    async fn restore_held(&self, tune: &TuneId, after_abandon: bool) -> Result<(), TuneError> {
         let _held = self.hold_tune(tune).await?;
         let mut record = self.read(tune)?;
-        if !awaits_restore(&record.state) {
+        let abandoned = after_abandon && record.state == TuneState::Abandoned;
+        if !awaits_restore(&record.state) && !abandoned {
             return Err(TuneError::OutOfOrder(
                 "the tune does not await a restore".to_owned(),
             ));
         }
+        self.ensure_locked(&record, "restore in progress");
         let stepper = record.setup.stepper.clone();
         let (gains, filters) = record.snapshot;
         let failure = match self.engine.restore_snapshot(&stepper, gains, filters).await {
@@ -1223,8 +1264,12 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             Ok(false) => Some("the restore was confirmed but the stepper stays locked".to_owned()),
             Err(e) => Some(e),
         };
+        let own_lock = self
+            .engine
+            .lock_state(&stepper)
+            .is_none_or(|l| l.snapshot == record.snapshot);
         if let Some(reason) = &failure
-            && self.engine.lock_state(&stepper).is_none()
+            && own_lock
             && let Err(e) = self.engine.lock_stepper(
                 &stepper,
                 format!("restore failed: {reason}"),
