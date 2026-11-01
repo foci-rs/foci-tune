@@ -494,6 +494,7 @@ dependencies = [
  "levenberg-marquardt",
  "nalgebra",
  "realfft",
+ "serde",
  "thiserror",
 ]
 

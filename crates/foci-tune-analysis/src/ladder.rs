@@ -1,5 +1,7 @@
 //! Ladder value lists, ordering and the damping stop rule.
 
+use serde::{Deserialize, Serialize};
+
 use crate::signals::velocity_i_raw;
 
 /// Largest raw gain `FOCI_SET_GAINS` accepts.
@@ -9,7 +11,7 @@ const DEFAULT_STEPS: i32 = 6;
 const CORNER_DEFAULTS_HZ: [f64; 4] = [25.0, 50.0, 75.0, 100.0];
 
 /// The single axis a ladder varies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LadderAxis {
     /// Velocity P gain, entered as a raw value.
     VelocityP,
@@ -20,7 +22,7 @@ pub enum LadderAxis {
 }
 
 /// A ladder value as the operator sees it and as it is written.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LadderValue {
     /// Value in the axis' display unit.
     pub shown: f64,

@@ -11,4 +11,5 @@ repository.workspace = true
 levenberg-marquardt = "0.15.0"
 nalgebra = "0.34.2"
 realfft = "3.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"
