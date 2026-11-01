@@ -30,6 +30,12 @@ const MAX_LADDER_REPEATS = 10;
 const MAX_LADDER_RUNS = 60;
 const POSITION_UNITS_PER_REV = 65536;
 
+export function fallbackPattern(limits: Limits): Pattern {
+  const cx = (limits.x[0] + limits.x[1]) / 2;
+  const cy = (limits.y[0] + limits.y[1]) / 2;
+  return { start: [cx - 50, cy], end: [cx + 50, cy] };
+}
+
 export const DEFAULT_PARAMETERS: { [K in RunType]: Extract<RunSetup, { type: K }>["parameters"] } = {
   tracking: { speeds_mm_s: [50, 195, 400], strokes: 8 },
   probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
