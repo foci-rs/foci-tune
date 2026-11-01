@@ -1034,9 +1034,8 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             if !ok {
                 return Ok(Ended::Superseded);
             }
-            if let Some((_, h)) = halt {
-                let damping = !matches!(h, Halt::StandstillBaselineUnassessable);
-                return Ok(Ended::Completed { halted: damping });
+            if halt.is_some() {
+                return Ok(Ended::Completed { halted: true });
             }
         }
         Ok(Ended::Completed { halted: false })

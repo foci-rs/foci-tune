@@ -376,6 +376,27 @@ async fn damping_halt_leaves_higher_rungs_unqueued() {
     assert!(!written_velocity_p(&rig).contains(&1060));
     assert!(step.drift_rung.is_none());
     assert!(step.failed.is_none());
+
+    let rig = rig_with(Options::default()).await;
+    rig.a.sim(|s| {
+        let dropped = Profile {
+            drop_flag: true,
+            ..Profile::default()
+        };
+        s.profile_by_script.push(("G4 P200".into(), dropped));
+    });
+    let sched = scheduler(&rig);
+
+    let tune = run_step(&rig, &sched, crate::step(0, 1, 1)).await;
+
+    let step = &tune.steps[0];
+    assert!(matches!(
+        step.assessment.as_ref().unwrap().halt,
+        Some((0, Halt::StandstillBaselineUnassessable))
+    ));
+    assert!(step.rungs[1].skipped.is_some());
+    assert!(step.drift_rung.is_none());
+    assert_eq!(rig.stimuli(), 3);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

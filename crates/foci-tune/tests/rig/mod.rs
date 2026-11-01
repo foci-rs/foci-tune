@@ -122,6 +122,8 @@ pub struct Sim {
     pub zeta_by_position_p: HashMap<i32, f64>,
     pub edges_by_position_p: HashMap<i32, usize>,
     pub profile_by_velocity_p: HashMap<i32, Profile>,
+    /// Profile for a stimulus whose script contains the text; takes precedence over the others.
+    pub profile_by_script: Vec<(String, Profile)>,
     /// Probe damping by velocity P; takes precedence over `zeta_by_position_p`.
     pub zeta_by_velocity_p: HashMap<i32, f64>,
     /// Counts the measured position trails the commanded one during tracking ramps, by
@@ -154,6 +156,7 @@ impl Default for Sim {
             zeta_by_position_p: HashMap::new(),
             edges_by_position_p: HashMap::new(),
             profile_by_velocity_p: HashMap::new(),
+            profile_by_script: Vec::new(),
             zeta_by_velocity_p: HashMap::new(),
             lag_by_velocity_p: HashMap::new(),
             unconfirmed_velocity_p: Vec::new(),
@@ -451,7 +454,7 @@ impl Board {
             self.emit(frames);
         } else if script.starts_with("G90") {
             let probe = script.matches("FOCI_SET_VELOCITY_FEEDFORWARD").count() > 3;
-            let frames = self.stimulus(channel, probe);
+            let frames = self.stimulus(channel, probe, script);
             self.emit(frames);
             let (burst, gate) = {
                 let sim = self.sim.lock().unwrap();
@@ -476,12 +479,15 @@ impl Board {
         reply(Ok(()), None)
     }
 
-    pub fn stimulus(&self, declared: u8, probe: bool) -> Vec<Vec<u8>> {
+    pub fn stimulus(&self, declared: u8, probe: bool, script: &str) -> Vec<Vec<u8>> {
         let mut sim = self.sim.lock().unwrap();
         let velocity_p = sim.channels[usize::from(declared)].gains[0];
         let profile = sim
-            .profile_by_velocity_p
-            .get(&velocity_p)
+            .profile_by_script
+            .iter()
+            .find(|(text, _)| script.contains(text.as_str()))
+            .map(|(_, p)| p)
+            .or_else(|| sim.profile_by_velocity_p.get(&velocity_p))
             .unwrap_or(&sim.profile)
             .clone();
         let other = 1 - declared;
