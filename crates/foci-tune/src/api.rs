@@ -18,6 +18,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use bytes::Bytes;
 use foci_tune_analysis::ladder::PID_GAIN_MAX_RAW;
+use foci_tune_analysis::recommend::Extension;
 use foci_tune_analysis::signals::corner_hz;
 use foci_tune_analysis::units::POSITION_UNITS_PER_REV;
 use serde::de::DeserializeOwned;
@@ -41,7 +42,7 @@ use crate::pattern::{Pattern, PatternError, propose_pattern};
 use crate::steppers::{BedLimits, Stepper};
 use crate::stimulus::{RunKind, StimulusError, compose};
 use crate::store::{SessionSummary, Store, StoreError};
-use crate::tune::TuneScheduler;
+use crate::tune::{Choice, StepRequest, Tune, TuneError, TuneId, TuneScheduler, TuneSetup};
 use crate::ws;
 
 const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
@@ -174,6 +175,24 @@ impl From<LadderRejected> for ApiError {
             | LadderRejected::TooManyRuns { .. } => Self::bad_field("values", e.to_string()),
             LadderRejected::TooLarge { parameter, .. } => Self::bad_field(parameter, e.to_string()),
             LadderRejected::NoControlState => Self::new(StatusCode::CONFLICT, e.to_string()),
+        }
+    }
+}
+
+impl From<TuneError> for ApiError {
+    fn from(e: TuneError) -> Self {
+        match e {
+            TuneError::Precondition(p) => p.into(),
+            TuneError::NotFound(_) => Self::new(StatusCode::NOT_FOUND, e.to_string()),
+            TuneError::InvalidRequest(_) => Self::new(StatusCode::BAD_REQUEST, e.to_string()),
+            TuneError::SeedRefused(_) => Self::bad_field("seed", e.to_string()),
+            TuneError::Store(_) => Self::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            TuneError::NoControlState(_)
+            | TuneError::StepperBusy(_)
+            | TuneError::OutOfOrder(_)
+            | TuneError::NotAnnounced
+            | TuneError::Engine(_)
+            | TuneError::NoExtension(_) => Self::new(StatusCode::CONFLICT, e.to_string()),
         }
     }
 }
@@ -923,6 +942,18 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         .route("/api/sessions/{id}", get(session::<M>))
         .route("/api/sessions/{id}/revert", post(revert::<M>))
         .route("/api/firmware-restart", post(firmware_restart::<M>))
+        .route("/api/tunes", get(list_tunes::<M>).post(create_tune::<M>))
+        .route("/api/tunes/{id}", get(read_tune::<M>))
+        .route("/api/tunes/{id}/steps", post(prepare_tune_step::<M>))
+        .route(
+            "/api/tunes/{id}/steps/confirm",
+            post(confirm_tune_step::<M>),
+        )
+        .route("/api/tunes/{id}/extension", post(tune_extension::<M>))
+        .route("/api/tunes/{id}/choice", post(tune_choice::<M>))
+        .route("/api/tunes/{id}/abandon", post(abandon_tune::<M>))
+        .route("/api/tunes/{id}/restore", post(restore_tune::<M>))
+        .route("/api/tunes/{id}/acknowledge", post(acknowledge_tune::<M>))
         .route("/api/events", get(ws::events::<M>))
         .fallback(static_or_index)
         .with_state(app)
@@ -1226,4 +1257,243 @@ async fn static_or_index(uri: Uri) -> Response {
             .into_response(),
         None => (StatusCode::NOT_FOUND, "the web UI is not embedded").into_response(),
     }
+}
+
+fn tune_id(raw: &str) -> ApiResult<TuneId> {
+    TuneId::parse(raw).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+fn from_body<T: DeserializeOwned>(body: Value) -> ApiResult<T> {
+    serde_json::from_value(body).map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ChoiceBody {
+    Recommended,
+    Rung(usize),
+    Value(f64),
+}
+
+#[derive(Deserialize)]
+struct ChoiceRequest {
+    choice: ChoiceBody,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Direction {
+    Below,
+    Above,
+}
+
+#[derive(Deserialize)]
+struct ExtensionRequest {
+    direction: Direction,
+}
+
+/// One row of the tune list.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TuneSummary {
+    /// Tune id.
+    pub id: TuneId,
+    /// Declared stepper section name.
+    pub stepper: String,
+    /// Life-cycle state, as in the tune record.
+    pub state: crate::tune::TuneState,
+    /// Creation time, seconds since the UNIX epoch.
+    pub created: u64,
+    /// Axis of the step in progress or last worked on; `None` before the first step.
+    pub current_step: Option<foci_tune_analysis::ladder::LadderAxis>,
+}
+
+impl From<&Tune> for TuneSummary {
+    fn from(t: &Tune) -> Self {
+        Self {
+            id: t.id.clone(),
+            stepper: t.setup.stepper.clone(),
+            state: t.state.clone(),
+            created: t.created_unix_s,
+            current_step: t.steps.last().map(|s| s.axis),
+        }
+    }
+}
+
+impl<M: MoonrakerApi + 'static> Api<M> {
+    /// Checks a tune setup beyond its shape: the probe stimulus must compose for the stepper
+    /// and pattern, which covers the pattern limits and the toggle spacing.
+    async fn check_tune_setup(&self, setup: &TuneSetup) -> ApiResult<()> {
+        let steppers = self.engine.steppers().await?;
+        let stepper = steppers
+            .iter()
+            .find(|s| s.name == setup.stepper)
+            .ok_or_else(|| Precondition::UnknownStepper(setup.stepper.clone()))?;
+        let limits = BedLimits::from_steppers(&steppers).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "bed limits need stepper_x and stepper_y in the config",
+            )
+        })?;
+        let max_velocity = self.moonraker.state().borrow().max_velocity;
+        let probe = RunKind::Probe {
+            speed_mm_s: setup.probe.speed_mm_s,
+            high_gain: setup.probe.high_gain,
+            segments_between_toggles: setup.probe.segments_between_toggles,
+            strokes: setup.probe.strokes,
+        };
+        compose(
+            &probe,
+            &setup.pattern,
+            &stepper.name,
+            &stepper.kinematics,
+            &limits,
+            max_velocity,
+        )
+        .map_err(|e| {
+            let mut e = stimulus_error(e);
+            e.field = e.field.map(|f| f.replace("parameters.", "probe."));
+            e
+        })?;
+        Ok(())
+    }
+}
+
+async fn create_tune<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Tune>> {
+    let body = json_body(body)?;
+    let speeds = body
+        .get("speeds_mm_s")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    if !(1..=3).contains(&speeds) {
+        return Err(ApiError::bad_field(
+            "speeds_mm_s",
+            "a tune needs one to three tracking speeds",
+        ));
+    }
+    if body.pointer("/probe/speed_mm_s").is_none_or(Value::is_null) {
+        return Err(ApiError::bad_field(
+            "probe.speed_mm_s",
+            "the probe speed must be given explicitly",
+        ));
+    }
+    let setup: TuneSetup = from_body(body)?;
+    api.check_tune_setup(&setup).await?;
+    let id = api.tunes.create(setup).await?;
+    Ok(Json(read_tune_record(&api, &id).await?))
+}
+
+async fn read_tune_record<M>(api: &Api<M>, id: &TuneId) -> ApiResult<Tune> {
+    let store = api.store.clone();
+    let lookup = id.clone();
+    blocking(move || store.read_tune(&lookup))
+        .await?
+        .map_err(|e| match ApiError::from(e) {
+            e if e.status == StatusCode::NOT_FOUND => {
+                ApiError::new(StatusCode::NOT_FOUND, format!("unknown tune {id}"))
+            }
+            e => e,
+        })
+}
+
+async fn list_tunes<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+) -> ApiResult<Json<Vec<TuneSummary>>> {
+    let store = api.store.clone();
+    let tunes = blocking(move || store.scan_tunes())
+        .await?
+        .map_err(io_error)?;
+    Ok(Json(tunes.iter().map(TuneSummary::from).collect()))
+}
+
+async fn read_tune<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    let tune = read_tune_record(&api, &id).await?;
+    let lock = api.engine.lock_state(&tune.setup.stepper).map(|l| l.reason);
+    let mut out = json!(tune);
+    out["config_block"] = json!(api.tunes.config_block(&id));
+    out["lock"] = json!(lock);
+    Ok(Json(out))
+}
+
+async fn prepare_tune_step<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    let request: StepRequest = from_body(json_body(body)?)?;
+    Ok(Json(json!(api.tunes.prepare_step(&id, request).await?)))
+}
+
+async fn confirm_tune_step<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    api.tunes.confirm_step(&id).await?;
+    Ok(Json(json!({"tune": id, "confirmed": true})))
+}
+
+async fn tune_extension<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    let request: ExtensionRequest = from_body(json_body(body)?)?;
+    let ext = match request.direction {
+        Direction::Below => Extension::Below,
+        Direction::Above => Extension::Above,
+    };
+    api.tunes.confirm_extension(&id, ext).await?;
+    Ok(Json(json!({"tune": id, "confirmed": true})))
+}
+
+async fn tune_choice<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    let request: ChoiceRequest = from_body(json_body(body)?)?;
+    let choice = match request.choice {
+        ChoiceBody::Recommended => Choice::Recommended,
+        ChoiceBody::Rung(index) => Choice::Rung(index),
+        ChoiceBody::Value(value) => Choice::Value(value),
+    };
+    api.tunes.choose(&id, choice).await?;
+    Ok(Json(json!({"tune": id, "chosen": true})))
+}
+
+async fn abandon_tune<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    api.tunes.abandon(&id).await?;
+    Ok(Json(json!({"tune": id, "abandoned": true})))
+}
+
+async fn restore_tune<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    api.tunes.restore(&id).await?;
+    Ok(Json(json!({"tune": id, "restored": true})))
+}
+
+async fn acknowledge_tune<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    api.tunes.acknowledge(&id).await?;
+    Ok(Json(json!({"tune": id, "acknowledged": true})))
 }

@@ -10,6 +10,8 @@
 //! - `live`: `{serial, clock_freq, channels: [{channel, ticks, step_position, tmc_position,
 //!   position_error, torque, ff_offset}]}`, raw critical samples batched at 20 Hz, sent only
 //!   to a client that subscribed and only while a run records.
+//! - `tune`: `{tune}`, the tune record, sent each time the scheduler persists it (a rung
+//!   finishing, a state change, a choice).
 //! - `subscribed` / `unsubscribed`: `{stream: "live"}`, acknowledging a client request.
 //! - `resync`: `{reason}`. The connection fell behind and missed messages; the client should
 //!   refetch `/api/printer` and the sessions it shows. The connection stays open.
@@ -35,6 +37,7 @@ use crate::api::{App, PrinterView};
 use crate::engine::EngineEvent;
 use crate::model::{Run, RunId, RunState, SessionId};
 use crate::moonraker::MoonrakerApi;
+use crate::tune::Tune;
 
 const LIVE_PERIOD: Duration = Duration::from_millis(50);
 const RECORDING_RECHECK: Duration = Duration::from_millis(10);
@@ -102,6 +105,11 @@ pub enum ServerMessage {
     LockCleared {
         /// The stepper.
         stepper: String,
+    },
+    /// A tune record was persisted.
+    Tune {
+        /// The record as stored.
+        tune: Arc<Tune>,
     },
     /// Critical samples of one board.
     Live(LiveBatch),
@@ -231,6 +239,7 @@ async fn next_frame(live: &mut Option<LiveFeed>) -> Result<(String, Bytes), Recv
 
 async fn connection<M: MoonrakerApi + 'static>(mut socket: WebSocket, api: App<M>) {
     let mut events = api.engine.events();
+    let mut tunes = api.tunes.subscribe();
     let mut printer = api.printer_feed();
     printer.mark_changed();
     let mut printer_alive = true;
@@ -260,6 +269,14 @@ async fn connection<M: MoonrakerApi + 'static>(mut socket: WebSocket, api: App<M
                 Ok(e) => send(&mut socket, &ServerMessage::from(e)).await,
                 Err(RecvError::Lagged(n)) => {
                     let reason = format!("missed {n} run events");
+                    send(&mut socket, &ServerMessage::Resync { reason }).await
+                }
+                Err(RecvError::Closed) => return,
+            },
+            tune = tunes.recv() => match tune {
+                Ok(tune) => send(&mut socket, &ServerMessage::Tune { tune }).await,
+                Err(RecvError::Lagged(n)) => {
+                    let reason = format!("missed {n} tune updates");
                     send(&mut socket, &ServerMessage::Resync { reason }).await
                 }
                 Err(RecvError::Closed) => return,
