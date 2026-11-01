@@ -1477,8 +1477,6 @@ async fn standstill_baseline_pause_continue_disables_the_gate() {
         paused.steps[0].paused.as_ref().map(|p| p.reason),
         Some(Pause::StandstillBaselineUnassessable)
     );
-    rig.a.sim(|s| s.profile_by_script.clear());
-
     sched.decide(&id, PauseDecision::Continue).await.unwrap();
     let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
 
@@ -1505,7 +1503,7 @@ async fn standstill_baseline_pause_continue_disables_the_gate() {
             .iter()
             .all(|v| v.inadmissible != Some(InadmissibleReason::StandstillHigh))
     );
-    assert!(a.verdicts[1].score.is_some());
+    assert!(a.verdicts.iter().all(|v| v.score.is_some()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
