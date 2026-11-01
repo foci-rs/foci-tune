@@ -88,7 +88,7 @@ fn edge_best_rung_offers_extension_and_does_not_extend() {
         &gains,
     );
     assert_eq!(halted.choice, Recommendation::Measured { rung: 1 });
-    assert_eq!(halted.extend, Some(Extension::Above));
+    assert_eq!(halted.extend, None);
 
     let bottom = recommend(
         &assessment(&[Some(1.0), Some(2.0), Some(3.0)], None),

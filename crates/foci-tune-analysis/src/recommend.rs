@@ -35,7 +35,7 @@ pub enum Recommendation {
 pub enum Extension {
     /// The best rung is the lowest of the ladder.
     Below,
-    /// The best rung is the highest tested, or the next one was never assessed.
+    /// The best rung is the highest of the ladder.
     Above,
 }
 
@@ -76,7 +76,7 @@ pub fn recommend(assessment: &LadderAssessment, shown: &[f64]) -> Recommended {
 
     let extend = if best == 0 {
         Some(Extension::Below)
-    } else if best + 1 >= shown.len() || assessment.halt.is_some_and(|(at, _)| at == best + 1) {
+    } else if best + 1 >= shown.len() {
         Some(Extension::Above)
     } else {
         None
