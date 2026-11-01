@@ -399,6 +399,180 @@ export interface SessionView {
   runs: RunEntry[];
 }
 
+export type TuneId = string;
+export type TuneAxis = "VelocityP" | "VelocityICornerHz" | "PositionP";
+
+export interface TuneGains {
+  velocity_p: number;
+  velocity_i: number;
+  position_p: number;
+  position_i: number;
+}
+
+export interface TuneGates {
+  damping_floor: number;
+  marginal: number;
+  standstill_factor: number;
+}
+
+export interface TuneSetup {
+  stepper: string;
+  speeds_mm_s: number[];
+  pattern: Pattern;
+  probe: ProbeParameters;
+  tracking_strokes: number;
+  standstill: StandstillParameters;
+  gates: TuneGates;
+  include_marginal: boolean;
+}
+
+export type RungOutcome = { Assessed: number } | "Unassessable";
+
+export interface RepeatResult {
+  zeta: RungOutcome;
+  p99_by_speed: (number | null)[];
+  worst_torque_sd: number | null;
+}
+
+export interface RunTime {
+  id: RunId;
+  started_unix_ms: number;
+  ended_unix_ms: number;
+}
+
+export interface RungRecord {
+  shown: number;
+  raw: number;
+  run_ids: RunId[];
+  started_unix_ms: number | null;
+  ended_unix_ms: number | null;
+  skipped: string | null;
+  repeat_values: RepeatResult[];
+  run_times: RunTime[];
+}
+
+export type RungNote =
+  | { OutOfRange: number }
+  | { RoundedToZero: number }
+  | { Merged: { shown: number; into: number } };
+
+export type UnscoredReason = "TrackingMissing" | "StandstillMissing";
+export type InadmissibleReason = "DampingBelowFloor" | "StandstillHigh";
+
+export interface RungVerdict {
+  inadmissible: InadmissibleReason | null;
+  marginal: boolean;
+  unscored: UnscoredReason | null;
+  score: number | null;
+}
+
+export interface RungMedians {
+  zeta: number | null;
+  p99_by_speed: (number | null)[];
+  worst_torque_sd: number | null;
+}
+
+export type Halt =
+  | { BelowFloor: { median: number } }
+  | "DampingUnassessable"
+  | "StandstillBaselineUnassessable";
+
+export interface LadderAssessment {
+  verdicts: RungVerdict[];
+  medians: RungMedians[];
+  halt: [number, Halt] | null;
+}
+
+export type Recommendation =
+  | { None: "NoScoredRung" }
+  | { Measured: { rung: number } }
+  | { Interpolated: { shown: number; between: [number, number] } };
+
+export type TuneExtension = "Below" | "Above";
+
+export interface Recommended {
+  choice: Recommendation;
+  extend: TuneExtension | null;
+}
+
+export interface TuneDrift {
+  metric: string;
+  first: number | null;
+  rerun: number | null;
+}
+
+export interface TuneStep {
+  axis: TuneAxis;
+  seed_raw: number;
+  repeats: number;
+  lower_k: number;
+  upper_k: number;
+  pwm_hz: number;
+  base: [TuneGains, Filters];
+  sessions: { probe: SessionId; tracking: SessionId; standstill: SessionId };
+  rungs: RungRecord[];
+  notes: RungNote[];
+  chosen: number | null;
+  chosen_shown: number | null;
+  starts: number;
+  started_unix_ms: number | null;
+  ended_unix_ms: number | null;
+  failed: string | null;
+  assessment: LadderAssessment | null;
+  recommendation: Recommended | null;
+  drift_rung: RungRecord | null;
+  drift: TuneDrift[];
+}
+
+export type TuneState =
+  | "Ready"
+  | "Announced"
+  | "Running"
+  | "AwaitingChoice"
+  | "Done"
+  | "Abandoned"
+  | "RestorePending"
+  | { RestoreFailed: string };
+
+export interface Tune {
+  format_version: number;
+  id: TuneId;
+  setup: TuneSetup;
+  snapshot: [TuneGains, Filters];
+  steps: TuneStep[];
+  state: TuneState;
+  created_unix_s: number;
+  notes: { unix_ms: number; text: string }[];
+}
+
+export type TuneDetail = Tune & { config_block: string | null; lock: string | null };
+
+export interface TuneSummary {
+  id: TuneId;
+  stepper: string;
+  state: TuneState;
+  created: number;
+  current_step: TuneAxis | null;
+}
+
+export type TuneSeed = "live" | { typed: number };
+
+export interface TuneStepRequest {
+  seed: TuneSeed;
+  repeats: number;
+  lower_k: number;
+  upper_k: number;
+}
+
+export interface TuneStepPlan {
+  axis: TuneAxis;
+  rungs: { values: { shown: number; raw: number }[]; notes: RungNote[] };
+  run_count: number;
+  announcement: string;
+}
+
+export type TuneChoiceBody = "recommended" | { rung: number } | { value: number };
+
 export type TraceModeCommand = "dormant" | "critical" | "diagnostic";
 export type KillState = "killed" | "kill_unconfirmed";
 
@@ -428,6 +602,7 @@ export type ServerMessage =
   | ({ type: "run_state"; session: SessionId; run: RunId } & RunState)
   | { type: "run_result"; session: SessionId; run: Run }
   | { type: "queue"; runs: RunId[] }
+  | { type: "tune"; tune: Tune }
   | ({ type: "live" } & LiveBatch)
   | { type: "subscribed"; stream: "live" }
   | { type: "unsubscribed"; stream: "live" }
@@ -522,6 +697,33 @@ export const postRevert = (session: SessionId) =>
     `/api/sessions/${encodeURIComponent(session)}/revert`,
   );
 
+const tunePath = (id: TuneId, tail = "") => `/api/tunes/${encodeURIComponent(id)}${tail}`;
+
+export const postTune = (body: TuneSetup) => request<Tune>("POST", "/api/tunes", body);
+
+export const getTunes = () => request<TuneSummary[]>("GET", "/api/tunes");
+
+export const getTune = (id: TuneId) => request<TuneDetail>("GET", tunePath(id));
+
+export const postTuneStep = (id: TuneId, body: TuneStepRequest) =>
+  request<TuneStepPlan>("POST", tunePath(id, "/steps"), body);
+
+export const postTuneConfirm = (id: TuneId) =>
+  request<{ tune: TuneId; confirmed: true }>("POST", tunePath(id, "/steps/confirm"));
+
+export const postTuneExtension = (id: TuneId, direction: "below" | "above") =>
+  request<{ tune: TuneId; confirmed: true }>("POST", tunePath(id, "/extension"), { direction });
+
+export const postTuneChoice = (id: TuneId, choice: TuneChoiceBody) =>
+  request<{ tune: TuneId; chosen: true }>("POST", tunePath(id, "/choice"), { choice });
+
+export const postTuneAbandon = (id: TuneId) => request<unknown>("POST", tunePath(id, "/abandon"));
+
+export const postTuneRestore = (id: TuneId) => request<unknown>("POST", tunePath(id, "/restore"));
+
+export const postTuneAcknowledge = (id: TuneId) =>
+  request<unknown>("POST", tunePath(id, "/acknowledge"));
+
 export const getRun = (id: RunId) => request<Run>("GET", `/api/runs/${encodeURIComponent(id)}`);
 
 export const getSeries = (id: RunId) =>
@@ -551,6 +753,7 @@ const MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "run_state",
   "run_result",
   "queue",
+  "tune",
   "live",
   "subscribed",
   "unsubscribed",
