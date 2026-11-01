@@ -182,6 +182,25 @@ fn unusable_standstill_baseline_halts() {
 }
 
 #[test]
+fn non_finite_standstill_is_unusable_not_a_passed_gate() {
+    let mut bad_base = rung(0.2, [80.0, 80.0], 1.0, 3);
+    bad_base[0].worst_torque_sd = Some(f64::NAN);
+    let rungs = vec![bad_base, rung(0.2, [70.0, 70.0], 1.0, 3)];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.halt, Some((0, Halt::StandstillBaselineUnassessable)));
+
+    let mut bad_later = rung(0.2, [70.0, 70.0], 50.0, 3);
+    bad_later[2].worst_torque_sd = Some(f64::INFINITY);
+    let rungs = vec![rung(0.2, [80.0, 80.0], 1.0, 3), bad_later];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(
+        a.verdicts[1].unscored,
+        Some(UnscoredReason::StandstillMissing)
+    );
+    assert_eq!(a.verdicts[1].score, None);
+}
+
+#[test]
 fn non_positive_or_non_finite_p99_is_missing_tracking() {
     let mut r1 = rung(0.2, [70.0, 70.0], 1.0, 3);
     r1[0].p99_by_speed[0] = Some(0.0);

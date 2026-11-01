@@ -125,7 +125,12 @@ fn rung_medians(repeats: &[RepeatResult], n_speeds: usize) -> RungMedians {
             .map(|v| median(&v))
         })
         .collect();
-    let worst_torque_sd = all_some(repeats.iter().map(|r| r.worst_torque_sd)).map(|v| median(&v));
+    let worst_torque_sd = all_some(
+        repeats
+            .iter()
+            .map(|r| r.worst_torque_sd.filter(|sd| sd.is_finite())),
+    )
+    .map(|v| median(&v));
     RungMedians {
         zeta,
         p99_by_speed,
