@@ -399,6 +399,64 @@ async fn damping_halt_leaves_higher_rungs_unqueued() {
     assert_eq!(rig.stimuli(), 3);
 }
 
+async fn wait_stimuli(rig: &Rig, n: usize) {
+    let deadline = Instant::now() + WAIT;
+    while rig.stimuli() < n {
+        assert!(Instant::now() < deadline, "stimulus {n} not sent");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_submit_after_the_tune_leaves_running() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 1).await;
+
+    let mut left = rig.store.read_tune(&id).unwrap();
+    left.state = TuneState::Abandoned;
+    rig.store.write_tune(&left).unwrap();
+    rig.a.sim(|s| s.gate = None);
+    gate.notify_one();
+    sched.wait_idle(&id).await;
+
+    assert_eq!(rig.stimuli(), 1);
+    assert!(rig.engine.is_idle());
+    assert_eq!(rig.store.read_tune(&id).unwrap(), left);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scheduler_error_ends_the_step_awaiting_a_choice() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 1).await;
+
+    let mut broken = rig.store.read_tune(&id).unwrap();
+    broken.steps[0].rungs.clear();
+    rig.store.write_tune(&broken).unwrap();
+    rig.a.sim(|s| s.gate = None);
+    gate.notify_one();
+    sched.wait_idle(&id).await;
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::AwaitingChoice);
+    let failed = tune.steps[0].failed.as_deref().unwrap();
+    assert!(failed.contains("rung 0"), "{failed}");
+    assert_eq!(rig.stimuli(), 1);
+    assert!(
+        sched.create(setup(&[50.0])).await.is_err(),
+        "the tune still holds the stepper until it is chosen or abandoned"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failed_run_stops_the_step() {
     let rig = rig().await;

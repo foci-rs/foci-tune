@@ -12,7 +12,7 @@ use foci_tune_analysis::rungs::{Rungs, SeedRefused, rung_values, seed_from};
 use foci_tune_analysis::verdict::{Gates, Halt, LadderAssessment, RepeatResult, assess_ladder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::sync::{Mutex, OwnedMutexGuard, broadcast, watch};
 
 use crate::engine::{CommandError, Engine, EngineEvent, Precondition};
 pub use crate::model::TuneId;
@@ -540,13 +540,25 @@ impl StepContext {
     }
 }
 
-/// How a step's run loop ended.
+/// How a step's run loop, or one part of it, ended.
 enum Ended {
-    /// Every rung ran, or the ladder halted on a gate.
-    Completed { halted: bool },
-    /// A run did not finish; the reason is recorded on the step.
+    /// Every planned run finished.
+    Completed,
+    /// The ladder halted on a gate; the rungs above it are skipped.
+    Halted,
+    /// A run did not finish or was refused; the reason is recorded on the step.
     Stopped(String),
     /// The tune left `Running` under the loop, so it records nothing more.
+    Superseded,
+}
+
+/// What a guarded submit did.
+enum Submitted {
+    /// The run is queued; the receiver was subscribed before it.
+    Run(RunId, broadcast::Receiver<EngineEvent>),
+    /// The engine refused the run.
+    Refused(Precondition),
+    /// The tune left `Running`, so nothing was submitted.
     Superseded,
 }
 
@@ -554,6 +566,8 @@ struct Shared<M> {
     engine: Arc<Engine<M>>,
     store: Store,
     steppers: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Per tune, a flag set once its step task, failure handling included, has finished.
+    tasks: StdMutex<HashMap<TuneId, watch::Receiver<bool>>>,
 }
 
 /// Runs tune steps: prepares and announces a step, starts it on the operator's confirmation,
@@ -582,6 +596,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 engine,
                 store,
                 steppers: StdMutex::default(),
+                tasks: StdMutex::default(),
             }),
         }
     }
@@ -740,7 +755,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         let Some(ctx) = StepContext::new(&record) else {
             return Err(TuneError::NotAnnounced);
         };
-        tokio::spawn(s.clone().execute(ctx, order, true));
+        s.spawn_step(ctx, order, true);
         Ok(())
     }
 
@@ -750,8 +765,8 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     ///
     /// # Errors
     /// [`TuneError::OutOfOrder`] unless the step awaits a choice, [`TuneError::NoExtension`]
-    /// when the recommendation does not offer `ext`, the ladder halted below the rung above
-    /// it, or the rung cannot be written or repeats a measured raw value,
+    /// when the recommendation does not offer `ext`, or the rung cannot be written or repeats
+    /// a measured raw value,
     /// [`TuneError::Precondition`] when a run could not start now, and store errors.
     pub async fn confirm_extension(&self, tune: &TuneId, ext: Extension) -> Result<(), TuneError> {
         let s = &self.shared;
@@ -769,13 +784,6 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             return Err(TuneError::NoExtension(
                 "the recommendation does not offer this extension".to_owned(),
             ));
-        }
-        let halt = step.assessment.as_ref().and_then(|a| a.halt);
-        if let (Extension::Above, Some((_, halt))) = (ext, halt) {
-            return Err(TuneError::NoExtension(format!(
-                "the ladder halted ({}), so no rung is added above it",
-                halt_text(halt, &record.setup.gates)
-            )));
         }
         let k = match ext {
             Extension::Below => step.lower_k - 1,
@@ -814,8 +822,23 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         let Some(ctx) = StepContext::new(&record) else {
             return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
         };
-        tokio::spawn(s.clone().execute(ctx, vec![index], false));
+        s.spawn_step(ctx, vec![index], false);
         Ok(())
+    }
+
+    /// Returns once no step task of `tune` is live: its runs are no longer being submitted and
+    /// a step that ended on an error has been recorded as failed.
+    pub async fn wait_idle(&self, tune: &TuneId) {
+        let live = self
+            .shared
+            .tasks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(tune)
+            .cloned();
+        if let Some(mut done) = live {
+            let _ = done.wait_for(|finished| *finished).await;
+        }
     }
 }
 
@@ -920,26 +943,92 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         })
     }
 
-    /// Applies `change` to the running tune under its stepper's mutex and persists it.
-    /// Returns false, changing nothing, once the tune has left `Running`.
-    async fn update(
-        &self,
-        ctx: &StepContext,
-        change: impl FnOnce(&mut Tune),
-    ) -> Result<bool, TuneError> {
-        let _held = self.hold(&ctx.setup.stepper).await;
-        let mut tune = self.read(&ctx.tune)?;
-        if tune.state != TuneState::Running || tune.steps.len() != ctx.index + 1 {
-            return Ok(false);
-        }
-        change(&mut tune);
-        self.store.write_tune(&tune)?;
-        Ok(true)
+    /// The tune, if it is still `Running` the step `ctx` describes.
+    fn running(&self, ctx: &StepContext) -> Result<Option<Tune>, TuneError> {
+        let tune = self.read(&ctx.tune)?;
+        let current = tune.state == TuneState::Running && tune.steps.len() == ctx.index + 1;
+        Ok(current.then_some(tune))
     }
 
-    async fn execute(self: Arc<Self>, ctx: StepContext, order: Vec<usize>, drift: bool) {
-        if let Err(e) = self.execute_step(&ctx, order, drift).await {
-            tracing::warn!(tune = %ctx.tune, error = %e, "tune step stopped");
+    /// Applies `change` to the running tune under its stepper's mutex and persists it.
+    /// Returns `None`, changing nothing, once the tune has left `Running`.
+    async fn update<R>(
+        &self,
+        ctx: &StepContext,
+        change: impl FnOnce(&mut Tune) -> Result<R, TuneError>,
+    ) -> Result<Option<R>, TuneError> {
+        let _held = self.hold(&ctx.setup.stepper).await;
+        let Some(mut tune) = self.running(ctx)? else {
+            return Ok(None);
+        };
+        let out = change(&mut tune)?;
+        self.store.write_tune(&tune)?;
+        Ok(Some(out))
+    }
+
+    /// Submits `request` only while the tune is still `Running` this step, holding the
+    /// stepper's mutex across the check and the submit so no transition can come between.
+    async fn submit(&self, ctx: &StepContext, request: RunRequest) -> Result<Submitted, TuneError> {
+        let _held = self.hold(&ctx.setup.stepper).await;
+        if self.running(ctx)?.is_none() {
+            return Ok(Submitted::Superseded);
+        }
+        let events = self.engine.events();
+        Ok(match self.engine.submit(request).await {
+            Ok(id) => Submitted::Run(id, events),
+            Err(p) => Submitted::Refused(p),
+        })
+    }
+
+    /// Runs the step on a task of its own. An error or a panic in it records the step as
+    /// failed and leaves the tune awaiting a choice, so the stepper is never held by a dead
+    /// task.
+    fn spawn_step(self: &Arc<Self>, ctx: StepContext, order: Vec<usize>, drift: bool) {
+        let (done, watcher) = watch::channel(false);
+        self.tasks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(ctx.tune.clone(), watcher.clone());
+        let shared = self.clone();
+        tokio::spawn(async move {
+            let (tune, stepper, index) = (ctx.tune.clone(), ctx.setup.stepper.clone(), ctx.index);
+            let worker = shared.clone();
+            let outcome =
+                tokio::spawn(async move { worker.execute_step(&ctx, order, drift).await }).await;
+            let failure = match outcome {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(e) => Some(format!("the step task ended unexpectedly: {e}")),
+            };
+            if let Some(reason) = failure {
+                tracing::warn!(tune = %tune, error = %reason, "tune step stopped");
+                shared.fail_running(&tune, &stepper, index, reason).await;
+            }
+            {
+                let mut tasks = shared.tasks.lock().unwrap_or_else(PoisonError::into_inner);
+                if tasks.get(&tune).is_some_and(|w| w.same_channel(&watcher)) {
+                    tasks.remove(&tune);
+                }
+            }
+            let _ = done.send(true);
+        });
+    }
+
+    async fn fail_running(&self, tune: &TuneId, stepper: &str, index: usize, reason: String) {
+        let _held = self.hold(stepper).await;
+        let mut record = match self.read(tune) {
+            Ok(record) => record,
+            Err(e) => {
+                tracing::error!(tune = %tune, error = %e, "failed step not recorded");
+                return;
+            }
+        };
+        if record.state != TuneState::Running || record.steps.len() != index + 1 {
+            return;
+        }
+        conclude(&mut record, index, Some(reason));
+        if let Err(e) = self.store.write_tune(&record) {
+            tracing::error!(tune = %tune, error = %e, "failed step not recorded");
         }
     }
 
@@ -952,24 +1041,17 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         let failed = match self.run_rungs(ctx, &order).await? {
             Ended::Superseded => return Ok(()),
             Ended::Stopped(reason) => Some(reason),
-            Ended::Completed { halted: true } => None,
-            Ended::Completed { halted: false } if drift => match self.run_drift(ctx).await? {
+            Ended::Halted => None,
+            Ended::Completed if drift => match self.run_drift(ctx).await? {
                 Ended::Superseded => return Ok(()),
                 Ended::Stopped(reason) => Some(reason),
-                Ended::Completed { .. } => None,
+                Ended::Completed | Ended::Halted => None,
             },
-            Ended::Completed { halted: false } => None,
+            Ended::Completed => None,
         };
         self.update(ctx, |tune| {
-            let setup = tune.setup.clone();
-            let step = &mut tune.steps[ctx.index];
-            let assessment = assess(step, &setup);
-            let shown: Vec<f64> = step.rungs.iter().map(|r| r.shown).collect();
-            step.recommendation = failed.is_none().then(|| recommend(&assessment, &shown));
-            step.assessment = Some(assessment);
-            step.failed = failed;
-            step.ended_unix_ms = Some(now_ms());
-            tune.state = TuneState::AwaitingChoice;
+            conclude(tune, ctx.index, failed);
+            Ok(())
         })
         .await?;
         Ok(())
@@ -978,49 +1060,32 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     /// Runs the rungs in `order`, all repeats of one before the next, and assesses the ladder
     /// after each rung.
     async fn run_rungs(&self, ctx: &StepContext, order: &[usize]) -> Result<Ended, TuneError> {
-        for (n, &index) in order.iter().enumerate() {
-            let started = self
+        for &index in order {
+            let value = self
                 .update(ctx, |t| {
-                    t.steps[ctx.index].rungs[index].started_unix_ms = Some(now_ms());
+                    let rung = rung_mut(step_mut(t, ctx.index)?, index)?;
+                    rung.started_unix_ms = Some(now_ms());
+                    Ok((rung.shown, rung.raw))
                 })
                 .await?;
-            if !started {
+            let Some((shown, raw)) = value else {
                 return Ok(Ended::Superseded);
-            }
-            let (shown, raw) = {
-                let tune = self.read(&ctx.tune)?;
-                let rung = &tune.steps[ctx.index].rungs[index];
-                (rung.shown, rung.raw)
             };
             for _ in 0..ctx.repeats {
                 match self
                     .run_repeat(ctx, Target::Rung(index), shown, raw)
                     .await?
                 {
-                    Ended::Completed { .. } => {}
-                    Ended::Stopped(reason) => {
-                        let rest = order[n + 1..].to_vec();
-                        let skipped = format!("not run: {reason}");
-                        self.update(ctx, |t| {
-                            let step = &mut t.steps[ctx.index];
-                            step.rungs[index].ended_unix_ms = Some(now_ms());
-                            for i in rest {
-                                step.rungs[i].skipped = Some(skipped.clone());
-                            }
-                        })
-                        .await?;
-                        return Ok(Ended::Stopped(reason));
-                    }
-                    Ended::Superseded => return Ok(Ended::Superseded),
+                    Ended::Completed => {}
+                    other => return Ok(other),
                 }
             }
-            let mut halt = None;
-            let ok = self
+            let halt = self
                 .update(ctx, |t| {
                     let setup = t.setup.clone();
-                    let step = &mut t.steps[ctx.index];
-                    step.rungs[index].ended_unix_ms = Some(now_ms());
-                    halt = assess(step, &setup).halt;
+                    let step = step_mut(t, ctx.index)?;
+                    rung_mut(step, index)?.ended_unix_ms = Some(now_ms());
+                    let halt = assess(step, &setup).halt;
                     if let Some((at, h)) = halt {
                         let reason = format!("not run: {}", halt_text(h, &setup.gates));
                         for rung in step.rungs.iter_mut().skip(at + 1) {
@@ -1029,58 +1094,66 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                             }
                         }
                     }
+                    Ok(halt)
                 })
                 .await?;
-            if !ok {
-                return Ok(Ended::Superseded);
-            }
-            if halt.is_some() {
-                return Ok(Ended::Completed { halted: true });
+            match halt {
+                None => return Ok(Ended::Superseded),
+                Some(Some(_)) => return Ok(Ended::Halted),
+                Some(None) => {}
             }
         }
-        Ok(Ended::Completed { halted: false })
+        Ok(Ended::Completed)
     }
 
     /// Runs the seed rung once more and records each metric's drift from its first median.
     async fn run_drift(&self, ctx: &StepContext) -> Result<Ended, TuneError> {
-        let tune = self.read(&ctx.tune)?;
-        let step = &tune.steps[ctx.index];
-        let Some(seed) = seed_index(step) else {
-            return Ok(Ended::Completed { halted: false });
-        };
-        if step.rungs[seed].repeat_values.len() < ctx.repeats as usize {
-            return Ok(Ended::Completed { halted: false });
-        }
-        let (shown, raw) = (step.rungs[seed].shown, step.rungs[seed].raw);
-        let mut record = rung_record(shown, raw);
-        record.started_unix_ms = Some(now_ms());
-        if !self
-            .update(ctx, |t| t.steps[ctx.index].drift_rung = Some(record))
-            .await?
-        {
-            return Ok(Ended::Superseded);
-        }
-        let ended = self.run_repeat(ctx, Target::Drift, shown, raw).await?;
-        if !matches!(ended, Ended::Completed { .. }) {
-            return Ok(ended);
-        }
-        let ok = self
+        let repeats = ctx.repeats as usize;
+        let seed = self
             .update(ctx, |t| {
-                let setup = t.setup.clone();
-                let step = &mut t.steps[ctx.index];
-                let first = assess(step, &setup);
-                if let Some(rung) = step.drift_rung.as_mut() {
-                    rung.ended_unix_ms = Some(now_ms());
-                    if let Some(rerun) = rung.repeat_values.first() {
-                        step.drift = drift_records(&first, seed, rerun, &setup.speeds_mm_s);
-                    }
+                let step = step_mut(t, ctx.index)?;
+                let measured = seed_index(step).and_then(|i| {
+                    let rung = step.rungs.get(i)?;
+                    (rung.repeat_values.len() >= repeats).then_some((i, rung.shown, rung.raw))
+                });
+                if let Some((_, shown, raw)) = measured {
+                    let mut record = rung_record(shown, raw);
+                    record.started_unix_ms = Some(now_ms());
+                    step.drift_rung = Some(record);
                 }
+                Ok(measured)
             })
             .await?;
-        Ok(if ok {
-            Ended::Completed { halted: false }
-        } else {
-            Ended::Superseded
+        let Some(seed) = seed else {
+            return Ok(Ended::Superseded);
+        };
+        let Some((seed, shown, raw)) = seed else {
+            return Ok(Ended::Completed);
+        };
+        match self.run_repeat(ctx, Target::Drift, shown, raw).await? {
+            Ended::Completed => {}
+            other => return Ok(other),
+        }
+        let recorded = self
+            .update(ctx, |t| {
+                let setup = t.setup.clone();
+                let step = step_mut(t, ctx.index)?;
+                let first = assess(step, &setup);
+                let drift = step.drift_rung.as_mut().map(|rung| {
+                    rung.ended_unix_ms = Some(now_ms());
+                    rung.repeat_values
+                        .first()
+                        .map(|rerun| drift_records(&first, seed, rerun, &setup.speeds_mm_s))
+                });
+                if let Some(Some(records)) = drift {
+                    step.drift = records;
+                }
+                Ok(())
+            })
+            .await?;
+        Ok(match recorded {
+            Some(()) => Ended::Completed,
+            None => Ended::Superseded,
         })
     }
 
@@ -1103,13 +1176,13 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         kinds.push(standstill_kind(setup));
         let mut runs = Vec::with_capacity(kinds.len());
         for kind in kinds {
-            let request = ctx.request(kind, shown, raw);
-            let mut events = self.engine.events();
             let started = now_ms();
-            let run = match self.engine.submit(request).await {
-                Ok(id) => self.wait_finished(&id, &mut events).await?,
-                Err(p) => return Ok(Ended::Stopped(format!("run refused: {p}"))),
+            let (id, mut events) = match self.submit(ctx, ctx.request(kind, shown, raw)).await? {
+                Submitted::Run(id, events) => (id, events),
+                Submitted::Refused(p) => return Ok(Ended::Stopped(format!("run refused: {p}"))),
+                Submitted::Superseded => return Ok(Ended::Superseded),
             };
+            let run = self.wait_finished(&id, &mut events).await?;
             let time = RunTime {
                 id: run.id.clone(),
                 started_unix_ms: started,
@@ -1117,14 +1190,13 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             };
             let filed = self
                 .update(ctx, |t| {
-                    let step = &mut t.steps[ctx.index];
-                    if let Some(rung) = target_rung(step, target) {
-                        rung.run_ids.push(time.id.clone());
-                        rung.run_times.push(time);
-                    }
+                    let rung = target_rung(step_mut(t, ctx.index)?, target)?;
+                    rung.run_ids.push(time.id.clone());
+                    rung.run_times.push(time);
+                    Ok(())
                 })
                 .await?;
-            if !filed {
+            if filed.is_none() {
                 return Ok(Ended::Superseded);
             }
             if let Some(reason) = stop_text(&run) {
@@ -1137,15 +1209,15 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         let result = repeat_result(runs.first(), &tracking, runs.get(speeds + 1));
         let filed = self
             .update(ctx, |t| {
-                if let Some(rung) = target_rung(&mut t.steps[ctx.index], target) {
-                    rung.repeat_values.push(result);
-                }
+                target_rung(step_mut(t, ctx.index)?, target)?
+                    .repeat_values
+                    .push(result);
+                Ok(())
             })
             .await?;
-        Ok(if filed {
-            Ended::Completed { halted: false }
-        } else {
-            Ended::Superseded
+        Ok(match filed {
+            Some(()) => Ended::Completed,
+            None => Ended::Superseded,
         })
     }
 
@@ -1154,7 +1226,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     async fn wait_finished(
         &self,
         run: &RunId,
-        events: &mut tokio::sync::broadcast::Receiver<EngineEvent>,
+        events: &mut broadcast::Receiver<EngineEvent>,
     ) -> Result<Run, TuneError> {
         loop {
             match events.recv().await {
@@ -1181,10 +1253,57 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     }
 }
 
-fn target_rung(step: &mut TuneStep, target: Target) -> Option<&mut RungRecord> {
+/// Ends the step at `index`: rungs never run are skipped when the step failed, rungs left open
+/// are closed, the ladder is assessed and, unless the step failed, a gain recommended; the tune
+/// then awaits the operator's choice.
+fn conclude(tune: &mut Tune, index: usize, failed: Option<String>) {
+    let setup = tune.setup.clone();
+    if let Some(step) = tune.steps.get_mut(index) {
+        let now = now_ms();
+        for rung in step.rungs.iter_mut().chain(step.drift_rung.as_mut()) {
+            if let Some(reason) = &failed
+                && rung.run_ids.is_empty()
+                && rung.skipped.is_none()
+            {
+                rung.skipped = Some(format!("not run: {reason}"));
+            }
+            if rung.started_unix_ms.is_some() && rung.ended_unix_ms.is_none() {
+                rung.ended_unix_ms = Some(now);
+            }
+        }
+        let assessment = assess(step, &setup);
+        let shown: Vec<f64> = step.rungs.iter().map(|r| r.shown).collect();
+        step.recommendation = failed.is_none().then(|| recommend(&assessment, &shown));
+        step.assessment = Some(assessment);
+        step.failed = failed;
+        step.ended_unix_ms = Some(now);
+    }
+    tune.state = TuneState::AwaitingChoice;
+}
+
+fn missing(what: String) -> TuneError {
+    TuneError::Store(format!("the running step's record has no {what}"))
+}
+
+fn step_mut(tune: &mut Tune, index: usize) -> Result<&mut TuneStep, TuneError> {
+    tune.steps
+        .get_mut(index)
+        .ok_or_else(|| missing(format!("step {index}")))
+}
+
+fn rung_mut(step: &mut TuneStep, index: usize) -> Result<&mut RungRecord, TuneError> {
+    step.rungs
+        .get_mut(index)
+        .ok_or_else(|| missing(format!("rung {index}")))
+}
+
+fn target_rung(step: &mut TuneStep, target: Target) -> Result<&mut RungRecord, TuneError> {
     match target {
-        Target::Rung(i) => step.rungs.get_mut(i),
-        Target::Drift => step.drift_rung.as_mut(),
+        Target::Rung(i) => rung_mut(step, i),
+        Target::Drift => step
+            .drift_rung
+            .as_mut()
+            .ok_or_else(|| missing("drift rung".to_owned())),
     }
 }
 
