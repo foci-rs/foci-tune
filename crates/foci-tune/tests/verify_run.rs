@@ -251,7 +251,10 @@ fn probe_runs_need_twenty_edges() {
     let (no_probe, _) = outcome(&frames, None);
 
     assert!(checks.contains(&(VerificationCheck::EdgeCount, false)));
-    assert_eq!(twelve.as_deref(), Some("12 edges"));
+    let twelve = twelve.unwrap();
+    assert!(twelve.starts_with("12 edges"), "{twelve}");
+    assert!(twelve.contains("at least 20"), "{twelve}");
+    assert!(twelve.contains("segments_between_toggles"), "{twelve}");
     assert_eq!(twenty, None);
     assert!(
         !no_probe

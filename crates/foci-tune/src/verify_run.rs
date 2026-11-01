@@ -9,6 +9,7 @@ use foci_tune_analysis::units::POSITION_UNITS_PER_REV;
 
 use crate::model::{Verification, VerificationCheck};
 use crate::run_analysis::StimulusWindow;
+use crate::stimulus::MIN_TOGGLE_SPACING_S;
 
 /// `applied_request` of a velocity feedforward write, the only write a stimulus makes.
 pub const FEEDFORWARD_REQUEST: u8 = 7;
@@ -220,7 +221,14 @@ fn no_drop_gaps(w: &Window<'_>) -> Verification {
 pub fn verify(w: &Window<'_>) -> Vec<Verification> {
     let mut checks = vec![channel_moved(w), baseline_contiguous(w), no_drop_gaps(w)];
     if let Some(edges) = w.probe_edges {
-        let failure = (edges < MIN_PROBE_EDGES).then(|| format!("{edges} edges"));
+        let failure = (edges < MIN_PROBE_EDGES).then(|| {
+            format!(
+                "{edges} edges (need at least {MIN_PROBE_EDGES}); toggles closer than ~{:.0} ms \
+                 or a feedforward offset that never steps produce none: check \
+                 segments_between_toggles against the speed",
+                MIN_TOGGLE_SPACING_S * 1000.0
+            )
+        });
         checks.push(outcome(
             VerificationCheck::EdgeCount,
             failure,

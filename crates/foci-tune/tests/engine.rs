@@ -396,7 +396,12 @@ async fn a_sequence_jump_a_drop_flag_and_few_edges_are_not_comparable() {
         "{:?}",
         drop.state
     );
-    assert_eq!(edges.state, not_comparable("12 edges"));
+    assert!(
+        matches!(&edges.state, RunState::NotComparable(r)
+            if r.starts_with("12 edges") && r.contains("segments_between_toggles")),
+        "{:?}",
+        edges.state
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1018,7 +1023,11 @@ async fn a_probe_ladder_stops_on_an_unassessable_value() {
 
     let runs = by_value(&rig, &ids);
     assert_eq!(runs[0].1, RunState::Done);
-    assert_eq!(runs[1].1, not_comparable("12 edges"));
+    assert!(
+        matches!(&runs[1].1, RunState::NotComparable(r) if r.starts_with("12 edges")),
+        "{:?}",
+        runs[1]
+    );
     assert!(
         matches!(&runs[2].1, RunState::Skipped(r) if r.contains("damping unassessable")),
         "{:?}",

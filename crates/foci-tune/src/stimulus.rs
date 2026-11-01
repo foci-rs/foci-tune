@@ -19,6 +19,10 @@ pub const MIN_FEED_MM_MIN: u32 = 60;
 /// Longest predicted script, in seconds. Abort waits for the script in flight, so this also
 /// bounds how long an abort can take.
 pub const MAX_SCRIPT_S: f64 = 900.0;
+/// Shortest time between two probe gain toggles, in seconds. The probe's edge detector needs
+/// 75 samples (15 before, 60 after, at 1 kHz) of constant feedforward offset around an edge;
+/// the rest is margin for the planner's segment-boundary changes.
+pub const MIN_TOGGLE_SPACING_S: f64 = 0.1;
 
 const SEGMENT_MM: f64 = 5.0;
 const SETTLE_LINE: &str = "G4 P500";
@@ -26,6 +30,8 @@ const SETTLE_S: f64 = 0.5;
 const APPROACH_FEED: u32 = 3000;
 const MAX_DWELL_S: f64 = 60.0;
 const REST_FEED: u32 = 600;
+/// Absorbs rounding in the spacing estimate, so a spacing of exactly the minimum passes.
+const SPACING_TOLERANCE_S: f64 = 1e-9;
 
 /// The kind of run a stimulus drives.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,6 +114,23 @@ pub enum StimulusError {
         /// The ceiling, [`MAX_SCRIPT_S`].
         max_s: f64,
     },
+    /// Probe gain toggles would come closer than [`MIN_TOGGLE_SPACING_S`].
+    #[error(
+        "{parameter}: toggle spacing {:.0} ms at {speed_mm_s:.0} mm/s is below the {:.0} ms the \
+         edge detector needs; use at least {min_segments} segments between toggles",
+        .spacing_s * 1000.0,
+        MIN_TOGGLE_SPACING_S * 1000.0
+    )]
+    TogglesTooClose {
+        /// Parameter name as in [`RunKind`].
+        parameter: &'static str,
+        /// Predicted time between toggles in seconds.
+        spacing_s: f64,
+        /// The applied stepper speed in mm/s.
+        speed_mm_s: f64,
+        /// Fewest segments between toggles that reach the minimum at this speed.
+        min_segments: usize,
+    },
 }
 
 fn num(v: f64) -> String {
@@ -146,6 +169,35 @@ fn within_budget(predicted_s: f64, parameter: &'static str) -> Result<(), Stimul
     } else {
         Ok(())
     }
+}
+
+/// Stepper travel of one stroke segment, in mm: the path length of a segment over the path to
+/// stepper speed ratio, so on the corexy diagonal a 5 mm per-axis segment is 10 mm.
+fn segment_travel_mm(pattern: &Pattern, length_mm: f64, ratio: f64) -> f64 {
+    let (dx, dy) = (
+        pattern.end.0 - pattern.start.0,
+        pattern.end.1 - pattern.start.1,
+    );
+    let n = segments_per_stroke(dx.abs().max(dy.abs()));
+    length_mm / n as f64 / ratio
+}
+
+fn segments_per_stroke(reach_mm: f64) -> usize {
+    (reach_mm / SEGMENT_MM).ceil().max(1.0) as usize
+}
+
+fn toggles_apart(travel_mm: f64, every: usize, speed: f64) -> Result<(), StimulusError> {
+    let spacing_s = travel_mm * every as f64 / speed;
+    if spacing_s + SPACING_TOLERANCE_S >= MIN_TOGGLE_SPACING_S {
+        return Ok(());
+    }
+    let needed = MIN_TOGGLE_SPACING_S * speed / travel_mm - SPACING_TOLERANCE_S;
+    Err(StimulusError::TogglesTooClose {
+        parameter: "segments_between_toggles",
+        spacing_s,
+        speed_mm_s: speed,
+        min_segments: needed.ceil().max(1.0) as usize,
+    })
 }
 
 fn positive(v: f64, what: &'static str) -> Result<f64, StimulusError> {
@@ -231,7 +283,7 @@ impl<'a> Script<'a> {
             (self.pattern.end, self.pattern.start)
         };
         let reach = (to.0 - from.0).abs().max((to.1 - from.1).abs());
-        let n = (reach / SEGMENT_MM).ceil().max(1.0) as usize;
+        let n = segments_per_stroke(reach);
         for i in 1..=n {
             let t = i as f64 / n as f64;
             self.goto(
@@ -256,8 +308,9 @@ impl<'a> Script<'a> {
 ///
 /// # Errors
 /// Unsupported kinematics, a pattern outside `limits` minus margin, any non-finite or
-/// out-of-range run parameter, a speed below [`MIN_SPEED_MM_S`] or [`MIN_FEED_MM_MIN`], or a
-/// predicted duration above [`MAX_SCRIPT_S`].
+/// out-of-range run parameter, a speed below [`MIN_SPEED_MM_S`] or [`MIN_FEED_MM_MIN`], probe
+/// toggles closer than [`MIN_TOGGLE_SPACING_S`] at the applied speed, or a predicted duration
+/// above [`MAX_SCRIPT_S`].
 pub fn compose(
     kind: &RunKind,
     pattern: &Pattern,
@@ -336,6 +389,11 @@ pub fn compose(
             }
             at_most(*strokes, MAX_STROKES, "strokes")?;
             let speed = clamp_speed(*speed_mm_s, max_velocity, ratio, "speed_mm_s", &mut clamped)?;
+            toggles_apart(
+                segment_travel_mm(pattern, length, ratio),
+                *segments_between_toggles,
+                speed,
+            )?;
             within_budget(
                 SETTLE_S + strokes_s(*strokes, length, feed_mm_min(speed, ratio)),
                 "speed_mm_s",

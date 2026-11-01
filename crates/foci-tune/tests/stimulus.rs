@@ -1,8 +1,8 @@
 use foci_tune::pattern::{Pattern, PatternError};
 use foci_tune::steppers::BedLimits;
 use foci_tune::stimulus::{
-    MAX_SCRIPT_S, MAX_SPEEDS, MAX_STROKES, REST_OFFSETS_MM, RunKind, Stimulus, StimulusError,
-    compose,
+    MAX_SCRIPT_S, MAX_SPEEDS, MAX_STROKES, MIN_TOGGLE_SPACING_S, REST_OFFSETS_MM, RunKind,
+    Stimulus, StimulusError, compose,
 };
 
 const FF: &str = "FOCI_SET_VELOCITY_FEEDFORWARD STEPPER=stepper_x ENABLE=1 GAIN=";
@@ -186,7 +186,7 @@ fn probe_ends_with_gain_restored_whatever_the_last_toggle() {
 
 #[test]
 fn probe_speed_is_clamped_and_reported() {
-    let st = cartesian(&probe(700.0, 3));
+    let st = cartesian(&probe(700.0, 10));
     assert_eq!(st.clamped_speeds, vec![(700.0, 500.0)]);
     assert_eq!(st.applied_speeds, vec![500.0]);
     assert!(!st.gcode.contains("F42000"));
@@ -464,4 +464,91 @@ fn the_default_requests_fit_within_the_duration_cap() {
         })
         .is_ok()
     );
+}
+
+fn too_close(result: Result<Stimulus, StimulusError>) -> (f64, usize, String) {
+    let e = result.expect_err("toggles too close");
+    let text = e.to_string();
+    let StimulusError::TogglesTooClose {
+        parameter,
+        spacing_s,
+        min_segments,
+        ..
+    } = e
+    else {
+        panic!("{e:?}");
+    };
+    assert_eq!(parameter, "segments_between_toggles");
+    (spacing_s, min_segments, text)
+}
+
+#[test]
+fn corexy_probe_toggles_closer_than_the_edge_window_are_refused_with_the_minimum() {
+    let at = |every| {
+        compose(
+            &probe(400.0, every),
+            &diag(),
+            "stepper_x",
+            "corexy",
+            &bed(),
+            500.0,
+        )
+    };
+
+    let (spacing_s, min_segments, text) = too_close(at(3));
+
+    assert_eq!(MIN_TOGGLE_SPACING_S, 0.1);
+    assert!((spacing_s - 0.075).abs() < 1e-9, "{spacing_s}");
+    assert_eq!(min_segments, 4);
+    assert!(text.contains("75 ms"), "{text}");
+    assert!(text.contains("400 mm/s"), "{text}");
+    assert!(text.contains("100 ms"), "{text}");
+    assert!(text.contains("at least 4 segments"), "{text}");
+    assert!(at(4).is_ok(), "{:?}", at(4));
+}
+
+#[test]
+fn toggle_spacing_exactly_at_the_minimum_is_accepted() {
+    let at = |speed| {
+        compose(
+            &probe(speed, 4),
+            &diag(),
+            "stepper_x",
+            "corexy",
+            &bed(),
+            500.0,
+        )
+    };
+
+    let (_, min_segments, _) = too_close(at(401.0));
+
+    assert!(at(400.0).is_ok(), "{:?}", at(400.0));
+    assert_eq!(min_segments, 5);
+}
+
+#[test]
+fn the_default_probe_keeps_its_toggles_far_enough_apart() {
+    assert!(corexy(&probe(195.0, 3)).gcode.contains("GAIN=1.3"));
+}
+
+#[test]
+fn cartesian_toggle_spacing_uses_the_applied_speed() {
+    let at = |speed, every| {
+        compose(
+            &probe(speed, every),
+            &along_x(),
+            "stepper_x",
+            "cartesian",
+            &bed(),
+            500.0,
+        )
+    };
+
+    let (spacing_s, min_segments, _) = too_close(at(500.0, 3));
+    let clamped = at(700.0, 10);
+
+    assert!((spacing_s - 0.03).abs() < 1e-9, "{spacing_s}");
+    assert_eq!(min_segments, 10);
+    assert!(at(500.0, 10).is_ok());
+    assert_eq!(clamped.unwrap().applied_speeds, vec![500.0]);
 }

@@ -621,7 +621,8 @@ fn stimulus_error(e: StimulusError) -> ApiError {
         e @ StimulusError::InvalidParameter(_) => ApiError::bad_field("parameters", e.to_string()),
         e @ (StimulusError::TooLarge { parameter, .. }
         | StimulusError::TooSlow { parameter, .. }
-        | StimulusError::TooLong { parameter, .. }) => {
+        | StimulusError::TooLong { parameter, .. }
+        | StimulusError::TogglesTooClose { parameter, .. }) => {
             ApiError::bad_field(&format!("parameters.{parameter}"), e.to_string())
         }
     }

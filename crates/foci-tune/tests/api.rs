@@ -991,6 +991,21 @@ async fn oversized_requests_are_400_naming_the_parameter() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn probe_toggles_too_close_for_the_edge_detector_are_400_naming_the_parameter() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let mut fast = probe_body();
+    fast["parameters"]["speed_mm_s"] = json!(400.0);
+
+    let fast = post(&app, "/api/runs", fast).await;
+
+    assert_eq!(fast.status, StatusCode::BAD_REQUEST);
+    assert_eq!(fast.json()["field"], "parameters.segments_between_toggles");
+    assert!(fast.error().contains("at least 4"), "{}", fast.error());
+    assert!(rig.scripts().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn too_slow_and_too_long_requests_are_400_naming_the_parameter() {
     let rig = rig().await;
     let app = app(&rig);
