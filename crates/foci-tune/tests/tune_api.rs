@@ -171,7 +171,7 @@ async fn gates_that_would_disable_a_check_are_rejected() {
     let (app, _) = app(&rig);
     let cases = [
         ("damping_floor", json!(-1.0)),
-        ("marginal", json!(0.04)),
+        ("marginal", json!(0.05)),
         ("standstill_factor", json!(0.5)),
     ];
 

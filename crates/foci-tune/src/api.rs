@@ -1381,10 +1381,10 @@ fn check_gates(gates: &Gates) -> ApiResult<()> {
             "the damping floor must be a finite number of at least 0",
         ));
     }
-    if !(gates.marginal.is_finite() && gates.marginal >= gates.damping_floor) {
+    if !(gates.marginal.is_finite() && gates.marginal > gates.damping_floor) {
         return Err(ApiError::bad_field(
             "gates.marginal",
-            "the marginal threshold must be finite and not below the damping floor",
+            "the marginal threshold must be finite and above the damping floor",
         ));
     }
     if !(gates.standstill_factor.is_finite() && gates.standstill_factor >= 1.0) {
