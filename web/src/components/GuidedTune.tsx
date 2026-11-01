@@ -320,7 +320,7 @@ function PrepareCard({
 }) {
   const [typed, setTyped] = useState(false);
   const [seed, setSeed] = useState(0);
-  const [repeats, setRepeats] = useState(2);
+  const [repeats, setRepeats] = useState(3);
   const [lower, setLower] = useState(-3);
   const [upper, setUpper] = useState(3);
   const problem =

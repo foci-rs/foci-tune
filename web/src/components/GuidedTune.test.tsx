@@ -67,14 +67,17 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
 
 let current: TuneDetail;
 let posts: string[];
+let bodies: unknown[];
 
 beforeEach(() => {
   posts = [];
+  bodies = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string, init?: RequestInit) => {
       if (init?.method === "POST") {
         posts.push(path);
+        bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : init.body);
         return new Response("{}");
       }
       if (path === "/api/tunes") {
@@ -105,6 +108,7 @@ test("preparing a step posts the request and never the confirmation", async () =
   render(<GuidedTune printer={printer} />);
   fireEvent.click(await screen.findByRole("button", { name: "Prepare the step" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps"]));
+  expect(bodies[0]).toMatchObject({ seed: "live", repeats: 3 });
   expect(screen.queryByRole("button", { name: "Start the step" })).not.toBeInTheDocument();
 });
 
