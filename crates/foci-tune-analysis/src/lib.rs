@@ -10,3 +10,4 @@ pub mod signals;
 pub mod standstill;
 pub mod tracking;
 pub mod units;
+pub mod verdict;

@@ -87,7 +87,7 @@ pub fn interleave(values: usize, repeats: usize) -> Vec<(usize, usize)> {
 }
 
 /// Headline damping of one finished run.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RungOutcome {
     /// Velocity zeta of the fit.
     Assessed(f64),
