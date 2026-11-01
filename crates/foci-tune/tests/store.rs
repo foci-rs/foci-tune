@@ -3,14 +3,14 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use foci_tune::capture::Capture;
 use foci_tune::model::{
-    CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, Gains, Metrics,
-    ProbeRecord, Run, RunId, RunRegime, RunRequest, RunState, SERIES_FORMAT_VERSION, Session,
-    SessionId, TrackingRecord, Verification, VerificationCheck,
+    CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, FitOutcome, Gains,
+    Metrics, ProbeRecord, Run, RunId, RunRegime, RunRequest, RunState, SERIES_FORMAT_VERSION,
+    Session, SessionId, TrackingRecord, Verification, VerificationCheck,
 };
 use foci_tune::pattern::Pattern;
 use foci_tune::stimulus::RunKind;
 use foci_tune::store::{Store, StoreError, new_id, write_json_atomic};
-use foci_tune_analysis::fit::FitError;
+use foci_tune_analysis::fit::{DampedFit, FitError};
 use foci_tune_analysis::probe::ProbeMetrics;
 use foci_tune_analysis::tracking::TrackingMetrics;
 use serde::ser::{Error as _, Serialize, Serializer};
@@ -495,4 +495,40 @@ fn a_capture_without_critical_frames_is_a_capture_error() {
 fn free_bytes_reports_the_data_directory() {
     let (_d, store) = store();
     assert!(store.free_bytes().unwrap() > 0);
+}
+
+#[test]
+fn a_fit_outcome_written_before_admissible_starts_reads_as_zero() {
+    let old_fit = serde_json::json!({"status": "fit", "damped_hz": 144.0, "zeta": 0.058,
+        "amplitude": -0.37, "phase": 0.9, "offset": 0.19, "tau_s": 0.0056, "residual_rms": 0.05});
+    let old_failed = serde_json::json!({"status": "failed", "reason": "fit did not converge"});
+
+    let fit: FitOutcome = serde_json::from_value(old_fit).unwrap();
+    let failed: FitOutcome = serde_json::from_value(old_failed).unwrap();
+
+    assert!(matches!(
+        fit,
+        FitOutcome::Fit {
+            admissible_starts: 0,
+            ..
+        }
+    ));
+    assert!(matches!(failed, FitOutcome::Failed { .. }));
+}
+
+#[test]
+fn a_fit_outcome_carries_the_admissible_start_count() {
+    let fit = DampedFit {
+        damped_hz: 144.0,
+        zeta: 0.058,
+        amplitude: -0.37,
+        phase: 0.9,
+        offset: 0.19,
+        tau_s: 0.0056,
+        residual_rms: 0.05,
+        admissible_starts: 24,
+    };
+    let outcome = FitOutcome::from(&Ok::<_, FitError>(fit));
+    let v = serde_json::to_value(&outcome).unwrap();
+    assert_eq!(v["admissible_starts"], serde_json::json!(24));
 }

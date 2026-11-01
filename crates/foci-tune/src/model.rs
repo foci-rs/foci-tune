@@ -478,6 +478,10 @@ pub enum FitOutcome {
         tau_s: f64,
         /// Residual RMS.
         residual_rms: f64,
+        /// How many multi-start seeds produced an admissible fit; zero in records
+        /// written before it was tracked.
+        #[serde(default)]
+        admissible_starts: usize,
     },
     /// The fit failed or produced non-finite parameters.
     Failed {
@@ -510,6 +514,7 @@ impl From<&Result<DampedFit, FitError>> for FitOutcome {
                     offset: f.offset,
                     tau_s: f.tau_s,
                     residual_rms: f.residual_rms,
+                    admissible_starts: f.admissible_starts,
                 }
             }
             Ok(_) => Self::Failed {
