@@ -91,6 +91,8 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
                 run_times: Vec::new(),
             }],
             chosen: Some(1500),
+            chosen_shown: Some(1500.0),
+            starts: 1,
             started_unix_ms: Some(1_700_000_000_000),
             ended_unix_ms: None,
             failed: None,
@@ -101,6 +103,7 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
         }],
         state,
         created_unix_s: 1_700_000_000,
+        notes: Vec::new(),
     }
 }
 

@@ -1,21 +1,24 @@
 mod fake_moonraker;
 mod rig;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use foci_tune::engine::{EngineEvent, Precondition};
+use foci_tune::engine::{EngineEvent, LadderRejected, Precondition};
 use foci_tune::model::{Filters, Gains, Run, RunId, RunState};
 use foci_tune::moonraker::MoonrakerClient;
 use foci_tune::stimulus::RunKind;
 use foci_tune::tune::{
-    ProbeSettings, Seed, StandstillSettings, StepRequest, Tune, TuneError, TuneId, TuneScheduler,
-    TuneSetup, TuneState, repeat_result,
+    Choice, ProbeSettings, Seed, StandstillSettings, StepRequest, Tune, TuneError, TuneId,
+    TuneScheduler, TuneSetup, TuneState, repeat_result,
 };
-use foci_tune_analysis::ladder::{LadderAxis, RungOutcome};
-use foci_tune_analysis::recommend::Extension;
+use foci_tune_analysis::ladder::{LadderAxis, RungOutcome, to_raw};
+use foci_tune_analysis::recommend::{Extension, Recommendation};
 use foci_tune_analysis::rungs::SeedRefused;
 use foci_tune_analysis::verdict::{Gates, Halt, assess_ladder};
 use rig::*;
+use serde_json::json;
+use tokio::sync::Notify;
 
 const BASE: (Gains, Filters) = (
     Gains {
@@ -638,4 +641,441 @@ async fn repeat_result_drops_not_comparable_and_missing_runs() {
     let result = repeat_result(Some(&unassessable), &[Some(&slow)], None);
     assert_eq!(result.zeta, RungOutcome::Unassessable);
     assert_eq!(result.worst_torque_sd, None);
+}
+
+fn board(rig: &Rig) -> ([i32; 4], [u16; 4]) {
+    let sim = rig.a.sim.lock().unwrap();
+    (sim.channels[0].gains, sim.channels[0].filters)
+}
+
+fn raw_of(snapshot: &(Gains, Filters)) -> ([i32; 4], [u16; 4]) {
+    let (g, f) = snapshot;
+    (
+        [g.velocity_p, g.velocity_i, g.position_p, g.position_i],
+        [f.velocity_hz, f.torque_hz, f.position_hz, f.flux_hz],
+    )
+}
+
+fn release(rig: &Rig, gate: &Arc<Notify>) {
+    rig.a.sim(|s| s.gate = None);
+    gate.notify_one();
+}
+
+async fn wait_disk_state(rig: &Rig, id: &TuneId, state: TuneState) {
+    let deadline = Instant::now() + WAIT;
+    while rig.store.read_tune(id).unwrap().state != state {
+        assert!(Instant::now() < deadline, "tune never reached {state:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A finished one-rung velocity P step: rung 1060, three runs, no drift re-run.
+async fn first_step_done(rig: &Rig, sched: &TuneScheduler<MoonrakerClient>) -> TuneId {
+    run_step(rig, sched, step(1, 1, 1)).await.id
+}
+
+fn no_stimulus_after_last_gain_write(rig: &Rig) -> i32 {
+    let scripts = rig.scripts();
+    let last = scripts
+        .iter()
+        .rposition(|s| s.starts_with("FOCI_SET_GAINS"))
+        .unwrap();
+    assert!(
+        scripts[last..].iter().all(|s| !s.starts_with("G90")),
+        "{scripts:?}"
+    );
+    (float(&scripts[last], "VELOCITY_P") * 256.0).round() as i32
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn chosen_value_becomes_next_seed_and_is_applied() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    let early = sched.choose(&id, Choice::Value(900.0)).await;
+    assert!(matches!(early, Err(TuneError::OutOfOrder(_))), "{early:?}");
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    let writes = written_velocity_p(&rig).len();
+
+    for refused in [Choice::Value(0.0), Choice::Value(40_000.0), Choice::Rung(1)] {
+        let err = sched.choose(&id, refused).await;
+        assert!(matches!(err, Err(TuneError::InvalidRequest(_))), "{err:?}");
+    }
+    assert_eq!(written_velocity_p(&rig).len(), writes);
+    sched.choose(&id, Choice::Value(900.0)).await.unwrap();
+
+    assert_eq!(board(&rig).0, [900, 412, 141, 0]);
+    assert_eq!(board(&rig).1, raw_of(&BASE).1);
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Ready);
+    assert_eq!(tune.steps[0].chosen, Some(900));
+    assert_eq!(tune.steps[0].chosen_shown, Some(900.0));
+    assert_eq!(tune.snapshot, BASE);
+
+    sched.prepare_step(&id, step(0, 0, 1)).await.unwrap();
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.steps[1].base.0.velocity_p, 900);
+    assert_eq!(tune.snapshot, BASE);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandon_after_first_step_restores_all_four_gains_and_filters() {
+    let rig = rig().await;
+    rig.a.sim(|s| s.channels[0].gains[3] = 77);
+    let sched = scheduler(&rig);
+    let id = first_step_done(&rig, &sched).await;
+    let snapshot = rig.store.read_tune(&id).unwrap().snapshot;
+    assert_eq!(raw_of(&snapshot).0, [841, 412, 141, 77]);
+    sched.choose(&id, Choice::Rung(0)).await.unwrap();
+    rig.a.sim(|s| s.channels[0].filters = [400, 900, 450, 950]);
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 4).await;
+    assert_ne!(board(&rig), raw_of(&snapshot));
+
+    let abandon = tokio::spawn({
+        let (sched, id) = (sched.clone(), id.clone());
+        async move { sched.abandon(&id).await }
+    });
+    wait_disk_state(&rig, &id, TuneState::RestorePending).await;
+    release(&rig, &gate);
+    abandon.await.unwrap().unwrap();
+
+    assert_eq!(board(&rig), raw_of(&snapshot));
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Abandoned);
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+    assert_eq!(rig.stimuli(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandon_mid_rung_aborts_waits_and_restores() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 1).await;
+
+    let abandon = tokio::spawn({
+        let (sched, id) = (sched.clone(), id.clone());
+        async move { sched.abandon(&id).await }
+    });
+    wait_disk_state(&rig, &id, TuneState::RestorePending).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !abandon.is_finished(),
+        "the restore waits for the run in flight"
+    );
+    release(&rig, &gate);
+    abandon.await.unwrap().unwrap();
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Abandoned);
+    assert!(
+        tune.steps[0].rungs[1..]
+            .iter()
+            .all(|r| r.run_ids.is_empty())
+    );
+    assert_eq!(no_stimulus_after_last_gain_write(&rig), BASE.0.velocity_p);
+    assert_eq!(board(&rig), raw_of(&BASE));
+    assert!(rig.engine.is_idle());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(rig.stimuli(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandon_between_two_runs_submits_nothing_more() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    let mut holder_tune = rig.store.read_tune(&id).unwrap();
+    let gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 1).await;
+
+    // A second announced record on the same stepper: confirming it holds the stepper's mutex
+    // across a slow settings read, so the step task's filing of run one and the abandon queue
+    // behind it in that order, and the abandon lands before the step task's next submit.
+    holder_tune.id = TuneId::generate(std::time::SystemTime::now());
+    rig.store.write_tune(&holder_tune).unwrap();
+    rig.fake.delay_settings(Duration::from_millis(1500));
+    rig.engine.refresh_steppers();
+    let queries = rig.fake.settings_queries();
+    let holder = tokio::spawn({
+        let (sched, id) = (sched.clone(), holder_tune.id.clone());
+        async move { sched.confirm_step(&id).await }
+    });
+    while rig.fake.settings_queries() == queries {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    release(&rig, &gate);
+    let first = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Ok(EngineEvent::Finished(run)) = events.recv().await {
+                return run.id;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let abandon = tokio::spawn({
+        let (sched, id) = (sched.clone(), id.clone());
+        async move { sched.abandon(&id).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !holder.is_finished(),
+        "the holder released the stepper too early"
+    );
+
+    let held = holder.await.unwrap();
+    assert_eq!(held, Err(TuneError::Precondition(Precondition::Busy)));
+    let abandoned = tokio::time::timeout(WAIT, abandon).await;
+    abandoned.expect("abandon did not finish").unwrap().unwrap();
+    rig.fake.delay_settings(Duration::ZERO);
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Abandoned);
+    assert_eq!(tune.steps[0].rungs[0].run_ids, vec![first.clone()]);
+    assert_eq!(rig.stimuli(), 1);
+    while let Ok(event) = events.try_recv() {
+        if let EngineEvent::Queue(queued) = event {
+            assert!(queued.iter().all(|r| *r == first), "{queued:?}");
+        }
+    }
+    assert_eq!(no_stimulus_after_last_gain_write(&rig), BASE.0.velocity_p);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn confirm_racing_abandon_has_one_outcome() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+
+    let confirm = tokio::spawn({
+        let (sched, id) = (sched.clone(), id.clone());
+        async move { sched.confirm_step(&id).await }
+    });
+    let abandon = tokio::spawn({
+        let (sched, id) = (sched.clone(), id.clone());
+        async move { sched.abandon(&id).await }
+    });
+    let (confirmed, abandoned) = (confirm.await.unwrap(), abandon.await.unwrap());
+
+    abandoned.unwrap();
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::Abandoned
+    );
+    match confirmed {
+        Ok(()) => assert!(rig.stimuli() <= 1),
+        Err(e) => {
+            assert_eq!(e, TuneError::NotAnnounced);
+            assert_eq!(rig.stimuli(), 0);
+        }
+    }
+    let stimuli = rig.stimuli();
+    assert_eq!(no_stimulus_after_last_gain_write(&rig), BASE.0.velocity_p);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(rig.stimuli(), stimuli);
+}
+
+async fn failed_abandon(rig: &Rig, sched: &TuneScheduler<MoonrakerClient>) -> TuneId {
+    let id = first_step_done(rig, sched).await;
+    rig.a.sim(|s| s.confirm_gains = false);
+    let err = sched.abandon(&id).await;
+    assert!(matches!(err, Err(TuneError::Engine(_))), "{err:?}");
+    id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_restore_locks_and_blocks_every_route() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = failed_abandon(&rig, &sched).await;
+    let stimuli = rig.stimuli();
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    let TuneState::RestoreFailed(reason) = &tune.state else {
+        panic!("{:?}", tune.state);
+    };
+    assert!(reason.contains("unconfirmed"), "{reason}");
+    let lock = rig.engine.lock_state("stepper_x").unwrap();
+    assert_eq!(lock.snapshot, tune.snapshot);
+    let locked = |p: &Precondition| matches!(p, Precondition::TuneLocked(_));
+    assert!(locked(
+        &rig.engine
+            .submit(rig.request(tracking()))
+            .await
+            .unwrap_err()
+    ));
+    let ladder = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &[841.0, 941.0], 1))
+        .await;
+    assert!(matches!(ladder, Err(LadderRejected::Precondition(ref p)) if locked(p)));
+    let create = sched.create(setup(&[50.0])).await;
+    assert!(matches!(create, Err(TuneError::Precondition(ref p)) if locked(p)));
+    let prepare = sched.prepare_step(&id, step(0, 0, 1)).await;
+    assert!(matches!(prepare, Err(TuneError::OutOfOrder(_))));
+    let choose = sched.choose(&id, Choice::Rung(0)).await;
+    assert!(matches!(choose, Err(TuneError::OutOfOrder(_))));
+    assert_eq!(sched.confirm_step(&id).await, Err(TuneError::NotAnnounced));
+    assert_eq!(rig.stimuli(), stimuli);
+
+    rig.a.sim(|s| s.confirm_gains = true);
+    sched.restore(&id).await.unwrap();
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::Abandoned
+    );
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+    assert_eq!(board(&rig), raw_of(&BASE));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn acknowledge_does_not_clear() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = failed_abandon(&rig, &sched).await;
+    let before = rig.store.read_tune(&id).unwrap();
+
+    sched.acknowledge(&id).await.unwrap();
+
+    let after = rig.store.read_tune(&id).unwrap();
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.notes.len(), before.notes.len() + 1);
+    assert!(rig.engine.lock_state("stepper_x").is_some());
+    assert!(matches!(
+        rig.engine.submit(rig.request(tracking())).await,
+        Err(Precondition::TuneLocked(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lock_cleared_event_updates_the_tune() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = first_step_done(&rig, &sched).await;
+    rig.a.sim(|s| s.confirm_filters[1] = false);
+    assert!(sched.abandon(&id).await.is_err());
+    assert!(matches!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::RestoreFailed(_)
+    ));
+    assert_eq!(board(&rig), raw_of(&BASE));
+
+    rig.engine.read_control_state("stepper_x").await.unwrap();
+
+    wait_disk_state(&rig, &id, TuneState::Abandoned).await;
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn kill_sends_no_gcode_and_restore_is_explicit() {
+    let rig = rig().await;
+    rig.fake
+        .script_emergency_stop(None, Duration::ZERO, Some(Duration::ZERO));
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    let _gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    wait_stimuli(&rig, 1).await;
+
+    rig.engine.kill().await;
+    let sent = rig.scripts().len();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert!(tune.steps[0].failed.is_some());
+    assert_eq!(rig.scripts().len(), sent, "{:?}", rig.scripts());
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+
+    let refused = sched.abandon(&id).await;
+    assert!(refused.is_err(), "Klipper is shut down after the kill");
+    assert_eq!(rig.scripts().len(), sent, "{:?}", rig.scripts());
+    assert!(matches!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::RestoreFailed(_)
+    ));
+    assert_eq!(
+        rig.engine.lock_state("stepper_x").map(|l| l.snapshot),
+        Some(BASE)
+    );
+
+    rig.fake.push("notify_klippy_disconnected", json!([]));
+    rig.fake.push("notify_klippy_ready", json!([]));
+    let deadline = Instant::now() + WAIT;
+    while sched.restore(&id).await.is_err() {
+        assert!(Instant::now() < deadline, "restore never succeeded");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::Abandoned
+    );
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+    assert_eq!(no_stimulus_after_last_gain_write(&rig), BASE.0.velocity_p);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn final_step_produces_the_config_block_with_three_accepted_values() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.lag_by_velocity_p.insert(1060, 40);
+    });
+    let sched = scheduler(&rig);
+    let id = first_step_done(&rig, &sched).await;
+    sched.choose(&id, Choice::Rung(0)).await.unwrap();
+    assert_eq!(sched.config_block(&id), None);
+
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    sched.choose(&id, Choice::Value(60.0)).await.unwrap();
+    assert_eq!(sched.config_block(&id), None);
+
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    let recommended = tune.steps[2].recommendation.unwrap();
+    assert_eq!(recommended.choice, Recommendation::Measured { rung: 0 });
+    sched.choose(&id, Choice::Recommended).await.unwrap();
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Done);
+    let chosen: Vec<i32> = tune.steps.iter().map(|s| s.chosen.unwrap()).collect();
+    assert_eq!(chosen[0], 1060);
+    assert_eq!(chosen[2], tune.steps[2].rungs[0].raw);
+    let block = sched.config_block(&id).unwrap();
+    for (key, value) in [
+        ("pid_velocity_p", chosen[0]),
+        ("pid_velocity_i", chosen[1]),
+        ("pid_position_p", chosen[2]),
+        ("pid_position_i", 0),
+        ("velocity_filter_hz", 500),
+        ("torque_filter_hz", 1000),
+    ] {
+        assert!(
+            block
+                .lines()
+                .any(|l| l.starts_with(&format!("{key}: {value}"))),
+            "{key}: {value} missing from\n{block}"
+        );
+    }
+    let corner = to_raw(LadderAxis::VelocityICornerHz, 60.0, tune.steps[1].pwm_hz).unwrap();
+    assert_eq!(chosen[1], corner.raw);
+    assert!(block.contains("Hz corner"), "{block}");
+    let after = sched.choose(&id, Choice::Rung(0)).await;
+    assert!(matches!(after, Err(TuneError::OutOfOrder(_))));
 }

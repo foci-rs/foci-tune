@@ -1,19 +1,23 @@
-//! Tune records and the scheduler that runs one step of a tune: its ladder of rungs, one rung
-//! at a time in ascending gain order, with a verdict after every rung.
+//! Tune records and the scheduler that runs a tune: each step's ladder of rungs, one rung at a
+//! time in ascending gain order with a verdict after every rung, the operator's choice that
+//! hands the step's value on, and the restore of the tune's starting gains when it is abandoned
+//! or interrupted.
 
 use std::collections::HashMap;
 use std::io;
-use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, PoisonError, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use foci_tune_analysis::ladder::{LadderAxis, RungOutcome};
-use foci_tune_analysis::recommend::{Extension, Recommended, recommend};
+use foci_tune_analysis::ladder::{LadderAxis, LadderValue, RungOutcome, to_raw};
+use foci_tune_analysis::recommend::{Extension, Recommendation, Recommended, recommend};
 use foci_tune_analysis::rungs::{Rungs, SeedRefused, rung_values, seed_from};
 use foci_tune_analysis::verdict::{Gates, Halt, LadderAssessment, RepeatResult, assess_ladder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, OwnedMutexGuard, broadcast, watch};
+use tokio::task::JoinHandle;
 
+use crate::config_block;
 use crate::engine::{CommandError, Engine, EngineEvent, Precondition};
 pub use crate::model::TuneId;
 use crate::model::{
@@ -146,6 +150,13 @@ pub struct TuneStep {
     pub rungs: Vec<RungRecord>,
     /// Raw value the operator chose.
     pub chosen: Option<i32>,
+    /// The chosen value in the axis' display unit.
+    #[serde(default)]
+    pub chosen_shown: Option<f64>,
+    /// How often the step was started, by its confirmation or an extension; a step task acts
+    /// only while the step is on the start it was spawned for.
+    #[serde(default)]
+    pub starts: u32,
     /// Wall-clock start, milliseconds since the UNIX epoch.
     pub started_unix_ms: Option<u64>,
     /// Wall-clock end, milliseconds since the UNIX epoch.
@@ -213,6 +224,39 @@ pub struct Tune {
     pub state: TuneState,
     /// Creation time, seconds since the UNIX epoch.
     pub created_unix_s: u64,
+    /// Remarks on the tune's life cycle, such as a restart or an operator acknowledgement.
+    #[serde(default)]
+    pub notes: Vec<TuneNote>,
+}
+
+/// A remark recorded on a tune, meant for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TuneNote {
+    /// When it was recorded, milliseconds since the UNIX epoch.
+    pub unix_ms: u64,
+    /// The remark.
+    pub text: String,
+}
+
+impl TuneNote {
+    fn now(text: impl Into<String>) -> Self {
+        Self {
+            unix_ms: now_ms(),
+            text: text.into(),
+        }
+    }
+}
+
+/// The value the operator takes from a finished step.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Choice {
+    /// The step's recommendation, measured or interpolated.
+    Recommended,
+    /// A rung of the step, by index, measured with every repeat.
+    Rung(usize),
+    /// A value in the axis' display unit: raw for velocity P and position P, Hz for the
+    /// velocity I corner.
+    Value(f64),
 }
 
 const AXES: [LadderAxis; 3] = [
@@ -497,10 +541,12 @@ enum Target {
 }
 
 /// What a step needs from its tune while it runs; fixed between confirm and the step's end.
+#[derive(Clone)]
 struct StepContext {
     tune: TuneId,
     setup: TuneSetup,
     index: usize,
+    start: u32,
     axis: LadderAxis,
     repeats: u32,
     sessions: StepSessions,
@@ -515,6 +561,7 @@ impl StepContext {
             tune: tune.id.clone(),
             setup: tune.setup.clone(),
             index,
+            start: step.starts,
             axis: step.axis,
             repeats: step.repeats,
             sessions: step.sessions.clone(),
@@ -568,6 +615,16 @@ struct Shared<M> {
     steppers: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Per tune, a flag set once its step task, failure handling included, has finished.
     tasks: StdMutex<HashMap<TuneId, watch::Receiver<bool>>>,
+    /// The task that marks a tune abandoned when its stepper's restore lock clears.
+    listener: OnceLock<JoinHandle<()>>,
+}
+
+impl<M> Drop for Shared<M> {
+    fn drop(&mut self) {
+        if let Some(listener) = self.listener.get() {
+            listener.abort();
+        }
+    }
 }
 
 /// Runs tune steps: prepares and announces a step, starts it on the operator's confirmation,
@@ -590,15 +647,22 @@ impl<M> Clone for TuneScheduler<M> {
 
 impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     /// A scheduler over `engine` and `store`; tunes are read from and written to `store`.
+    ///
+    /// Starts a task that marks a tune awaiting its restore abandoned once the engine clears
+    /// its stepper's restore lock; the task ends with the last clone of the scheduler. Must be
+    /// called inside a tokio runtime.
     pub fn new(engine: Arc<Engine<M>>, store: Store) -> Self {
-        Self {
-            shared: Arc::new(Shared {
-                engine,
-                store,
-                steppers: StdMutex::default(),
-                tasks: StdMutex::default(),
-            }),
-        }
+        let events = engine.events();
+        let shared = Arc::new(Shared {
+            engine,
+            store,
+            steppers: StdMutex::default(),
+            tasks: StdMutex::default(),
+            listener: OnceLock::new(),
+        });
+        let listener = tokio::spawn(watch_lock_cleared(Arc::downgrade(&shared), events));
+        let _ = shared.listener.set(listener);
+        Self { shared }
     }
 
     /// Creates a tune for `setup.stepper` with the stepper's live gains and filters as its
@@ -630,6 +694,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             steps: Vec::new(),
             state: TuneState::Ready,
             created_unix_s: now_s(),
+            notes: Vec::new(),
         };
         s.store.write_tune(&tune)?;
         Ok(tune.id)
@@ -695,6 +760,8 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 .map(|v| rung_record(v.shown, v.raw))
                 .collect(),
             chosen: None,
+            chosen_shown: None,
+            starts: 0,
             started_unix_ms: None,
             ended_unix_ms: None,
             failed: None,
@@ -749,6 +816,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             return Err(TuneError::NotAnnounced);
         };
         step.started_unix_ms = Some(now_ms());
+        step.starts += 1;
         let order = (0..step.rungs.len()).collect();
         record.state = TuneState::Running;
         s.store.write_tune(&record)?;
@@ -817,6 +885,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             }
         };
         step.recommendation = None;
+        step.starts += 1;
         record.state = TuneState::Running;
         s.store.write_tune(&record)?;
         let Some(ctx) = StepContext::new(&record) else {
@@ -828,16 +897,259 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
 
     /// Returns once no step task of `tune` is live: its runs are no longer being submitted and
     /// a step that ended on an error has been recorded as failed.
+    ///
+    /// The step task takes the stepper's transition lock to file every run, so a caller that
+    /// holds that lock (any transition of a tune on the same stepper) must not wait here: it
+    /// would wait for itself.
     pub async fn wait_idle(&self, tune: &TuneId) {
-        let live = self
-            .shared
-            .tasks
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(tune)
-            .cloned();
+        let live = self.shared.live_task(tune);
         if let Some(mut done) = live {
             let _ = done.wait_for(|finished| *finished).await;
+        }
+    }
+
+    /// Takes `choice` as the value of the step that awaits it: writes the step's gains with
+    /// the swept axis set to it through the engine's confirmed write, records it on the step
+    /// and readies the next step, whose live seed then reads it, or ends the tune after
+    /// position P. The filters and the other gains are left as the step ran them.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless a step awaits a choice, [`TuneError::InvalidRequest`]
+    /// for no recommendation, a rung that is not fully measured or a value that cannot be
+    /// written, [`TuneError::Engine`] when the write is refused or fails (the tune still
+    /// awaits a choice), and store errors.
+    pub async fn choose(&self, tune: &TuneId, choice: Choice) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if record.state != TuneState::AwaitingChoice {
+            return Err(TuneError::OutOfOrder(
+                "a choice needs a step that awaits one".to_owned(),
+            ));
+        }
+        let stepper = record.setup.stepper.clone();
+        let done = record.steps.len() >= AXES.len();
+        let Some(step) = record.steps.last_mut() else {
+            return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
+        };
+        let value = chosen_value(step, choice)?;
+        s.engine
+            .apply_gains(&stepper, with_axis(step.base.0, step.axis, value.raw))
+            .await
+            .map_err(TuneError::Engine)?;
+        step.chosen = Some(value.raw);
+        step.chosen_shown = Some(value.shown);
+        step.ended_unix_ms.get_or_insert_with(now_ms);
+        record.state = if done {
+            TuneState::Done
+        } else {
+            TuneState::Ready
+        };
+        s.store.write_tune(&record)?;
+        Ok(())
+    }
+
+    /// Gives the tune up and restores the gains and filters it started from.
+    ///
+    /// The tune is marked restore-pending first, so its step submits no further run. A step
+    /// in progress then has the engine's queue aborted and is waited for, the run in flight
+    /// included, before the snapshot is written. A failed or unconfirmed restore leaves the
+    /// tune restore-failed and its stepper locked against every run.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] for a tune that is done or abandoned, [`TuneError::Engine`]
+    /// when the restore failed, and store errors.
+    pub async fn abandon(&self, tune: &TuneId) -> Result<(), TuneError> {
+        let s = &self.shared;
+        {
+            let _held = s.hold_tune(tune).await?;
+            let mut record = s.read(tune)?;
+            if record.state.is_terminal() {
+                return Err(TuneError::OutOfOrder("the tune is already over".to_owned()));
+            }
+            record.state = TuneState::RestorePending;
+            s.store.write_tune(&record)?;
+        }
+        if s.live_task(tune).is_some() {
+            s.engine.abort().await;
+            self.wait_idle(tune).await;
+        }
+        match s.restore_pending(tune).await {
+            Err(TuneError::OutOfOrder(_)) if s.read(tune)?.state == TuneState::Abandoned => Ok(()),
+            other => other,
+        }
+    }
+
+    /// Writes the snapshot of a tune that awaits its restore again, with the outcomes of
+    /// [`TuneScheduler::abandon`]: abandoned when confirmed, restore-failed and locked
+    /// otherwise.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the tune is restore-pending or restore-failed,
+    /// [`TuneError::Engine`] when the restore failed, and store errors.
+    pub async fn restore(&self, tune: &TuneId) -> Result<(), TuneError> {
+        self.shared.restore_pending(tune).await
+    }
+
+    /// Records the operator's acknowledgement of a tune that awaits its restore. It changes
+    /// neither the tune's state nor its stepper's lock, so runs stay refused.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the tune is restore-pending or restore-failed, and
+    /// store errors.
+    pub async fn acknowledge(&self, tune: &TuneId) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if !awaits_restore(&record.state) {
+            return Err(TuneError::OutOfOrder(
+                "only a tune that awaits its restore can be acknowledged".to_owned(),
+            ));
+        }
+        record.notes.push(TuneNote::now(
+            "the operator acknowledged the pending restore",
+        ));
+        s.store.write_tune(&record)?;
+        Ok(())
+    }
+
+    /// Restart recovery: marks every unfinished tune restore-pending without resuming it and
+    /// locks its stepper with the tune's snapshot, keeping a lock the engine already holds.
+    /// Returns the tunes it marked.
+    ///
+    /// # Errors
+    /// I/O errors from reading or writing the tune records. A lock that is not persisted
+    /// still holds in memory and is only logged.
+    pub async fn recover(&self) -> io::Result<Vec<TuneId>> {
+        let s = &self.shared;
+        let mut recovered = Vec::new();
+        for mut tune in s.store.scan_tunes()? {
+            if tune.state.is_terminal() {
+                continue;
+            }
+            let stepper = tune.setup.stepper.clone();
+            let _held = s.hold(&stepper).await;
+            if s.engine.lock_state(&stepper).is_none()
+                && let Err(e) =
+                    s.engine
+                        .lock_stepper(&stepper, "restart recovery".to_owned(), tune.snapshot)
+            {
+                tracing::error!(stepper, error = %e, "restart recovery lock not persisted");
+            }
+            tune.notes.push(TuneNote::now(format!(
+                "the service restarted while the tune was {}; its restore is pending",
+                state_text(&tune.state)
+            )));
+            tune.state = TuneState::RestorePending;
+            s.store.write_tune(&tune)?;
+            recovered.push(tune.id);
+        }
+        Ok(recovered)
+    }
+
+    /// The `[foci <stepper>]` block with the three chosen values and the snapshot's other
+    /// gains and filters; `None` until every step has a chosen value.
+    pub fn config_block(&self, tune: &TuneId) -> Option<String> {
+        let record = self.shared.read(tune).ok()?;
+        let [velocity_p, velocity_i, position_p] = match record.steps.as_slice() {
+            [p, i, pos] => [p.chosen?, i.chosen?, pos.chosen?],
+            _ => return None,
+        };
+        let (snapshot_gains, filters) = record.snapshot;
+        let gains = Gains {
+            velocity_p,
+            velocity_i,
+            position_p,
+            ..snapshot_gains
+        };
+        let pwm_hz = Some(record.steps[1].pwm_hz).filter(|&hz| hz > 0);
+        Some(config_block::render(
+            &record.setup.stepper,
+            &gains,
+            &filters,
+            pwm_hz,
+        ))
+    }
+}
+
+fn awaits_restore(state: &TuneState) -> bool {
+    matches!(
+        state,
+        TuneState::RestorePending | TuneState::RestoreFailed(_)
+    )
+}
+
+fn state_text(state: &TuneState) -> &'static str {
+    match state {
+        TuneState::Ready => "ready",
+        TuneState::Announced => "announced",
+        TuneState::Running => "running",
+        TuneState::AwaitingChoice => "awaiting a choice",
+        TuneState::Done => "done",
+        TuneState::Abandoned => "abandoned",
+        TuneState::RestorePending => "awaiting its restore",
+        TuneState::RestoreFailed(_) => "restore-failed",
+    }
+}
+
+/// The written value `choice` names on `step`.
+fn chosen_value(step: &TuneStep, choice: Choice) -> Result<LadderValue, TuneError> {
+    match choice {
+        Choice::Recommended => match step.recommendation.map(|r| r.choice) {
+            Some(Recommendation::Measured { rung }) => measured_rung(step, rung),
+            Some(Recommendation::Interpolated { shown, .. }) => typed_value(step, shown),
+            Some(Recommendation::None(_)) | None => Err(TuneError::InvalidRequest(
+                "the step has no recommendation".to_owned(),
+            )),
+        },
+        Choice::Rung(index) => measured_rung(step, index),
+        Choice::Value(shown) => typed_value(step, shown),
+    }
+}
+
+fn measured_rung(step: &TuneStep, index: usize) -> Result<LadderValue, TuneError> {
+    step.rungs
+        .get(index)
+        .filter(|r| r.skipped.is_none() && r.repeat_values.len() >= step.repeats as usize)
+        .map(|r| LadderValue {
+            shown: r.shown,
+            raw: r.raw,
+        })
+        .ok_or_else(|| {
+            TuneError::InvalidRequest(format!("rung {index} is not a measured rung of the step"))
+        })
+}
+
+fn typed_value(step: &TuneStep, shown: f64) -> Result<LadderValue, TuneError> {
+    let raw = match step.axis {
+        LadderAxis::VelocityP | LadderAxis::PositionP => {
+            seed_from(step.axis, shown, step.pwm_hz).map_err(|e| e.to_string())
+        }
+        LadderAxis::VelocityICornerHz => to_raw(step.axis, shown, step.pwm_hz)
+            .map(|v| v.raw)
+            .map_err(|e| e.to_string()),
+    };
+    raw.map(|raw| LadderValue { shown, raw })
+        .map_err(TuneError::InvalidRequest)
+}
+
+/// Marks every tune of a stepper that awaits its restore abandoned when the engine reports the
+/// stepper's restore lock cleared: the board then holds the snapshot.
+async fn watch_lock_cleared<M: MoonrakerApi + 'static>(
+    shared: Weak<Shared<M>>,
+    mut events: broadcast::Receiver<EngineEvent>,
+) {
+    loop {
+        let stepper = match events.recv().await {
+            Ok(EngineEvent::LockCleared { stepper }) => stepper,
+            Ok(_) | Err(RecvError::Lagged(_)) => continue,
+            Err(RecvError::Closed) => return,
+        };
+        let Some(shared) = shared.upgrade() else {
+            return;
+        };
+        if let Err(e) = shared.lock_cleared(&stepper).await {
+            tracing::error!(stepper, error = %e, "cleared restore lock not recorded on its tune");
         }
     }
 }
@@ -882,6 +1194,65 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     async fn hold_tune(&self, tune: &TuneId) -> Result<OwnedMutexGuard<()>, TuneError> {
         let stepper = self.read(tune)?.setup.stepper;
         Ok(self.hold(&stepper).await)
+    }
+
+    fn live_task(&self, tune: &TuneId) -> Option<watch::Receiver<bool>> {
+        self.tasks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(tune)
+            .cloned()
+    }
+
+    /// Restores the snapshot of a tune that awaits its restore, holding its stepper's
+    /// transition lock throughout so concurrent restores and the lock-cleared update queue
+    /// behind it. A failure that left the stepper unlocked, because the engine refused before
+    /// writing anything, takes the lock here.
+    async fn restore_pending(&self, tune: &TuneId) -> Result<(), TuneError> {
+        let _held = self.hold_tune(tune).await?;
+        let mut record = self.read(tune)?;
+        if !awaits_restore(&record.state) {
+            return Err(TuneError::OutOfOrder(
+                "the tune does not await a restore".to_owned(),
+            ));
+        }
+        let stepper = record.setup.stepper.clone();
+        let (gains, filters) = record.snapshot;
+        let failure = match self.engine.restore_snapshot(&stepper, gains, filters).await {
+            Ok(true) => None,
+            Ok(false) => Some("the restore was confirmed but the stepper stays locked".to_owned()),
+            Err(e) => Some(e),
+        };
+        if let Some(reason) = &failure
+            && self.engine.lock_state(&stepper).is_none()
+            && let Err(e) = self.engine.lock_stepper(
+                &stepper,
+                format!("restore failed: {reason}"),
+                record.snapshot,
+            )
+        {
+            tracing::error!(stepper, error = %e, "failed restore lock not persisted");
+        }
+        record.state = match &failure {
+            None => TuneState::Abandoned,
+            Some(reason) => TuneState::RestoreFailed(reason.clone()),
+        };
+        self.store.write_tune(&record)?;
+        failure.map_or(Ok(()), |reason| Err(TuneError::Engine(reason)))
+    }
+
+    async fn lock_cleared(&self, stepper: &str) -> Result<(), TuneError> {
+        let _held = self.hold(stepper).await;
+        for mut tune in self.store.scan_tunes()? {
+            if tune.setup.stepper == stepper && awaits_restore(&tune.state) {
+                tune.state = TuneState::Abandoned;
+                tune.notes.push(TuneNote::now(
+                    "the board reported the starting gains; the restore lock cleared",
+                ));
+                self.store.write_tune(&tune)?;
+            }
+        }
+        Ok(())
     }
 
     fn read(&self, tune: &TuneId) -> Result<Tune, TuneError> {
@@ -943,10 +1314,12 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         })
     }
 
-    /// The tune, if it is still `Running` the step `ctx` describes.
+    /// The tune, if it is still `Running` the step and start `ctx` describes.
     fn running(&self, ctx: &StepContext) -> Result<Option<Tune>, TuneError> {
         let tune = self.read(&ctx.tune)?;
-        let current = tune.state == TuneState::Running && tune.steps.len() == ctx.index + 1;
+        let current = tune.state == TuneState::Running
+            && tune.steps.len() == ctx.index + 1
+            && tune.steps[ctx.index].starts == ctx.start;
         Ok(current.then_some(tune))
     }
 
@@ -991,44 +1364,42 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             .insert(ctx.tune.clone(), watcher.clone());
         let shared = self.clone();
         tokio::spawn(async move {
-            let (tune, stepper, index) = (ctx.tune.clone(), ctx.setup.stepper.clone(), ctx.index);
-            let worker = shared.clone();
+            let (worker, step) = (shared.clone(), ctx.clone());
             let outcome =
-                tokio::spawn(async move { worker.execute_step(&ctx, order, drift).await }).await;
+                tokio::spawn(async move { worker.execute_step(&step, order, drift).await }).await;
             let failure = match outcome {
                 Ok(Ok(())) => None,
                 Ok(Err(e)) => Some(e.to_string()),
                 Err(e) => Some(format!("the step task ended unexpectedly: {e}")),
             };
             if let Some(reason) = failure {
-                tracing::warn!(tune = %tune, error = %reason, "tune step stopped");
-                shared.fail_running(&tune, &stepper, index, reason).await;
+                tracing::warn!(tune = %ctx.tune, error = %reason, "tune step stopped");
+                shared.fail_running(&ctx, reason).await;
             }
             {
                 let mut tasks = shared.tasks.lock().unwrap_or_else(PoisonError::into_inner);
-                if tasks.get(&tune).is_some_and(|w| w.same_channel(&watcher)) {
-                    tasks.remove(&tune);
+                if tasks
+                    .get(&ctx.tune)
+                    .is_some_and(|w| w.same_channel(&watcher))
+                {
+                    tasks.remove(&ctx.tune);
                 }
             }
             let _ = done.send(true);
         });
     }
 
-    async fn fail_running(&self, tune: &TuneId, stepper: &str, index: usize, reason: String) {
-        let _held = self.hold(stepper).await;
-        let mut record = match self.read(tune) {
-            Ok(record) => record,
-            Err(e) => {
-                tracing::error!(tune = %tune, error = %e, "failed step not recorded");
-                return;
-            }
-        };
-        if record.state != TuneState::Running || record.steps.len() != index + 1 {
-            return;
-        }
-        conclude(&mut record, index, Some(reason));
-        if let Err(e) = self.store.write_tune(&record) {
-            tracing::error!(tune = %tune, error = %e, "failed step not recorded");
+    async fn fail_running(&self, ctx: &StepContext, reason: String) {
+        let _held = self.hold(&ctx.setup.stepper).await;
+        let written = self.running(ctx).and_then(|record| {
+            let Some(mut record) = record else {
+                return Ok(());
+            };
+            conclude(&mut record, ctx.index, Some(reason));
+            Ok(self.store.write_tune(&record)?)
+        });
+        if let Err(e) = written {
+            tracing::error!(tune = %ctx.tune, error = %e, "failed step not recorded");
         }
     }
 
