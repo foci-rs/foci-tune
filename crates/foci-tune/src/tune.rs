@@ -667,6 +667,17 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     /// called inside a tokio runtime.
     pub fn new(engine: Arc<Engine<M>>, store: Store) -> Self {
         let events = engine.events();
+        Self::with_events(engine, store, events)
+    }
+
+    /// Like [`TuneScheduler::new`], reading restore-lock events from `events` instead of a fresh
+    /// engine subscription; a receiver that lags makes the scheduler re-check every tune that
+    /// awaits its restore against the engine's locks.
+    pub fn with_events(
+        engine: Arc<Engine<M>>,
+        store: Store,
+        events: broadcast::Receiver<EngineEvent>,
+    ) -> Self {
         let shared = Arc::new(Shared {
             engine,
             store,
@@ -1163,7 +1174,16 @@ async fn watch_lock_cleared<M: MoonrakerApi + 'static>(
     loop {
         let stepper = match events.recv().await {
             Ok(EngineEvent::LockCleared { stepper }) => stepper,
-            Ok(_) | Err(RecvError::Lagged(_)) => continue,
+            Ok(_) => continue,
+            Err(RecvError::Lagged(_)) => {
+                let Some(shared) = shared.upgrade() else {
+                    return;
+                };
+                if let Err(e) = shared.reconcile_locks().await {
+                    tracing::error!(error = %e, "restore locks not reconciled after missed events");
+                }
+                continue;
+            }
             Err(RecvError::Closed) => return,
         };
         let Some(shared) = shared.upgrade() else {
@@ -1311,6 +1331,22 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
 
     /// A cleared event can trail a newer lock on the same stepper, so it applies only while
     /// the engine holds no lock for it.
+    async fn reconcile_locks(&self) -> Result<(), TuneError> {
+        let mut steppers: Vec<String> = self
+            .store
+            .scan_tunes()?
+            .into_iter()
+            .filter(|t| awaits_restore(&t.state))
+            .map(|t| t.setup.stepper)
+            .collect();
+        steppers.sort();
+        steppers.dedup();
+        for stepper in steppers {
+            self.lock_cleared(&stepper).await?;
+        }
+        Ok(())
+    }
+
     async fn lock_cleared(&self, stepper: &str) -> Result<(), TuneError> {
         let _held = self.hold(stepper).await;
         if self.engine.lock_state(stepper).is_some() {

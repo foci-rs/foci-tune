@@ -1013,6 +1013,30 @@ async fn lock_cleared_event_updates_the_tune() {
     assert_eq!(rig.engine.lock_state("stepper_x"), None);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn missed_lock_events_do_not_leave_a_cleared_lock_on_its_tune() {
+    let rig = rig().await;
+    let (tx, rx) = tokio::sync::broadcast::channel(1);
+    let sched = TuneScheduler::with_events(rig.engine.clone(), rig.store.clone(), rx);
+    let id = first_step_done(&rig, &sched).await;
+    rig.a.sim(|s| s.confirm_filters[1] = false);
+    assert!(sched.abandon(&id).await.is_err());
+    assert!(matches!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::RestoreFailed(_)
+    ));
+    rig.engine.read_control_state("stepper_x").await.unwrap();
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
+
+    for _ in 0..3 {
+        let _ = tx.send(EngineEvent::LockCleared {
+            stepper: "unrelated".to_owned(),
+        });
+    }
+
+    wait_disk_state(&rig, &id, TuneState::Abandoned).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stale_lock_cleared_event_leaves_a_relocked_tune_awaiting_its_restore() {
     let rig = rig().await;
