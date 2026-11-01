@@ -12,7 +12,7 @@ pub const POST: usize = 60;
 pub const FIT_RANGE: (usize, usize) = (2, 55);
 
 const PSD_FS_HZ: f64 = 1000.0;
-const PSD_BAND_HZ: (f64, f64) = (60.0, 490.0);
+pub(crate) const PSD_BAND_HZ: (f64, f64) = (60.0, 490.0);
 const DETREND_WINDOW: usize = 25;
 const FALLBACK_DT_S: f64 = 1e-3;
 
