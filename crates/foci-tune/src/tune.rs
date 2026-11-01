@@ -12,7 +12,7 @@ use foci_tune_analysis::ladder::{LadderAxis, LadderValue, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation, Recommended, recommend};
 use foci_tune_analysis::rungs::{RungNote, Rungs, SeedRefused, rung_values, seed_from};
 use foci_tune_analysis::verdict::{
-    Gates, Halt, LadderAssessment, Pause, RepeatResult, assess_ladder,
+    Gates, Halt, LadderAssessment, Pause, RepeatResult, Waivers, assess_ladder_with,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -492,8 +492,15 @@ fn halt_text(halt: Halt, gates: &Gates) -> String {
             "median damping {median:.3} is below the floor {}",
             gates.damping_floor
         ),
-        Halt::DampingUnassessable => "damping unassessable".to_owned(),
-        Halt::StandstillBaselineUnassessable => "standstill baseline unassessable".to_owned(),
+        Halt::DampingUnassessable => pause_text(Pause::DampingUnassessable),
+        Halt::StandstillBaselineUnassessable => pause_text(Pause::StandstillBaselineUnassessable),
+    }
+}
+
+fn pause_text(pause: Pause) -> String {
+    match pause {
+        Pause::DampingUnassessable => "damping unassessable".to_owned(),
+        Pause::StandstillBaselineUnassessable => "standstill baseline unassessable".to_owned(),
     }
 }
 
@@ -567,15 +574,62 @@ fn seed_index(step: &TuneStep) -> Option<usize> {
     step.rungs.iter().position(|r| r.raw == raw)
 }
 
+/// The operator's decisions on `step` as assessment input; only a damping waiver lets
+/// assessment past a rung's missing zeta.
+fn waivers(step: &TuneStep) -> Waivers {
+    Waivers {
+        continued: step
+            .rungs
+            .iter()
+            .map(|r| {
+                r.waived
+                    .as_ref()
+                    .is_some_and(|w| w.reason == Pause::DampingUnassessable)
+            })
+            .collect(),
+        standstill_gate_off: step.standstill_gate_off.is_some(),
+    }
+}
+
 fn assess(step: &TuneStep, setup: &TuneSetup) -> LadderAssessment {
     let results: Vec<Vec<RepeatResult>> =
         step.rungs.iter().map(|r| r.repeat_values.clone()).collect();
-    assess_ladder(
+    assess_ladder_with(
         &results,
         step.repeats as usize,
         &setup.gates,
         setup.include_marginal,
+        &waivers(step),
     )
+}
+
+/// Indices of the rungs above `rung` that have neither run nor been skipped, ascending.
+fn unrun_above(step: &TuneStep, rung: usize) -> Vec<usize> {
+    step.rungs
+        .iter()
+        .enumerate()
+        .skip(rung + 1)
+        .filter(|(_, r)| r.run_ids.is_empty() && r.skipped.is_none())
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Records the assessment's pause on the step, if it has one, and marks the tune paused.
+fn pause_if_unassessable(tune: &mut Tune, index: usize, assessment: LadderAssessment) -> bool {
+    let Some(step) = tune.steps.get_mut(index) else {
+        return false;
+    };
+    let Some((rung, reason)) = assessment.pause else {
+        return false;
+    };
+    step.paused = Some(PauseRecord {
+        rung,
+        reason,
+        unix_ms: now_ms(),
+    });
+    step.assessment = Some(assessment);
+    tune.state = TuneState::Paused;
+    true
 }
 
 fn drift_records(
@@ -669,6 +723,8 @@ enum Ended {
     Completed,
     /// The ladder halted on a gate; the rungs above it are skipped.
     Halted,
+    /// A rung could not be assessed; the tune is paused for the operator's decision.
+    Paused,
     /// A run did not finish or was refused; the reason is recorded on the step.
     Stopped(String),
     /// The tune left `Running` under the loop, so it records nothing more.
@@ -994,6 +1050,111 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
         };
         s.spawn_step(ctx, vec![index], false);
+        Ok(())
+    }
+
+    /// The operator's answer to a paused step.
+    ///
+    /// `Continue` waives the paused rung (a standstill baseline waiver also turns the step's
+    /// standstill gate off) and runs the rungs above it, then the drift check; should the
+    /// waiver uncover another pause, the step stays paused on it without running anything.
+    /// `Rerun` keeps the rung's runs as a superseded attempt and runs the rung again, then the
+    /// rungs above it. `Stop` skips the rungs above and ends the step without a drift check,
+    /// awaiting the operator's choice.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the tune is paused, [`TuneError::Precondition`] when a
+    /// run could not start now, and store errors.
+    pub async fn decide(&self, tune: &TuneId, decision: PauseDecision) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if record.state != TuneState::Paused {
+            return Err(TuneError::OutOfOrder(
+                "a decision needs a paused step".to_owned(),
+            ));
+        }
+        let index = record
+            .steps
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| TuneError::OutOfOrder("the tune has no step".to_owned()))?;
+        let Some(paused) = record.steps[index].paused.clone() else {
+            return Err(TuneError::OutOfOrder(
+                "the paused step has no pause record".to_owned(),
+            ));
+        };
+        let order = match decision {
+            PauseDecision::Continue => {
+                s.engine.check(&record.setup.stepper).await?;
+                let unix_ms = now_ms();
+                let step = step_mut(&mut record, index)?;
+                let rung = rung_mut(step, paused.rung)?;
+                // A damping waiver already on the rung must survive a later baseline waiver, or
+                // the next assessment would pause on the rung's damping again.
+                if paused.reason == Pause::DampingUnassessable || rung.waived.is_none() {
+                    rung.waived = Some(Waiver {
+                        unix_ms,
+                        reason: paused.reason,
+                    });
+                }
+                if paused.reason == Pause::StandstillBaselineUnassessable {
+                    step.standstill_gate_off = Some(unix_ms);
+                }
+                step.paused = None;
+                step.assessment = None;
+                record.notes.push(TuneNote::now(format!(
+                    "operator continued past rung {}: {}",
+                    paused.rung,
+                    pause_text(paused.reason)
+                )));
+                let setup = record.setup.clone();
+                let assessment = assess(&record.steps[index], &setup);
+                if pause_if_unassessable(&mut record, index, assessment) {
+                    s.save(&record)?;
+                    return Ok(());
+                }
+                unrun_above(&record.steps[index], paused.rung)
+            }
+            PauseDecision::Rerun => {
+                s.engine.check(&record.setup.stepper).await?;
+                let step = step_mut(&mut record, index)?;
+                let rung = rung_mut(step, paused.rung)?;
+                let attempt = RungAttempt {
+                    run_ids: std::mem::take(&mut rung.run_ids),
+                    run_times: std::mem::take(&mut rung.run_times),
+                    repeat_values: std::mem::take(&mut rung.repeat_values),
+                    ended_unix_ms: rung.ended_unix_ms.take(),
+                };
+                rung.superseded.push(attempt);
+                rung.started_unix_ms = None;
+                step.paused = None;
+                step.assessment = None;
+                let mut order = vec![paused.rung];
+                order.extend(unrun_above(step, paused.rung));
+                order
+            }
+            PauseDecision::Stop => {
+                let step = step_mut(&mut record, index)?;
+                let reason = format!("not run: {}", pause_text(paused.reason));
+                for i in unrun_above(step, paused.rung) {
+                    rung_mut(step, i)?.skipped = Some(reason.clone());
+                }
+                step.paused = None;
+                conclude(&mut record, index, None);
+                s.save(&record)?;
+                return Ok(());
+            }
+        };
+        let step = step_mut(&mut record, index)?;
+        step.starts += 1;
+        let drift = step.drift_rung.is_none();
+        record.state = TuneState::Running;
+        s.save(&record)?;
+        let Some(ctx) = StepContext::new(&record) else {
+            return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
+        };
+        s.spawn_step(ctx, order, drift);
         Ok(())
     }
 
@@ -1594,11 +1755,11 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         drift: bool,
     ) -> Result<(), TuneError> {
         let failed = match self.run_rungs(ctx, &order).await? {
-            Ended::Superseded => return Ok(()),
+            Ended::Superseded | Ended::Paused => return Ok(()),
             Ended::Stopped(reason) => Some(reason),
             Ended::Halted => None,
             Ended::Completed if drift => match self.run_drift(ctx).await? {
-                Ended::Superseded => return Ok(()),
+                Ended::Superseded | Ended::Paused => return Ok(()),
                 Ended::Stopped(reason) => Some(reason),
                 Ended::Completed | Ended::Halted => None,
             },
@@ -1613,7 +1774,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     }
 
     /// Runs the rungs in `order`, all repeats of one before the next, and assesses the ladder
-    /// after each rung.
+    /// after each rung. A rung that cannot be assessed pauses the tune and ends the loop.
     async fn run_rungs(&self, ctx: &StepContext, order: &[usize]) -> Result<Ended, TuneError> {
         for &index in order {
             let value = self
@@ -1635,26 +1796,27 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                     other => return Ok(other),
                 }
             }
-            let halt = self
+            let ended = self
                 .update(ctx, |t| {
                     let setup = t.setup.clone();
                     let step = step_mut(t, ctx.index)?;
                     rung_mut(step, index)?.ended_unix_ms = Some(now_ms());
-                    let halt = assess(step, &setup).halt;
-                    if let Some((at, h)) = halt {
+                    let assessment = assess(step, &setup);
+                    if let Some((at, h)) = assessment.halt {
                         let reason = format!("not run: {}", halt_text(h, &setup.gates));
                         for rung in step.rungs.iter_mut().skip(at + 1) {
                             if rung.run_ids.is_empty() && rung.skipped.is_none() {
                                 rung.skipped = Some(reason.clone());
                             }
                         }
+                        return Ok(Some(Ended::Halted));
                     }
-                    Ok(halt)
+                    Ok(pause_if_unassessable(t, ctx.index, assessment).then_some(Ended::Paused))
                 })
                 .await?;
-            match halt {
+            match ended {
                 None => return Ok(Ended::Superseded),
-                Some(Some(_)) => return Ok(Ended::Halted),
+                Some(Some(end)) => return Ok(end),
                 Some(None) => {}
             }
         }

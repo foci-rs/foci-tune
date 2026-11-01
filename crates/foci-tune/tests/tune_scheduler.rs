@@ -9,13 +9,15 @@ use foci_tune::model::{Filters, Gains, Run, RunId, RunState};
 use foci_tune::moonraker::MoonrakerClient;
 use foci_tune::stimulus::RunKind;
 use foci_tune::tune::{
-    Choice, ProbeSettings, Seed, StandstillSettings, StepRequest, Tune, TuneError, TuneId,
-    TuneScheduler, TuneSetup, TuneState, repeat_result,
+    Choice, PauseDecision, ProbeSettings, Seed, StandstillSettings, StepRequest, Tune, TuneError,
+    TuneId, TuneScheduler, TuneSetup, TuneState, repeat_result,
 };
 use foci_tune_analysis::ladder::{LadderAxis, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation};
 use foci_tune_analysis::rungs::SeedRefused;
-use foci_tune_analysis::verdict::{Gates, Halt, assess_ladder};
+use foci_tune_analysis::verdict::{
+    Gates, Halt, InadmissibleReason, Pause, UnscoredReason, assess_ladder,
+};
 use rig::*;
 use serde_json::json;
 use tokio::sync::Notify;
@@ -389,15 +391,18 @@ async fn damping_halt_leaves_higher_rungs_unqueued() {
         s.profile_by_script.push(("G4 P200".into(), dropped));
     });
     let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, crate::step(0, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
 
-    let tune = run_step(&rig, &sched, crate::step(0, 1, 1)).await;
+    let tune = wait_state(&rig, &id, TuneState::Paused).await;
 
     let step = &tune.steps[0];
-    assert!(matches!(
-        step.assessment.as_ref().unwrap().halt,
-        Some((0, Halt::StandstillBaselineUnassessable))
-    ));
-    assert!(step.rungs[1].skipped.is_some());
+    assert_eq!(
+        step.assessment.as_ref().unwrap().pause,
+        Some((0, Pause::StandstillBaselineUnassessable))
+    );
+    assert!(step.rungs[1].run_ids.is_empty());
     assert!(step.drift_rung.is_none());
     assert_eq!(rig.stimuli(), 3);
 }
@@ -1235,4 +1240,369 @@ async fn the_stored_run_count_is_the_announced_one() {
     assert!(stored.steps[1].rungs.iter().all(|r| r.raw != 0));
     assert_eq!(stored.steps[1].run_count, Some(plan.run_count));
     assert_eq!(plan.run_count, (3 * 2 + 1) * 3);
+}
+
+fn no_edges_at(rig: &Rig, velocity_p: i32) {
+    rig.a.sim(|s| {
+        let no_edges = Profile {
+            probe_edges: 0,
+            ..Profile::default()
+        };
+        s.profile_by_velocity_p.insert(velocity_p, no_edges);
+    });
+}
+
+/// Gives every rung of a `k` -1..=1 ladder from 841 a tracking lag, so its tracking p99 exists
+/// and an assessed rung can be scored.
+fn tracking_lag(rig: &Rig) {
+    rig.a.sim(|s| {
+        for raw in [668, 841, 1060] {
+            s.lag_by_velocity_p.insert(raw, 50);
+        }
+    });
+}
+
+fn edges_again_at(rig: &Rig, velocity_p: i32) {
+    rig.a.sim(|s| {
+        s.profile_by_velocity_p.remove(&velocity_p);
+    });
+}
+
+/// Seed 841 with `k` from -1 to 1 gives rungs 668, 841 and 1060 at one repeat each; the probe at
+/// 841 yields no edges, so the step pauses at rung 1.
+async fn paused_tune(rig: &Rig, sched: &TuneScheduler<MoonrakerClient>) -> TuneId {
+    no_edges_at(rig, 841);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(rig, &id, TuneState::Paused).await;
+    id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unassessable_rung_pauses_with_the_last_write_at_that_rung() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    sched.wait_idle(&id).await;
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    let step = &tune.steps[0];
+    assert_eq!(
+        step.paused.as_ref().map(|p| (p.rung, p.reason)),
+        Some((1, Pause::DampingUnassessable))
+    );
+    assert_eq!(
+        step.assessment.as_ref().unwrap().pause,
+        Some((1, Pause::DampingUnassessable))
+    );
+    assert!(step.rungs[2].run_ids.is_empty() && step.rungs[2].skipped.is_none());
+    assert_eq!(written_velocity_p(&rig).last(), Some(&841));
+    assert!(!written_velocity_p(&rig).contains(&1060));
+    assert!(step.drift_rung.is_none());
+    assert!(step.ended_unix_ms.is_none());
+    let stimuli = rig.stimuli();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.stimuli(), stimuli, "nothing runs while paused");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_tune_survives_a_reload() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+
+    let on_disk = rig.store.read_tune(&id).unwrap();
+
+    assert_eq!(on_disk.state, TuneState::Paused);
+    assert!(on_disk.steps[0].paused.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_waives_the_rung_and_runs_the_rest() {
+    let rig = rig().await;
+    tracking_lag(&rig);
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &tune.steps[0];
+    assert!(step.rungs[1].waived.is_some());
+    assert_eq!(step.paused, None);
+    let a = step.assessment.as_ref().unwrap();
+    assert_eq!(a.verdicts[1].unscored, Some(UnscoredReason::DampingWaived));
+    assert!(
+        a.verdicts[2].score.is_some(),
+        "the rung above was run and scored"
+    );
+    assert!(written_velocity_p(&rig).contains(&1060));
+    assert!(
+        step.drift_rung.is_some(),
+        "a completed ladder still runs its drift check"
+    );
+    assert!(tune.notes.iter().any(|n| n.text.contains("continued")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_on_the_last_rung_completes_the_step() {
+    let rig = rig().await;
+    no_edges_at(&rig, 1060);
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::Paused).await;
+
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    assert!(tune.steps[0].drift_rung.is_some());
+    assert!(tune.steps[0].recommendation.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rerun_supersedes_the_attempt_and_an_assessed_rerun_continues() {
+    let rig = rig().await;
+    tracking_lag(&rig);
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    let first_ids = rig.store.read_tune(&id).unwrap().steps[0].rungs[1]
+        .run_ids
+        .clone();
+    edges_again_at(&rig, 841);
+
+    sched.decide(&id, PauseDecision::Rerun).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let rung = &tune.steps[0].rungs[1];
+    assert_eq!(rung.superseded.len(), 1);
+    assert_eq!(rung.superseded[0].run_ids, first_ids);
+    assert!(rung.run_ids.iter().all(|r| !first_ids.contains(r)));
+    assert_eq!(rung.waived, None);
+    assert!(
+        tune.steps[0].assessment.as_ref().unwrap().verdicts[1]
+            .score
+            .is_some()
+    );
+    assert!(written_velocity_p(&rig).contains(&1060));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unassessable_rerun_pauses_again() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    let first = rig.store.read_tune(&id).unwrap().steps[0]
+        .paused
+        .clone()
+        .unwrap();
+
+    sched.decide(&id, PauseDecision::Rerun).await.unwrap();
+    // The decision moves the attempt to `superseded` before it returns, so this is observable
+    // at once; the second pause is then the next idle Paused state.
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().steps[0].rungs[1]
+            .superseded
+            .len(),
+        1
+    );
+    let tune = wait_state(&rig, &id, TuneState::Paused).await;
+
+    let again = tune.steps[0].paused.clone().unwrap();
+    assert_eq!(again.rung, 1);
+    assert!(again.unix_ms >= first.unix_ms);
+    assert_eq!(
+        tune.steps[0].rungs[1].run_ids.len(),
+        3,
+        "the re-run filed its own three runs"
+    );
+    assert_eq!(tune.steps[0].rungs[1].superseded.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_below_floor_rerun_halts() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    edges_again_at(&rig, 841);
+    rig.a.sim(|s| {
+        s.zeta_by_velocity_p.insert(841, 0.03);
+    });
+
+    sched.decide(&id, PauseDecision::Rerun).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    assert!(matches!(
+        tune.steps[0].assessment.as_ref().unwrap().halt,
+        Some((1, Halt::BelowFloor { .. }))
+    ));
+    assert!(tune.steps[0].rungs[2].skipped.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_skips_the_rungs_above_and_recommends_from_the_assessed_ones() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+
+    sched.decide(&id, PauseDecision::Stop).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &tune.steps[0];
+    let skipped = step.rungs[2].skipped.as_deref().unwrap();
+    assert!(skipped.contains("unassessable"), "{skipped}");
+    assert!(step.rungs[2].run_ids.is_empty());
+    assert!(step.recommendation.is_some());
+    assert!(step.drift_rung.is_none());
+    assert!(!written_velocity_p(&rig).contains(&1060));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standstill_baseline_pause_continue_disables_the_gate() {
+    let rig = rig_with(Options::default()).await;
+    tracking_lag(&rig);
+    rig.a.sim(|s| {
+        let dropped = Profile {
+            drop_flag: true,
+            ..Profile::default()
+        };
+        s.profile_by_script.push(("G4 P200".into(), dropped));
+    });
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(0, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    let paused = wait_state(&rig, &id, TuneState::Paused).await;
+    assert_eq!(
+        paused.steps[0].paused.as_ref().map(|p| p.reason),
+        Some(Pause::StandstillBaselineUnassessable)
+    );
+    rig.a.sim(|s| s.profile_by_script.clear());
+
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &tune.steps[0];
+    assert!(step.standstill_gate_off.is_some());
+    assert_eq!(
+        step.rungs[0].waived.as_ref().map(|w| w.reason),
+        Some(Pause::StandstillBaselineUnassessable)
+    );
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().steps[0].rungs[0].waived,
+        step.rungs[0].waived,
+        "the waiver survives a reload"
+    );
+    let a = step.assessment.as_ref().unwrap();
+    assert_eq!(a.pause, None);
+    assert_ne!(
+        a.verdicts[0].unscored,
+        Some(UnscoredReason::DampingWaived),
+        "a standstill waiver is not a damping waiver"
+    );
+    assert!(
+        a.verdicts
+            .iter()
+            .all(|v| v.inadmissible != Some(InadmissibleReason::StandstillHigh))
+    );
+    assert!(a.verdicts[1].score.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_waived_rung_zero_pauses_for_its_baseline_before_a_rung_above_runs() {
+    let rig = rig().await;
+    tracking_lag(&rig);
+    rig.a.sim(|s| {
+        let dropped = Profile {
+            probe_edges: 0,
+            drop_flag: true,
+            ..Profile::default()
+        };
+        s.profile_by_velocity_p.insert(668, dropped);
+    });
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::Paused).await;
+    let stimuli = rig.stimuli();
+
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+
+    let again = rig.store.read_tune(&id).unwrap();
+    assert_eq!(again.state, TuneState::Paused);
+    assert_eq!(
+        again.steps[0].paused.as_ref().map(|p| (p.rung, p.reason)),
+        Some((0, Pause::StandstillBaselineUnassessable))
+    );
+    assert_eq!(
+        rig.stimuli(),
+        stimuli,
+        "no rung above ran before the baseline decision"
+    );
+
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let a = tune.steps[0].assessment.as_ref().unwrap();
+    assert_eq!(a.verdicts[0].unscored, Some(UnscoredReason::DampingWaived));
+    assert!(tune.steps[0].standstill_gate_off.is_some());
+    assert!(a.verdicts[1].score.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_decision_needs_a_paused_tune_and_a_paused_tune_refuses_a_choice_and_an_extension() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    assert!(matches!(
+        sched.decide(&id, PauseDecision::Stop).await,
+        Err(TuneError::OutOfOrder(_))
+    ));
+    sched.abandon(&id).await.unwrap();
+
+    let id = paused_tune(&rig, &sched).await;
+    assert!(matches!(
+        sched.choose(&id, Choice::Rung(0)).await,
+        Err(TuneError::OutOfOrder(_))
+    ));
+    assert!(matches!(
+        sched.confirm_extension(&id, Extension::Above).await,
+        Err(TuneError::OutOfOrder(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandon_while_paused_restores_and_submits_nothing() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    let stimuli = rig.stimuli();
+
+    sched.abandon(&id).await.unwrap();
+
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Abandoned);
+    assert_eq!(rig.stimuli(), stimuli);
+    assert_eq!(board(&rig), raw_of(&tune.snapshot));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_rerun_ends_the_step_failed_and_keeps_the_superseded_attempt() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    rig.a.sim(|s| {
+        s.failures.push(("G90".into(), "refused".into()));
+    });
+
+    sched.decide(&id, PauseDecision::Rerun).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &tune.steps[0];
+    assert!(step.failed.is_some());
+    assert_eq!(step.rungs[1].superseded.len(), 1);
+    assert!(step.rungs[2].skipped.is_some());
 }
