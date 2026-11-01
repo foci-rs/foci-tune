@@ -1090,9 +1090,9 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 let unix_ms = now_ms();
                 let step = step_mut(&mut record, index)?;
                 let rung = rung_mut(step, paused.rung)?;
-                // A damping waiver already on the rung must survive a later baseline waiver, or
-                // the next assessment would pause on the rung's damping again.
-                if paused.reason == Pause::DampingUnassessable || rung.waived.is_none() {
+                let damping_waiver_stands =
+                    paused.reason == Pause::StandstillBaselineUnassessable && rung.waived.is_some();
+                if !damping_waiver_stands {
                     rung.waived = Some(Waiver {
                         unix_ms,
                         reason: paused.reason,

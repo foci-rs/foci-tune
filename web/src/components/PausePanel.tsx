@@ -102,7 +102,6 @@ export function PausePanel({
     return () => {
       live = false;
     };
-    // refs and the standstill flag are fully determined by idKey
   }, [idKey]);
 
   if (pausedRung === null) return null;

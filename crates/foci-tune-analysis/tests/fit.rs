@@ -167,7 +167,6 @@ fn non_ringing_shapes_report_failure() {
         let err = fit_damped(&mean, DT).unwrap_err();
         match name {
             "pure" => assert!(matches!(err, FitError::SingularJacobian), "{name}: {err:?}"),
-            // Which rule a degenerate candidate breaks is numerically arbitrary.
             _ => assert!(
                 matches!(
                     err,

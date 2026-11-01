@@ -239,7 +239,6 @@ pub fn fit_damped(mean: &[f64], dt_s: f64) -> Result<DampedFit, FitError> {
     if y.iter().chain([&mean[10]]).any(|v| !v.is_finite()) {
         return Err(FitError::NoConvergence);
     }
-    // A is the t = 0 amplitude, so the reference peak includes samples 0 and 1.
     let peak = mean[..end].iter().fold(0.0f64, |m, v| m.max(v.abs()));
     let t: Vec<f64> = (start..end).map(|k| k as f64 * dt_s).collect();
 

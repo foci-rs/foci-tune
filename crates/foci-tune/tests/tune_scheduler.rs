@@ -1400,8 +1400,6 @@ async fn an_unassessable_rerun_pauses_again() {
         .unwrap();
 
     sched.decide(&id, PauseDecision::Rerun).await.unwrap();
-    // The decision moves the attempt to `superseded` before it returns, so this is observable
-    // at once; the second pause is then the next idle Paused state.
     assert_eq!(
         rig.store.read_tune(&id).unwrap().steps[0].rungs[1]
             .superseded
