@@ -1191,6 +1191,9 @@ async fn trace_mode<M: MoonrakerApi + 'static>(
         .map_err(|e| match e {
             CommandError::Precondition(p) => ApiError::from(p),
             CommandError::Gcode(message) => ApiError::new(StatusCode::BAD_GATEWAY, message),
+            CommandError::NoControlState(message) => {
+                ApiError::new(StatusCode::GATEWAY_TIMEOUT, message)
+            }
         })?;
     Ok(Json(json!({"board": board, "mode": mode.name()})))
 }

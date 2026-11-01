@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use foci_tune_analysis::ladder::{
-    LadderAxis, LadderError, RungOutcome, StopDecision, interleave, probe_stop, to_raw,
+    LadderAxis, LadderError, PID_GAIN_MAX_RAW, RungOutcome, StopDecision, interleave, probe_stop,
+    to_raw,
 };
 use foci_tune_analysis::protocol::{ControlState, Frame, PROTOCOL_VERSION, decode_frame};
 use foci_tune_analysis::signals::{i_gain_param, p_gain_param};
@@ -29,6 +30,7 @@ use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::capture::{Capture, CaptureSummary};
 use crate::live::{LiveState, TraceMode};
+pub use crate::model::Lock;
 use crate::model::{
     CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, FitOutcome, Gains,
     LadderDef, Run, RunId, RunRegime, RunRequest, RunState, Session, SessionId, StepTime,
@@ -37,7 +39,7 @@ use crate::moonraker::{KlippyState, MoonrakerApi, PrinterState};
 use crate::run_analysis::{AnalysisInput, analyze, decode_capture, stimulus_window};
 use crate::steppers::{BedLimits, Stepper, derive_steppers};
 use crate::stimulus::{RunKind, compose, feedforward_reset_line};
-use crate::store::{Store, build_series};
+use crate::store::{Store, StoreError, build_series};
 use crate::verify_run::{Window, first_failure, verify};
 
 const GAINS_REQUEST: u8 = 1;
@@ -138,6 +140,9 @@ pub enum Precondition {
     /// The kill button was pressed while the request was being checked.
     #[error("the emergency stop was pressed while the run was being queued")]
     KillPressed,
+    /// The stepper's gains must be restored before it runs again; carries the lock's reason.
+    #[error("the stepper is locked until its starting gains are restored: {0}")]
+    TuneLocked(String),
 }
 
 /// Most values a ladder may list.
@@ -208,6 +213,11 @@ pub enum EngineEvent {
     Finished(Box<Run>),
     /// The queued runs, in execution order.
     Queue(Vec<RunId>),
+    /// A stepper's restore lock was removed from the store and memory.
+    LockCleared {
+        /// The stepper.
+        stepper: String,
+    },
 }
 
 /// A trace mode `FOCI_TRACE_MODE` accepts.
@@ -251,6 +261,17 @@ pub enum CommandError {
     /// Klipper or Moonraker refused the G-code; the text is their message.
     #[error("{0}")]
     Gcode(String),
+    /// The board did not report its control state in time; the text says what was missing.
+    #[error("{0}")]
+    NoControlState(String),
+}
+
+/// Why a restore lock is not durable.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LockError {
+    /// The lock holds in memory, so runs stay refused, but would not survive a restart.
+    #[error("the restore lock holds now but was not persisted: {0}")]
+    NotDurable(String),
 }
 
 /// What an emergency stop achieved.
@@ -303,6 +324,7 @@ struct Inner {
     unconfirmed_kill: Option<(SessionId, RunId)>,
     restarts_at_kill: u64,
     writing: bool,
+    locks: HashMap<String, Lock>,
 }
 
 impl Inner {
@@ -319,6 +341,16 @@ impl Inner {
         }
         if self.busy() {
             failing.push(Precondition::Busy);
+        }
+        failing
+    }
+
+    /// [`Inner::admission_failures`] plus the stepper's restore lock: every route that queues a
+    /// run on `stepper` goes through this.
+    fn run_admission_failures(&self, stepper: &str) -> Vec<Precondition> {
+        let mut failing = self.admission_failures();
+        if let Some(held) = self.locks.get(stepper) {
+            failing.push(Precondition::TuneLocked(held.reason.clone()));
         }
         failing
     }
@@ -464,8 +496,7 @@ fn filter_value(f: &Filters, index: usize) -> u16 {
 
 /// Fails with the first of the four outer gains and four filter cutoffs that the forced
 /// baseline does not carry as requested, so a write by another client is never run under.
-fn baseline_matches(req: &RunRequest, c: &ControlState) -> Result<(), String> {
-    let (g, f) = (&req.gains, &req.filters);
+fn baseline_matches(g: &Gains, f: &Filters, c: &ControlState) -> Result<(), String> {
     let gains = [
         ("velocity_p", g.velocity_p, c.velocity_p),
         ("velocity_i", g.velocity_i, c.velocity_i),
@@ -492,6 +523,31 @@ fn baseline_matches(req: &RunRequest, c: &ControlState) -> Result<(), String> {
         Some((name, want, got)) => Err(format!(
             "baseline differs: {name} requested {want}, found {got}"
         )),
+    }
+}
+
+fn check_gains(g: &Gains) -> Result<(), String> {
+    let gains = [
+        ("velocity_p", g.velocity_p),
+        ("velocity_i", g.velocity_i),
+        ("position_p", g.position_p),
+        ("position_i", g.position_i),
+    ];
+    match gains
+        .into_iter()
+        .find(|(_, raw)| !(0..=PID_GAIN_MAX_RAW).contains(raw))
+    {
+        None => Ok(()),
+        Some((name, raw)) => Err(format!(
+            "{name} raw {raw} is outside 0..={PID_GAIN_MAX_RAW}"
+        )),
+    }
+}
+
+fn store_io(e: StoreError) -> io::Error {
+    match e {
+        StoreError::Io(e) => e,
+        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
     }
 }
 
@@ -713,6 +769,9 @@ struct Shared<M> {
     kill_resolved: watch::Sender<u64>,
     next_ladder: AtomicU64,
     settings: Mutex<SettingsCache>,
+    /// Serialises restore-lock changes with their file writes, apart from `inner`, so a slow
+    /// disk never holds the lock the emergency stop needs.
+    lock_io: Mutex<()>,
 }
 
 /// The run engine. Dropping it stops its tasks; a run in flight is abandoned.
@@ -720,23 +779,27 @@ pub struct Engine<M> {
     shared: Arc<Shared<M>>,
     worker: JoinHandle<()>,
     watcher: JoinHandle<()>,
+    lock_watcher: JoinHandle<()>,
 }
 
 impl<M> Drop for Engine<M> {
     fn drop(&mut self) {
         self.worker.abort();
         self.watcher.abort();
+        self.lock_watcher.abort();
     }
 }
 
 impl<M: MoonrakerApi + 'static> Engine<M> {
-    /// Reconciles runs a previous process left in flight, then starts the worker.
+    /// Reconciles runs a previous process left in flight, reloads the persisted restore locks,
+    /// then starts the worker and the lock watcher.
     ///
     /// `frames` is the trace reader's broadcast of `(serial, frame)`; `live` its decoded
     /// state. Must be called inside a tokio runtime.
     ///
     /// # Errors
-    /// I/O errors from reconciling the store.
+    /// I/O errors from reconciling the store, and an unreadable lock file: a lock whose
+    /// snapshot is unknown can never be cleared, so the engine does not start without it.
     pub fn start(
         moonraker: Arc<M>,
         live: Arc<Mutex<LiveState>>,
@@ -748,6 +811,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             .into_iter()
             .rfind(|(_, run)| run.state == RunState::KillUnconfirmed)
             .map(|(session, run)| (session, run.id));
+        let locks = store.locks().map_err(store_io)?.into_iter().collect();
         let restarts_at_kill = *moonraker.klippy_restarts().borrow();
         let events = broadcast::channel(EVENT_CAPACITY).0;
         let persister = Persister::start(store.clone(), events.clone())?;
@@ -761,6 +825,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             inner: Mutex::new(Inner {
                 unconfirmed_kill,
                 restarts_at_kill,
+                locks,
                 ..Inner::default()
             }),
             wake: Notify::new(),
@@ -769,13 +834,16 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             kill_resolved: watch::channel(0).0,
             next_ladder: AtomicU64::new(0),
             settings: Mutex::default(),
+            lock_io: Mutex::default(),
         });
         let worker = tokio::spawn(shared.clone().work());
         let watcher = tokio::spawn(shared.clone().watch_klippy());
+        let lock_watcher = tokio::spawn(shared.clone().watch_locks(shared.frames.subscribe()));
         Ok(Self {
             shared,
             worker,
             watcher,
+            lock_watcher,
         })
     }
 
@@ -913,7 +981,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
     /// Every failing precondition for a run on `stepper`, in the order [`Engine::check`]
     /// reports them; empty when a run could start now.
     pub async fn preconditions(&self, stepper: &str) -> Vec<Precondition> {
-        let mut failing = lock(&self.shared.inner).admission_failures();
+        let mut failing = lock(&self.shared.inner).run_admission_failures(stepper);
         if let Err(run) = self.shared.run_failures(stepper).await {
             failing.extend(run);
         }
@@ -1037,7 +1105,110 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         .map_err(CommandError::Gcode)
     }
 
-    /// Subscribes to run state changes, results and queue updates.
+    /// Requests a fresh control-state frame of `stepper`'s channel the way a run's baseline
+    /// step does, by setting the critical trace mode, then sets a board known dormant back to
+    /// dormant. Refused while a run or another write is in flight or queued, a kill is
+    /// unconfirmed or an emergency stop is being posted.
+    ///
+    /// # Errors
+    /// [`CommandError::Precondition`] when refused, [`CommandError::Gcode`] when Klipper
+    /// rejects the mode command, [`CommandError::NoControlState`] when no frame arrives.
+    pub async fn read_control_state(&self, stepper: &str) -> Result<ControlSnapshot, CommandError> {
+        let s = &self.shared;
+        let _guard = s.begin_write()?;
+        let resolved = s.resolve(stepper).await?;
+        let rx = s.frames.subscribe();
+        let prior = s.trace_mode(&resolved.stepper.serial);
+        s.gcode(&format!(
+            "FOCI_TRACE_MODE STEPPER={} MODE=critical",
+            resolved.stepper.name
+        ))
+        .await
+        .map_err(CommandError::Gcode)?;
+        let found = s.wait_baseline(rx, &resolved.stepper).await;
+        if prior == TraceMode::Dormant {
+            let line = format!(
+                "FOCI_TRACE_MODE STEPPER={} MODE=dormant",
+                resolved.stepper.name
+            );
+            if let Err(e) = s.gcode_bounded(&line).await {
+                tracing::warn!(stepper, error = %e, "trace mode not restored to dormant");
+            }
+        }
+        found
+            .map(|c| ControlSnapshot::from(&c))
+            .map_err(CommandError::NoControlState)
+    }
+
+    /// Writes `gains` to `stepper` through the confirmed write path after range-checking every
+    /// raw value; refused like [`Engine::read_control_state`].
+    ///
+    /// # Errors
+    /// The reason meant for display: a raw value out of range, a refusal, a G-code error or an
+    /// unconfirmed write.
+    pub async fn apply_gains(&self, stepper: &str, gains: Gains) -> Result<(), String> {
+        check_gains(&gains)?;
+        let s = &self.shared;
+        let _guard = s.begin_write().map_err(|p| p.to_string())?;
+        let resolved = s.resolve(stepper).await.map_err(|p| p.to_string())?;
+        s.gcode("M400").await?;
+        s.write_gains(&resolved.stepper, &gains).await
+    }
+
+    /// Writes `gains` and `filters` to `stepper` through the confirmed write path, like
+    /// [`Engine::apply_gains`]. When both are confirmed and equal the snapshot of `stepper`'s
+    /// restore lock, the lock is removed from the store and then from memory.
+    ///
+    /// # Errors
+    /// The reason meant for display, as for [`Engine::apply_gains`], or a confirmed restore
+    /// whose lock file could not be removed; the lock then stays.
+    pub async fn restore_snapshot(
+        &self,
+        stepper: &str,
+        gains: Gains,
+        filters: Filters,
+    ) -> Result<(), String> {
+        check_gains(&gains)?;
+        let s = &self.shared;
+        let _guard = s.begin_write().map_err(|p| p.to_string())?;
+        let resolved = s.resolve(stepper).await.map_err(|p| p.to_string())?;
+        s.gcode("M400").await?;
+        s.write_gains(&resolved.stepper, &gains).await?;
+        s.write_filters(&resolved.stepper, &filters).await?;
+        s.clear_lock(stepper, &(gains, filters))
+            .map(|_| ())
+            .map_err(|e| format!("gains restored, but the restore lock was not removed: {e}"))
+    }
+
+    /// Locks `stepper` against every run until `snapshot` is restored or reported by the
+    /// board. The lock takes effect in memory before it is persisted and stays in effect when
+    /// persisting fails.
+    ///
+    /// # Errors
+    /// [`LockError::NotDurable`] when the lock file was not written.
+    pub fn lock_stepper(
+        &self,
+        stepper: &str,
+        reason: String,
+        snapshot: (Gains, Filters),
+    ) -> Result<(), LockError> {
+        let s = &self.shared;
+        let held = Lock { reason, snapshot };
+        let _io = lock(&s.lock_io);
+        lock(&s.inner)
+            .locks
+            .insert(stepper.to_owned(), held.clone());
+        s.store
+            .write_lock(stepper, &held)
+            .map_err(|e| LockError::NotDurable(e.to_string()))
+    }
+
+    /// `stepper`'s restore lock, if it has one.
+    pub fn lock_state(&self, stepper: &str) -> Option<Lock> {
+        lock(&self.shared.inner).locks.get(stepper).cloned()
+    }
+
+    /// Subscribes to run state changes, results, queue updates and cleared restore locks.
     pub fn events(&self) -> broadcast::Receiver<EngineEvent> {
         self.shared.events.subscribe()
     }
@@ -1058,6 +1229,77 @@ impl Drop for WriteGuard<'_> {
 }
 
 impl<M: MoonrakerApi + 'static> Shared<M> {
+    /// Admits a write outside a run, holding off new runs until the guard drops.
+    fn begin_write(&self) -> Result<WriteGuard<'_>, Precondition> {
+        let mut inner = lock(&self.inner);
+        if *self.kill_requested.borrow() != *self.kill_resolved.borrow() {
+            return Err(Precondition::KillPressed);
+        }
+        if let Some(first) = inner.admission_failures().into_iter().next() {
+            return Err(first);
+        }
+        inner.writing = true;
+        Ok(WriteGuard(&self.inner))
+    }
+
+    /// Clears `stepper`'s restore lock when its snapshot is `snapshot`: the file first, then
+    /// memory, so a failed removal leaves the lock in force. Returns whether it cleared one.
+    fn clear_lock(&self, stepper: &str, snapshot: &(Gains, Filters)) -> io::Result<bool> {
+        let _io = lock(&self.lock_io);
+        let held = lock(&self.inner)
+            .locks
+            .get(stepper)
+            .is_some_and(|l| l.snapshot == *snapshot);
+        if !held {
+            return Ok(false);
+        }
+        self.store.remove_lock(stepper)?;
+        lock(&self.inner).locks.remove(stepper);
+        self.emit(EngineEvent::LockCleared {
+            stepper: stepper.to_owned(),
+        });
+        Ok(true)
+    }
+
+    /// Clears a restore lock when a control-state frame of its stepper's channel carries the
+    /// lock's snapshot. Channel positions are remembered so a frame that arrives while
+    /// Klipper's config is unreadable, as during a restart, is still matched.
+    async fn watch_locks(self: Arc<Self>, mut rx: broadcast::Receiver<(String, Bytes)>) {
+        let mut positions: HashMap<String, (String, u8)> = HashMap::new();
+        loop {
+            let (serial, frame) = match rx.recv().await {
+                Ok(message) => message,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return,
+            };
+            let Ok(Frame::ControlState(h, c)) = decode_frame(&frame) else {
+                continue;
+            };
+            let held: Vec<(String, Lock)> = lock(&self.inner)
+                .locks
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            if held.is_empty() {
+                continue;
+            }
+            if let Ok(settings) = self.settings().await {
+                for s in derive_steppers(&settings, &self.open_serials()) {
+                    positions.insert(s.name, (s.serial, s.channel));
+                }
+            }
+            for (stepper, l) in held {
+                let (gains, filters) = &l.snapshot;
+                if positions.get(&stepper) == Some(&(serial.clone(), h.source_index))
+                    && baseline_matches(gains, filters, &c).is_ok()
+                    && let Err(e) = self.clear_lock(&stepper, &l.snapshot)
+                {
+                    tracing::warn!(%stepper, error = %e, "restore lock not removed");
+                }
+            }
+        }
+    }
+
     fn persist(&self, session: &SessionId, run: &Run) {
         self.persister
             .send(Job::Write(session.clone(), Box::new(run.clone())));
@@ -1131,7 +1373,11 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     /// refuse a request that a kill overtook while it was being checked.
     async fn admit(&self, req: &RunRequest) -> Result<(Resolved, Session, u64), Precondition> {
         let generation = *self.kill_requested.borrow();
-        if let Some(first) = lock(&self.inner).admission_failures().into_iter().next() {
+        if let Some(first) = lock(&self.inner)
+            .run_admission_failures(&req.stepper)
+            .into_iter()
+            .next()
+        {
             return Err(first);
         }
         let session = self
@@ -1186,7 +1432,10 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         generation: u64,
     ) -> Result<(), Precondition> {
         let mut inner = lock(&self.inner);
-        let admission = inner.admission_failures();
+        let admission = runs.first().map_or_else(
+            || inner.admission_failures(),
+            |r| inner.run_admission_failures(&r.request.stepper),
+        );
         if admission.contains(&Precondition::KillUnconfirmed) {
             return Err(Precondition::KillUnconfirmed);
         }
@@ -1569,7 +1818,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         ))
         .await?;
         let found = self.wait_baseline(baseline, &r.stepper).await?;
-        baseline_matches(req, &found)?;
+        baseline_matches(&req.gains, &req.filters, &found)?;
 
         self.set_state(RunState::Recording);
         self.set_state(RunState::Moving);
@@ -2204,6 +2453,7 @@ mod tests {
             kill_resolved: watch::channel(0).0,
             next_ladder: AtomicU64::new(0),
             settings: Mutex::default(),
+            lock_io: Mutex::default(),
         };
         (shared, stub, dir)
     }

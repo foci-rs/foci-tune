@@ -150,7 +150,7 @@ pub async fn run_trace_discovery<M: MoonrakerApi + 'static>(
                     tracing::debug!(%serial, %refused, "trace mode discovery deferred");
                     attempts.fail(&config, Instant::now());
                 }
-                Err(CommandError::Gcode(e)) => {
+                Err(CommandError::Gcode(e) | CommandError::NoControlState(e)) => {
                     tracing::warn!(%serial, error = %e, "cannot set a silent board's trace mode");
                     attempts.fail(&config, Instant::now());
                 }

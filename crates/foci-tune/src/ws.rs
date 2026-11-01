@@ -98,6 +98,11 @@ pub enum ServerMessage {
         /// Run ids in execution order.
         runs: Vec<RunId>,
     },
+    /// A stepper's restore lock was cleared.
+    LockCleared {
+        /// The stepper.
+        stepper: String,
+    },
     /// Critical samples of one board.
     Live(LiveBatch),
     /// A subscription is active.
@@ -134,6 +139,7 @@ impl From<EngineEvent> for ServerMessage {
                 run,
             },
             EngineEvent::Queue(runs) => Self::Queue { runs },
+            EngineEvent::LockCleared { stepper } => Self::LockCleared { stepper },
         }
     }
 }
