@@ -113,7 +113,7 @@ fn setup_body(speeds: &[f64]) -> Value {
 }
 
 fn step_body(lower_k: i32, upper_k: i32) -> Value {
-    json!({"seed": "Live", "repeats": 1, "lower_k": lower_k, "upper_k": upper_k})
+    json!({"seed": "live", "repeats": 1, "lower_k": lower_k, "upper_k": upper_k})
 }
 
 async fn create(app: &Router) -> String {

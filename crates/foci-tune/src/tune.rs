@@ -275,6 +275,7 @@ const IDLE_POLL: Duration = Duration::from_millis(50);
 
 /// Where a step's seed comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Seed {
     /// The axis' live gain, read when the step is prepared.
     Live,

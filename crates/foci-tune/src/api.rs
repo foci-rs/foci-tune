@@ -42,7 +42,9 @@ use crate::pattern::{Pattern, PatternError, propose_pattern};
 use crate::steppers::{BedLimits, Stepper};
 use crate::stimulus::{RunKind, StimulusError, compose};
 use crate::store::{SessionSummary, Store, StoreError};
-use crate::tune::{Choice, StepRequest, Tune, TuneError, TuneId, TuneScheduler, TuneSetup};
+use crate::tune::{
+    Choice, StepPlan, StepRequest, Tune, TuneError, TuneId, TuneScheduler, TuneSetup,
+};
 use crate::ws;
 
 const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
@@ -1307,6 +1309,18 @@ pub struct TuneSummary {
     pub current_step: Option<foci_tune_analysis::ladder::LadderAxis>,
 }
 
+/// A tune record with the config block and lock state read alongside it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TuneDetail {
+    /// The record, flattened into the response.
+    #[serde(flatten)]
+    pub tune: Tune,
+    /// The `[foci <stepper>]` block once every step has a chosen value.
+    pub config_block: Option<String>,
+    /// Why the tune's stepper is locked, if it is.
+    pub lock: Option<String>,
+}
+
 impl From<&Tune> for TuneSummary {
     fn from(t: &Tune) -> Self {
         Self {
@@ -1411,24 +1425,25 @@ async fn list_tunes<M: MoonrakerApi + 'static>(
 async fn read_tune<M: MoonrakerApi + 'static>(
     State(api): State<App<M>>,
     Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<TuneDetail>> {
     let id = tune_id(&id)?;
     let tune = read_tune_record(&api, &id).await?;
     let lock = api.engine.lock_state(&tune.setup.stepper).map(|l| l.reason);
-    let mut out = json!(tune);
-    out["config_block"] = json!(api.tunes.config_block(&id));
-    out["lock"] = json!(lock);
-    Ok(Json(out))
+    Ok(Json(TuneDetail {
+        tune,
+        config_block: api.tunes.config_block(&id),
+        lock,
+    }))
 }
 
 async fn prepare_tune_step<M: MoonrakerApi + 'static>(
     State(api): State<App<M>>,
     Path(id): Path<String>,
     body: Result<Json<Value>, JsonRejection>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<StepPlan>> {
     let id = tune_id(&id)?;
     let request: StepRequest = from_body(json_body(body)?)?;
-    Ok(Json(json!(api.tunes.prepare_step(&id, request).await?)))
+    Ok(Json(api.tunes.prepare_step(&id, request).await?))
 }
 
 async fn confirm_tune_step<M: MoonrakerApi + 'static>(
