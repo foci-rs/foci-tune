@@ -1014,6 +1014,46 @@ async fn lock_cleared_event_updates_the_tune() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_lock_cleared_event_leaves_a_relocked_tune_awaiting_its_restore() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = failed_abandon(&rig, &sched).await;
+    let mut events = rig.engine.events();
+
+    let (restored, ()) = tokio::join!(sched.restore(&id), async {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let frame = {
+            let mut sim = rig.a.sim.lock().unwrap();
+            let c = &mut sim.channels[0];
+            c.change_sequence += 1;
+            (c.gains, c.filters) = raw_of(&BASE);
+            Board::control(&mut sim, 0, 0)
+        };
+        rig.a.emit(vec![frame]);
+    });
+    let persisted = rig.store.read_tune(&id).unwrap();
+    let cleared = tokio::time::timeout(WAIT, async {
+        loop {
+            if let Ok(EngineEvent::LockCleared { stepper }) = events.recv().await {
+                return stepper;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert!(restored.is_err());
+    assert_eq!(cleared, "stepper_x");
+    assert!(matches!(persisted.state, TuneState::RestoreFailed(_)));
+    assert_eq!(rig.store.read_tune(&id).unwrap(), persisted);
+    assert_eq!(
+        rig.engine.lock_state("stepper_x").map(|l| l.snapshot),
+        Some(BASE)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kill_sends_no_gcode_and_restore_is_explicit() {
     let rig = rig().await;
     rig.fake

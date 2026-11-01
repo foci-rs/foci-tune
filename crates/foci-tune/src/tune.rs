@@ -1309,8 +1309,13 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         failure.map_or(Ok(()), |reason| Err(TuneError::Engine(reason)))
     }
 
+    /// A cleared event can trail a newer lock on the same stepper, so it applies only while
+    /// the engine holds no lock for it.
     async fn lock_cleared(&self, stepper: &str) -> Result<(), TuneError> {
         let _held = self.hold(stepper).await;
+        if self.engine.lock_state(stepper).is_some() {
+            return Ok(());
+        }
         for mut tune in self.store.scan_tunes()? {
             if tune.setup.stepper == stepper && awaits_restore(&tune.state) {
                 tune.state = TuneState::Abandoned;
