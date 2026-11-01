@@ -122,6 +122,11 @@ pub struct Sim {
     pub zeta_by_position_p: HashMap<i32, f64>,
     pub edges_by_position_p: HashMap<i32, usize>,
     pub profile_by_velocity_p: HashMap<i32, Profile>,
+    /// Probe damping by velocity P; takes precedence over `zeta_by_position_p`.
+    pub zeta_by_velocity_p: HashMap<i32, f64>,
+    /// Counts the measured position trails the commanded one during tracking ramps, by
+    /// velocity P.
+    pub lag_by_velocity_p: HashMap<i32, i32>,
     pub unconfirmed_velocity_p: Vec<i32>,
     /// Applied to the channel when the critical trace mode is requested, as another client's
     /// write landing between the confirmed writes and the baseline.
@@ -149,6 +154,8 @@ impl Default for Sim {
             zeta_by_position_p: HashMap::new(),
             edges_by_position_p: HashMap::new(),
             profile_by_velocity_p: HashMap::new(),
+            zeta_by_velocity_p: HashMap::new(),
+            lag_by_velocity_p: HashMap::new(),
             unconfirmed_velocity_p: Vec::new(),
             drift: None,
         }
@@ -485,7 +492,11 @@ impl Board {
                 .edges_by_position_p
                 .get(&position_p)
                 .unwrap_or(&profile.probe_edges);
-            let zeta = *sim.zeta_by_position_p.get(&position_p).unwrap_or(&0.2);
+            let zeta = *sim
+                .zeta_by_velocity_p
+                .get(&velocity_p)
+                .or_else(|| sim.zeta_by_position_p.get(&position_p))
+                .unwrap_or(&0.2);
             let edges: Vec<(usize, f64)> = (0..edge_count)
                 .map(|k| (100 + 150 * k, if k % 2 == 0 { 300.0 } else { -300.0 }))
                 .collect();
@@ -499,10 +510,12 @@ impl Board {
             }
         } else {
             let r = profile.declared_range;
+            let lag = sim.lag_by_velocity_p.get(&velocity_p).copied().unwrap_or(0);
             let ramp = |k: i32| (i64::from(r) * i64::from(k) / 150) as i32;
-            samples.extend((0..=150).map(|k| (ramp(k), ramp(k), 0)));
+            let trail = |k: i32, sign: i32| if k > 0 && k < 150 { sign * lag } else { 0 };
+            samples.extend((0..=150).map(|k| (ramp(k), ramp(k) - trail(k, 1), 0)));
             samples.extend((0..400).map(|_| (r, r, 0)));
-            samples.extend((0..=150).map(|k| (ramp(150 - k), ramp(150 - k), 0)));
+            samples.extend((0..=150).map(|k| (ramp(150 - k), ramp(150 - k) + trail(k, 1), 0)));
         }
         let mut out = Vec::new();
         let middle = samples.len() / 2;
@@ -510,6 +523,8 @@ impl Board {
             sim.ticks += TICKS_PER_MS;
             let flags = u8::from(profile.drop_flag && n == middle);
             let (seq, ticks) = Self::next(&mut sim);
+            let mut payload = critical_payload(step + 1000, tmc + 1000, ff);
+            payload[8..12].copy_from_slice(&(step - tmc).to_le_bytes());
             out.push(frame_bytes(
                 25,
                 1,
@@ -517,7 +532,7 @@ impl Board {
                 (1, declared),
                 seq,
                 ticks,
-                &critical_payload(step + 1000, tmc + 1000, ff),
+                &payload,
             ));
             let still = 500 + if n == middle { profile.other_range } else { 0 };
             let (seq, ticks) = Self::next(&mut sim);
