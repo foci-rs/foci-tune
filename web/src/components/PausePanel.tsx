@@ -132,7 +132,7 @@ export function PausePanel({
   const restsByRepeat = pausedRefs.map((r) => {
     const run = r.standstillId === null ? undefined : loaded.runs[r.standstillId];
     const rests: RestRecord[] | null = run === undefined ? null : (declaredMetrics(run)?.standstill?.rests ?? []);
-    return { r, rests: rests === null ? null : rests.filter((x) => x.torque_sd !== null) };
+    return { r, rests };
   });
 
   return (

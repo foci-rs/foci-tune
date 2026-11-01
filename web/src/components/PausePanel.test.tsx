@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { FitOutcome, Pause, ProbeRecord, RepeatResult, Run, Series, Tune } from "@/api";
 import { PausePanel } from "./PausePanel";
@@ -102,9 +102,9 @@ const series = {
   channels: [{ channel: 0, probe: { t_s: [0], velocity: plot, torque: plot, position_error: plot } }],
 } as unknown as Series;
 
-const standstill = (sds: number[]) => ({
+const standstill = (sds: (number | null)[]) => ({
   rests: sds.map((torque_sd, index) => ({ index, samples: 100, torque_sd, position_pp_um: 1 })),
-  worst_torque_sd: Math.max(...sds),
+  worst_torque_sd: Math.max(...sds.filter((x): x is number => x !== null)),
 });
 
 beforeEach(() => {
@@ -117,7 +117,7 @@ beforeEach(() => {
     if (id === "p1")
       return channel(probeRecord({ status: "failed", reason: "fitted damping ratio 1.70 is outside (0, 1)" }, 12), null);
     if (id === "p0") return channel(probeRecord(fit(0.09, 24), 41), null);
-    if (id === "s1") return channel(null, standstill([2.5, 3.5]));
+    if (id === "s1") return channel(null, standstill([2.5, 3.5, null]));
     return channel(null, null);
   });
 });
@@ -147,10 +147,32 @@ test("plots the paused rung's repeats and dims the previous rung's", async () =>
   expect(items[0].getAttribute("data-color")).not.toBe(items[1].getAttribute("data-color"));
 });
 
-test("a standstill pause shows each qualifying rest against the required count", async () => {
+test("a standstill pause counts every emitted rest and shows a placeholder for a missing sd", async () => {
   render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />);
-  expect(await screen.findByText(/2 of 3 rests qualified/)).toBeInTheDocument();
+  expect(await screen.findByText(/3 of 3 rests qualified/)).toBeInTheDocument();
+  expect(screen.getByText(/worst torque sd 7\.500/)).toBeInTheDocument();
+  expect(screen.getByText("2.500")).toBeInTheDocument();
   expect(screen.getByText("3.500")).toBeInTheDocument();
+  const nullRest = screen.getByText(/^rest 3:/);
+  expect(within(nullRest).getByText("-")).toBeInTheDocument();
+});
+
+test("shows this and the previous rung's median p99 per speed and worst torque sd", async () => {
+  const tune = pausedTune();
+  tune.steps[0].assessment = {
+    verdicts: [],
+    halt: null,
+    medians: [
+      { zeta: 0.1, p99_by_speed: [5.5, 6.25], worst_torque_sd: 9.125 },
+      { zeta: 0.2, p99_by_speed: [3.125, 4.75], worst_torque_sd: 6.5 },
+    ],
+  };
+  render(<PausePanel tune={tune} step={0} busy={false} onDecide={() => undefined} />);
+  const table = await screen.findByRole("table", { name: "Rung medians" });
+  const [, thisRung, previousRung] = within(table).getAllByRole("row");
+  const cells = (row: HTMLElement) => within(row).getAllByRole("cell").map((c) => c.textContent);
+  expect(cells(thisRung)).toEqual(["2", "3.125", "4.750", "6.500"]);
+  expect(cells(previousRung)).toEqual(["1", "5.500", "6.250", "9.125"]);
 });
 
 test("disables the buttons while a request is in flight", () => {
