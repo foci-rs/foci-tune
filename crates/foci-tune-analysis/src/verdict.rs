@@ -115,11 +115,13 @@ fn rung_medians(repeats: &[RepeatResult], n_speeds: usize) -> RungMedians {
     .map(|v| median(&v));
     let p99_by_speed = (0..n_speeds)
         .map(|s| {
-            all_some(
-                repeats
-                    .iter()
-                    .map(|r| r.p99_by_speed.get(s).copied().flatten()),
-            )
+            all_some(repeats.iter().map(|r| {
+                r.p99_by_speed
+                    .get(s)
+                    .copied()
+                    .flatten()
+                    .filter(|p| p.is_finite() && *p > 0.0)
+            }))
             .map(|v| median(&v))
         })
         .collect();
@@ -175,6 +177,7 @@ pub fn assess_ladder(
             match m.worst_torque_sd {
                 Some(sd) => baseline = Some(sd),
                 None => {
+                    verdicts[i].unscored = Some(UnscoredReason::StandstillMissing);
                     halt = Some((i, Halt::StandstillBaselineUnassessable));
                     break;
                 }
