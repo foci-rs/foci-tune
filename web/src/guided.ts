@@ -279,3 +279,54 @@ export function durationText(seconds: number | null): string {
   const minutes = Math.round(seconds / 60);
   return minutes < 1 ? `${Math.round(seconds)} s` : `about ${minutes} min`;
 }
+
+const AXIS_ORDER: TuneAxis[] = ["VelocityP", "VelocityICornerHz", "PositionP"];
+
+/** The axis the next prepared step tunes; null once all three have a step. */
+export function nextAxis(tune: Tune): TuneAxis | null {
+  return AXIS_ORDER[tune.steps.length] ?? null;
+}
+
+export interface Announcement {
+  stepper: string;
+  axis: TuneAxis;
+  firstGain: number;
+  lastGain: number;
+  rungs: number;
+  repeats: number;
+  runCount: number;
+}
+
+/** What the announced step will do, read from the stored step so it survives a reload. */
+export function announcementOf(tune: Tune): Announcement | null {
+  const step = tune.steps[tune.steps.length - 1];
+  if (step === undefined || step.rungs.length === 0) return null;
+  const perRepeat = tune.setup.speeds_mm_s.length + 2;
+  const seedInLadder = step.rungs.some((r) => r.raw === step.seed_raw);
+  return {
+    stepper: tune.setup.stepper,
+    axis: step.axis,
+    firstGain: step.rungs[0].shown,
+    lastGain: step.rungs[step.rungs.length - 1].shown,
+    rungs: step.rungs.length,
+    repeats: step.repeats,
+    runCount: step.rungs.length * step.repeats * perRepeat + (seedInLadder ? perRepeat : 0),
+  };
+}
+
+/** uPlot columns for the per-speed p99 curve: rung gains, then one column per tracking speed. */
+export function curveData(rows: RungView[], speedCount: number): [number[], ...(number | null)[][]] {
+  return [
+    rows.map((r) => r.shown),
+    ...Array.from({ length: speedCount }, (_, s) => rows.map((r) => r.p99BySpeed[s] ?? null)),
+  ];
+}
+
+/** The gain the recommendation marks on the curve, with how it was found. */
+export function recommendedGain(tune: Tune, step: number): { gain: number; kind: RecommendationKind } | null {
+  const rec = stepSummary(tune, step).recommendation;
+  if (rec === null || rec.kind === "none") return null;
+  if (rec.kind === "interpolated") return { gain: rec.shown, kind: "interpolated" };
+  const rung = tune.steps[step].rungs[rec.rung];
+  return rung === undefined ? null : { gain: rung.shown, kind: "measured" };
+}

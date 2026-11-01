@@ -1,10 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { Tune, TuneState, TuneStep } from "./api";
 import {
+  announcementOf,
   availableActions,
+  curveData,
   canChoose,
   defaultProbeSpeed,
   expectedDurationSeconds,
+  nextAxis,
+  recommendedGain,
   rungView,
   stepSummary,
 } from "./guided";
@@ -322,5 +326,57 @@ describe("defaultProbeSpeed", () => {
 
   test("warns when there is no speed to choose from", () => {
     expect(defaultProbeSpeed([], context).warning).not.toBeNull();
+  });
+});
+
+describe("announcementOf", () => {
+  test("states stepper, axis, rung range and the run count including the drift re-run", () => {
+    const s = step({ repeats: 2, seed_raw: 1100, rungs: [rung(0), rung(1), rung(2), rung(3)] });
+    const a = announcementOf(tune("Announced", [s]));
+    expect(a).toMatchObject({ stepper: "stepper_x", axis: "VelocityP", rungs: 4, repeats: 2 });
+    expect(a?.firstGain).toBe(s.rungs[0].shown);
+    expect(a?.lastGain).toBe(s.rungs[3].shown);
+    expect(a?.runCount).toBe(4 * 2 * 4 + 4);
+  });
+
+  test("leaves out the drift re-run when the ladder does not hold the seed", () => {
+    expect(announcementOf(tune("Announced", [step({ seed_raw: 5 })]))?.runCount).toBe(4 * 1 * 4);
+  });
+
+  test("is null before any step exists", () => {
+    expect(announcementOf(tune("Ready", []))).toBeNull();
+  });
+});
+
+describe("nextAxis", () => {
+  test("follows velocity P, velocity I corner, position P and then ends", () => {
+    const three = [step(), step({ axis: "VelocityICornerHz" }), step({ axis: "PositionP" })];
+    expect([0, 1, 2, 3].map((n) => nextAxis(tune("Ready", three.slice(0, n))))).toEqual([
+      "VelocityP",
+      "VelocityICornerHz",
+      "PositionP",
+      null,
+    ]);
+  });
+});
+
+describe("curve", () => {
+  test("has a p99 column per speed and a gap where a rung has no result", () => {
+    const rows = rungView(tune("AwaitingChoice", [assessed()]), 0);
+    const [x, fast, slow] = curveData(rows, 2);
+    expect(x).toHaveLength(4);
+    expect(fast).toEqual([null, 5, 4, 3]);
+    expect(slow).toEqual([null, 9, 8, 6]);
+  });
+
+  test("marks the interpolated gain itself and a measured rung at its own gain", () => {
+    const interpolated = assessed({
+      recommendation: { choice: { Interpolated: { shown: 1700, between: [2, 3] } }, extend: null },
+    });
+    expect(recommendedGain(tune("AwaitingChoice", [interpolated]), 0)).toEqual({ gain: 1700, kind: "interpolated" });
+    const measured = assessed({ recommendation: { choice: { Measured: { rung: 3 } }, extend: null } });
+    const t = tune("AwaitingChoice", [measured]);
+    expect(recommendedGain(t, 0)).toEqual({ gain: t.steps[0].rungs[3].shown, kind: "measured" });
+    expect(recommendedGain(tune("AwaitingChoice", [assessed()]), 0)).toBeNull();
   });
 });
