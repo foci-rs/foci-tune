@@ -119,7 +119,7 @@ pub struct RungMedians {
 /// Verdicts for every rung, in the order given.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LadderAssessment {
-    /// One verdict per rung; rungs after a halt or without all repeats are default.
+    /// One verdict per rung; rungs after a halt or pause, or without all repeats, are default.
     pub verdicts: Vec<RungVerdict>,
     /// One set of medians per rung.
     pub medians: Vec<RungMedians>,
