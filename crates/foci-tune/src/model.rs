@@ -149,6 +149,16 @@ pub struct Filters {
     pub flux_hz: u16,
 }
 
+/// A stepper whose gains must be restored before it runs again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lock {
+    /// Why the stepper is locked, meant for display.
+    pub reason: String,
+    /// The gains and filters whose confirmed restore, or appearance in a control-state frame,
+    /// clears the lock.
+    pub snapshot: (Gains, Filters),
+}
+
 /// A ladder definition: one axis varied over a value list.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LadderDef {

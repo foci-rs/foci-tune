@@ -1,7 +1,8 @@
 //! On-disk store: sessions, runs, series and captures under the data directory.
 //!
 //! Layout: `sessions/<session>/session.json`, `sessions/<session>/<run>/run.json`,
-//! `series.json` and `capture.bin.zst`. JSON files are written to a temporary name and renamed.
+//! `series.json` and `capture.bin.zst`; restore locks in `locks/<stepper>.json`. JSON files are
+//! written to a temporary name and renamed.
 
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -19,12 +20,14 @@ use serde::de::DeserializeOwned;
 use crate::capture_read::read_capture;
 pub use crate::model::new_id;
 use crate::model::{
-    ChannelPlot, EnsemblePlot, FitOutcome, ProbePlot, PsdPlot, Run, RunId, RunState,
+    ChannelPlot, EnsemblePlot, FitOutcome, Lock, ProbePlot, PsdPlot, Run, RunId, RunState,
     SERIES_FORMAT_VERSION, Series, Session, SessionId,
 };
 use crate::stimulus::RunKind;
 
 const SESSIONS_DIR: &str = "sessions";
+const LOCKS_DIR: &str = "locks";
+const LOCK_EXTENSION: &str = ".json";
 const SESSION_FILE: &str = "session.json";
 const RUN_FILE: &str = "run.json";
 const SERIES_FILE: &str = "series.json";
@@ -110,13 +113,82 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StoreError> {
 }
 
 impl Store {
-    /// Opens the store at `root`, creating `sessions/`.
+    /// Opens the store at `root`, creating `sessions/` and `locks/`.
     ///
     /// # Errors
-    /// I/O errors from creating the directory.
+    /// I/O errors from creating the directories.
     pub fn open(root: PathBuf) -> io::Result<Self> {
         std::fs::create_dir_all(root.join(SESSIONS_DIR))?;
+        std::fs::create_dir_all(root.join(LOCKS_DIR))?;
         Ok(Self { root })
+    }
+
+    fn lock_path(&self, stepper: &str) -> io::Result<PathBuf> {
+        if stepper.is_empty() || stepper.starts_with('.') || stepper.contains(['/', '\\', '\0']) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{stepper:?} cannot name a lock file"),
+            ));
+        }
+        Ok(self
+            .root
+            .join(LOCKS_DIR)
+            .join(format!("{stepper}{LOCK_EXTENSION}")))
+    }
+
+    /// Persists `stepper`'s restore lock, replacing any earlier one.
+    ///
+    /// # Errors
+    /// A stepper name that cannot be a file name, and the errors of [`write_json_atomic`].
+    pub fn write_lock(&self, stepper: &str, lock: &Lock) -> io::Result<()> {
+        write_json_atomic(&self.lock_path(stepper)?, lock)
+    }
+
+    /// `stepper`'s persisted restore lock, `None` when it has none.
+    ///
+    /// # Errors
+    /// I/O errors other than a missing file, and an unreadable lock file.
+    pub fn read_lock(&self, stepper: &str) -> Result<Option<Lock>, StoreError> {
+        match read_json(&self.lock_path(stepper)?) {
+            Ok(lock) => Ok(Some(lock)),
+            Err(StoreError::Io(e)) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Removes `stepper`'s persisted restore lock; a lock that is already gone is not an error.
+    ///
+    /// # Errors
+    /// I/O errors other than a missing file.
+    pub fn remove_lock(&self, stepper: &str) -> io::Result<()> {
+        match std::fs::remove_file(self.lock_path(stepper)?) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// Every persisted restore lock by stepper name.
+    ///
+    /// # Errors
+    /// I/O errors from listing or reading `locks/`, and an unreadable lock file.
+    pub fn locks(&self) -> Result<Vec<(String, Lock)>, StoreError> {
+        let mut locks = Vec::new();
+        for entry in std::fs::read_dir(self.root.join(LOCKS_DIR))? {
+            let entry = entry?;
+            let Some(stepper) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.strip_suffix(LOCK_EXTENSION))
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            if entry.file_type()?.is_file() {
+                locks.push((stepper, read_json(&entry.path())?));
+            }
+        }
+        locks.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(locks)
     }
 
     fn session_dir(&self, session: &SessionId) -> PathBuf {
