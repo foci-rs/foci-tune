@@ -170,8 +170,9 @@ impl Store {
     /// Every persisted restore lock by stepper name.
     ///
     /// # Errors
-    /// I/O errors from listing or reading `locks/`, and an unreadable lock file.
-    pub fn locks(&self) -> Result<Vec<(String, Lock)>, StoreError> {
+    /// I/O errors from listing or reading `locks/`, and an unreadable lock file, as
+    /// `InvalidData` naming the file.
+    pub fn locks(&self) -> io::Result<Vec<(String, Lock)>> {
         let mut locks = Vec::new();
         for entry in std::fs::read_dir(self.root.join(LOCKS_DIR))? {
             let entry = entry?;
@@ -184,7 +185,14 @@ impl Store {
                 continue;
             };
             if entry.file_type()?.is_file() {
-                locks.push((stepper, read_json(&entry.path())?));
+                let path = entry.path();
+                let held = read_json(&path).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("lock file {}: {e}", path.display()),
+                    )
+                })?;
+                locks.push((stepper, held));
             }
         }
         locks.sort_by(|a, b| a.0.cmp(&b.0));

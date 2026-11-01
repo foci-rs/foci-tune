@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use foci_tune::engine::{CommandError, Engine, EngineEvent, LadderRejected, Lock, Precondition};
-use foci_tune::model::{Filters, Gains};
+use foci_tune::model::{Filters, Gains, RunState};
 use foci_tune_analysis::ladder::PID_GAIN_MAX_RAW;
 use rig::*;
 use tokio::sync::broadcast;
@@ -187,6 +187,7 @@ async fn apply_gains_rejects_out_of_range_raw() {
     }
 
     assert_eq!(rig.scripts(), Vec::<String>::new());
+    assert_eq!(rig.engine.lock_state("stepper_x"), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -249,7 +250,7 @@ async fn lock_remove_failure_keeps_lock() {
     emit_control(&rig, snapshot());
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    assert!(restored.is_err());
+    assert_eq!(restored, Ok(false));
     assert_eq!(
         rig.a.sim.lock().unwrap().channels[0].gains,
         [900, 40, 120, 0]
@@ -307,23 +308,32 @@ async fn lock_clears_only_on_confirmed_restore() {
         .await;
     assert_eq!(failed, Err("gain write unconfirmed".to_owned()));
     assert!(rig.engine.lock_state("stepper_x").is_some());
-    assert_eq!(submitted(&rig).await, Err(locked()));
+    assert_eq!(
+        submitted(&rig).await,
+        Err(Precondition::TuneLocked(
+            "restore failed: gain write unconfirmed".to_owned()
+        ))
+    );
 
     rig.a.sim(|s| s.confirm_gains = true);
     let other = Gains {
         velocity_p: 700,
         ..gains
     };
-    rig.engine
-        .restore_snapshot("stepper_x", other, filters)
-        .await
-        .unwrap();
+    assert_eq!(
+        rig.engine
+            .restore_snapshot("stepper_x", other, filters)
+            .await,
+        Ok(false)
+    );
     assert!(rig.engine.lock_state("stepper_x").is_some());
 
-    rig.engine
-        .restore_snapshot("stepper_x", gains, filters)
-        .await
-        .unwrap();
+    assert_eq!(
+        rig.engine
+            .restore_snapshot("stepper_x", gains, filters)
+            .await,
+        Ok(true)
+    );
 
     assert_eq!(rig.engine.lock_state("stepper_x"), None);
     assert_eq!(rig.store.read_lock("stepper_x").unwrap(), None);
@@ -360,4 +370,54 @@ async fn matching_control_state_clears_lock() {
     assert_eq!(rig.store.read_lock("stepper_x").unwrap(), None);
     assert!(rig.engine.check("stepper_x").await.is_ok());
     assert!(rig.scripts().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_restore_locks_the_stepper_itself() {
+    let rig = rig().await;
+    let (gains, filters) = snapshot();
+    rig.a.sim(|s| s.confirm_filters = [true, false, true, true]);
+
+    let failed = rig
+        .engine
+        .restore_snapshot("stepper_x", gains, filters)
+        .await;
+
+    assert_eq!(failed, Err("filter write unconfirmed: torque".to_owned()));
+    let reason = "restore failed: filter write unconfirmed: torque".to_owned();
+    assert_eq!(
+        submitted(&rig).await,
+        Err(Precondition::TuneLocked(reason.clone()))
+    );
+    let held = Lock {
+        reason,
+        snapshot: snapshot(),
+    };
+    assert_eq!(rig.engine.lock_state("stepper_x"), Some(held.clone()));
+    assert_eq!(rig.store.read_lock("stepper_x").unwrap(), Some(held));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_run_on_a_stepper_locked_mid_ladder_fails_without_motion() {
+    let rig = rig().await;
+    let gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let ids = rig
+        .engine
+        .submit_ladder(rig.ladder(tracking(), "velocity_p", &[841.0, 941.0], 1))
+        .await
+        .unwrap();
+    rig.wait_moving(&mut events, &ids[0]).await;
+
+    rig.engine
+        .lock_stepper("stepper_x", REASON.to_owned(), snapshot())
+        .unwrap();
+    gate.notify_one();
+
+    assert_eq!(rig.finish(&ids[0]).await.state, RunState::Done);
+    assert_eq!(
+        rig.finish(&ids[1]).await.state,
+        RunState::Failed(locked().to_string())
+    );
+    assert_eq!(rig.stimuli(), 1);
 }

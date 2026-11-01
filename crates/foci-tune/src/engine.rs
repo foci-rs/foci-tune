@@ -39,7 +39,7 @@ use crate::moonraker::{KlippyState, MoonrakerApi, PrinterState};
 use crate::run_analysis::{AnalysisInput, analyze, decode_capture, stimulus_window};
 use crate::steppers::{BedLimits, Stepper, derive_steppers};
 use crate::stimulus::{RunKind, compose, feedforward_reset_line};
-use crate::store::{Store, StoreError, build_series};
+use crate::store::{Store, build_series};
 use crate::verify_run::{Window, first_failure, verify};
 
 const GAINS_REQUEST: u8 = 1;
@@ -544,13 +544,6 @@ fn check_gains(g: &Gains) -> Result<(), String> {
     }
 }
 
-fn store_io(e: StoreError) -> io::Error {
-    match e {
-        StoreError::Io(e) => e,
-        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
-    }
-}
-
 fn parse_axis(axis: &str) -> Result<LadderAxis, LadderRejected> {
     match axis {
         "velocity_p" => Ok(LadderAxis::VelocityP),
@@ -811,7 +804,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
             .into_iter()
             .rfind(|(_, run)| run.state == RunState::KillUnconfirmed)
             .map(|(session, run)| (session, run.id));
-        let locks = store.locks().map_err(store_io)?.into_iter().collect();
+        let locks = store.locks()?.into_iter().collect();
         let restarts_at_kill = *moonraker.klippy_restarts().borrow();
         let events = broadcast::channel(EVENT_CAPACITY).0;
         let persister = Persister::start(store.clone(), events.clone())?;
@@ -1157,27 +1150,42 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
 
     /// Writes `gains` and `filters` to `stepper` through the confirmed write path, like
     /// [`Engine::apply_gains`]. When both are confirmed and equal the snapshot of `stepper`'s
-    /// restore lock, the lock is removed from the store and then from memory.
+    /// restore lock, the lock is removed from the store and then from memory. A write that
+    /// fails or is unconfirmed locks `stepper` with this snapshot before new runs are admitted
+    /// again, unless it is already locked with another snapshot.
+    ///
+    /// Returns true when the write is confirmed and `stepper` is not locked, false when it is
+    /// confirmed but the lock stays (another snapshot, or its file could not be removed).
     ///
     /// # Errors
-    /// The reason meant for display, as for [`Engine::apply_gains`], or a confirmed restore
-    /// whose lock file could not be removed; the lock then stays.
+    /// The reason meant for display, as for [`Engine::apply_gains`]; a lock taken after a
+    /// failed write that could not be persisted is added to it.
     pub async fn restore_snapshot(
         &self,
         stepper: &str,
         gains: Gains,
         filters: Filters,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         check_gains(&gains)?;
         let s = &self.shared;
         let _guard = s.begin_write().map_err(|p| p.to_string())?;
         let resolved = s.resolve(stepper).await.map_err(|p| p.to_string())?;
-        s.gcode("M400").await?;
-        s.write_gains(&resolved.stepper, &gains).await?;
-        s.write_filters(&resolved.stepper, &filters).await?;
-        s.clear_lock(stepper, &(gains, filters))
-            .map(|_| ())
-            .map_err(|e| format!("gains restored, but the restore lock was not removed: {e}"))
+        let written = async {
+            s.gcode("M400").await?;
+            s.write_gains(&resolved.stepper, &gains).await?;
+            s.write_filters(&resolved.stepper, &filters).await
+        }
+        .await;
+        if let Err(e) = written {
+            return Err(s.lock_failed_restore(stepper, (gains, filters), e));
+        }
+        match s.clear_lock(stepper, &(gains, filters)) {
+            Ok(_) => Ok(!lock(&s.inner).locks.contains_key(stepper)),
+            Err(e) => {
+                tracing::warn!(stepper, error = %e, "restore confirmed, lock file not removed");
+                Ok(false)
+            }
+        }
     }
 
     /// Locks `stepper` against every run until `snapshot` is restored or reported by the
@@ -1192,15 +1200,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         reason: String,
         snapshot: (Gains, Filters),
     ) -> Result<(), LockError> {
-        let s = &self.shared;
-        let held = Lock { reason, snapshot };
-        let _io = lock(&s.lock_io);
-        lock(&s.inner)
-            .locks
-            .insert(stepper.to_owned(), held.clone());
-        s.store
-            .write_lock(stepper, &held)
-            .map_err(|e| LockError::NotDurable(e.to_string()))
+        self.shared.lock_stepper(stepper, Lock { reason, snapshot })
     }
 
     /// `stepper`'s restore lock, if it has one.
@@ -1240,6 +1240,41 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         }
         inner.writing = true;
         Ok(WriteGuard(&self.inner))
+    }
+
+    fn lock_stepper(&self, stepper: &str, held: Lock) -> Result<(), LockError> {
+        let _io = lock(&self.lock_io);
+        lock(&self.inner)
+            .locks
+            .insert(stepper.to_owned(), held.clone());
+        self.store
+            .write_lock(stepper, &held)
+            .map_err(|e| LockError::NotDurable(e.to_string()))
+    }
+
+    /// Locks `stepper` after a restore of `snapshot` failed with `error`, keeping a lock on
+    /// another snapshot, which only that snapshot may clear; returns the error for display.
+    fn lock_failed_restore(
+        &self,
+        stepper: &str,
+        snapshot: (Gains, Filters),
+        error: String,
+    ) -> String {
+        let other = lock(&self.inner)
+            .locks
+            .get(stepper)
+            .is_some_and(|l| l.snapshot != snapshot);
+        if other {
+            return error;
+        }
+        let held = Lock {
+            reason: format!("restore failed: {error}"),
+            snapshot,
+        };
+        match self.lock_stepper(stepper, held) {
+            Ok(()) => error,
+            Err(e) => format!("{error}; {e}"),
+        }
     }
 
     /// Clears `stepper`'s restore lock when its snapshot is `snapshot`: the file first, then
@@ -2040,6 +2075,16 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         };
         let mut kill_rx = self.kill_requested.subscribe();
         let mut resolved_rx = self.kill_resolved.subscribe();
+        let held = lock(&self.inner)
+            .locks
+            .get(&request.stepper)
+            .map(|l| l.reason.clone());
+        if let Some(reason) = held {
+            let refused = Precondition::TuneLocked(reason).to_string();
+            self.end_run(Some(RunState::Failed(refused)), &mut resolved_rx)
+                .await;
+            return;
+        }
         self.set_state(RunState::Preparing);
         let resolved = match self.check_run(&request.stepper).await {
             Ok(r) => r,
