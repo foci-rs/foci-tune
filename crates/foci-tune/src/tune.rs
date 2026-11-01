@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use foci_tune_analysis::ladder::{LadderAxis, LadderValue, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation, Recommended, recommend};
 use foci_tune_analysis::rungs::{RungNote, Rungs, SeedRefused, rung_values, seed_from};
-use foci_tune_analysis::verdict::{Gates, Halt, LadderAssessment, RepeatResult, assess_ladder};
+use foci_tune_analysis::verdict::{
+    Gates, Halt, LadderAssessment, Pause, RepeatResult, assess_ladder,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, OwnedMutexGuard, broadcast, watch};
@@ -103,6 +105,57 @@ pub struct RungRecord {
     /// Start and end of every run in `run_ids`, in the same order.
     #[serde(default)]
     pub run_times: Vec<RunTime>,
+    /// The operator's decision to continue past this rung's unassessable result.
+    #[serde(default)]
+    pub waived: Option<Waiver>,
+    /// Earlier attempts at this rung that a re-run replaced, oldest first.
+    #[serde(default)]
+    pub superseded: Vec<RungAttempt>,
+}
+
+/// An operator decision to continue past an unassessable result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Waiver {
+    /// When the operator decided, milliseconds since the UNIX epoch.
+    pub unix_ms: u64,
+    /// What was unassessable; a damping waiver does not cover a standstill one.
+    pub reason: Pause,
+}
+
+/// The runs and results of a rung attempt that a re-run replaced.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RungAttempt {
+    /// Runs the attempt executed, in order.
+    pub run_ids: Vec<RunId>,
+    /// Start and end of every run in `run_ids`, in the same order.
+    pub run_times: Vec<RunTime>,
+    /// Per-repeat results the attempt produced.
+    pub repeat_values: Vec<RepeatResult>,
+    /// When the attempt ended, milliseconds since the UNIX epoch.
+    pub ended_unix_ms: Option<u64>,
+}
+
+/// Why and where a step stopped for an operator decision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PauseRecord {
+    /// Index of the rung whose result could not be assessed.
+    pub rung: usize,
+    /// What could not be assessed.
+    pub reason: Pause,
+    /// When the step paused, milliseconds since the UNIX epoch.
+    pub unix_ms: u64,
+}
+
+/// The operator's answer to a paused step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseDecision {
+    /// Continue past the unassessable result.
+    Continue,
+    /// Run the rung again.
+    Rerun,
+    /// End the step here.
+    Stop,
 }
 
 /// When one run of a tune was submitted and when it finished.
@@ -184,6 +237,13 @@ pub struct TuneStep {
     /// Per-metric drift of the seed rung; never gates.
     #[serde(default)]
     pub drift: Vec<DriftRecord>,
+    /// Set while the step waits for the operator after an unassessable result.
+    #[serde(default)]
+    pub paused: Option<PauseRecord>,
+    /// When the operator turned the standstill gate off for this step, milliseconds since the
+    /// UNIX epoch.
+    #[serde(default)]
+    pub standstill_gate_off: Option<u64>,
 }
 
 /// Where a tune is in its life cycle.
@@ -197,6 +257,8 @@ pub enum TuneState {
     Running,
     /// A step finished and awaits the operator's choice.
     AwaitingChoice,
+    /// A step stopped on an unassessable result and awaits the operator's decision.
+    Paused,
     /// Every step is complete.
     Done,
     /// Given up by the operator.
@@ -489,6 +551,8 @@ fn rung_record(shown: f64, raw: i32) -> RungRecord {
         skipped: None,
         repeat_values: Vec::new(),
         run_times: Vec::new(),
+        waived: None,
+        superseded: Vec::new(),
     }
 }
 
@@ -803,6 +867,8 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             drift: Vec::new(),
             notes: rungs.notes.clone(),
             run_count: None,
+            paused: None,
+            standstill_gate_off: None,
         };
         let per_repeat = runs_per_repeat(&record.setup);
         let ladder_runs = step.rungs.len() * request.repeats as usize * per_repeat;
@@ -1117,6 +1183,7 @@ fn state_text(state: &TuneState) -> &'static str {
         TuneState::Announced => "announced",
         TuneState::Running => "running",
         TuneState::AwaitingChoice => "awaiting a choice",
+        TuneState::Paused => "paused",
         TuneState::Done => "done",
         TuneState::Abandoned => "abandoned",
         TuneState::RestorePending => "awaiting its restore",
@@ -1201,6 +1268,7 @@ fn next_axis(tune: &Tune) -> Result<LadderAxis, TuneError> {
         TuneState::Announced => Some("a step is already announced"),
         TuneState::Running => Some("a step is running"),
         TuneState::AwaitingChoice => Some("the last step awaits a choice"),
+        TuneState::Paused => Some("the step is paused"),
         TuneState::Done => Some("the tune is done"),
         TuneState::Abandoned => Some("the tune was abandoned"),
         TuneState::RestorePending | TuneState::RestoreFailed(_) => {

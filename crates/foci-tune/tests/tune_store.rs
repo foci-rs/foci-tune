@@ -4,11 +4,11 @@ use foci_tune::model::{FORMAT_VERSION, Filters, Gains, RunId, SessionId};
 use foci_tune::pattern::Pattern;
 use foci_tune::store::Store;
 use foci_tune::tune::{
-    ProbeSettings, RungRecord, StandstillSettings, StepSessions, Tune, TuneId, TuneSetup,
-    TuneState, TuneStep,
+    PauseRecord, ProbeSettings, RungRecord, StandstillSettings, StepSessions, Tune, TuneId,
+    TuneSetup, TuneState, TuneStep, Waiver,
 };
 use foci_tune_analysis::ladder::{LadderAxis, RungOutcome};
-use foci_tune_analysis::verdict::{Gates, RepeatResult};
+use foci_tune_analysis::verdict::{Gates, Halt, Pause, RepeatResult};
 
 fn tune(stepper: &str, state: TuneState) -> Tune {
     let session = SessionId::generate(SystemTime::now());
@@ -90,7 +90,11 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
                     worst_torque_sd: Some(3.25),
                 }],
                 run_times: Vec::new(),
+                waived: None,
+                superseded: Vec::new(),
             }],
+            paused: None,
+            standstill_gate_off: None,
             chosen: Some(1500),
             chosen_shown: Some(1500.0),
             starts: 1,
@@ -115,6 +119,7 @@ fn all_states() -> Vec<TuneState> {
         TuneState::Announced,
         TuneState::Running,
         TuneState::AwaitingChoice,
+        TuneState::Paused,
         TuneState::Done,
         TuneState::Abandoned,
         TuneState::RestorePending,
@@ -191,4 +196,59 @@ fn tune_files_do_not_disturb_session_scanning() {
         .unwrap();
 
     assert!(store.scan().unwrap().is_empty());
+}
+
+fn three_rung_tune() -> Tune {
+    let mut t = tune("stepper_x", TuneState::Ready);
+    let rung = t.steps[0].rungs[0].clone();
+    t.steps[0].rungs = vec![rung.clone(), rung.clone(), rung];
+    t
+}
+
+#[test]
+fn a_tune_record_without_the_pause_fields_loads_with_defaults() {
+    let mut v = serde_json::to_value(three_rung_tune()).unwrap();
+    let step = &mut v["steps"][0];
+    step.as_object_mut().unwrap().remove("paused");
+    step.as_object_mut().unwrap().remove("standstill_gate_off");
+    for rung in step["rungs"].as_array_mut().unwrap() {
+        rung.as_object_mut().unwrap().remove("waived");
+        rung.as_object_mut().unwrap().remove("superseded");
+    }
+    step["assessment"] =
+        serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"]});
+
+    let tune: Tune = serde_json::from_value(v).unwrap();
+
+    assert_eq!(tune.steps[0].paused, None);
+    assert_eq!(tune.steps[0].standstill_gate_off, None);
+    assert!(
+        tune.steps[0]
+            .rungs
+            .iter()
+            .all(|r| r.waived.is_none() && r.superseded.is_empty())
+    );
+    assert_eq!(
+        tune.steps[0].assessment.as_ref().unwrap().halt,
+        Some((1, Halt::DampingUnassessable))
+    );
+}
+
+#[test]
+fn a_paused_tune_round_trips() {
+    let mut tune = three_rung_tune();
+    tune.state = TuneState::Paused;
+    tune.steps[0].paused = Some(PauseRecord {
+        rung: 2,
+        reason: Pause::DampingUnassessable,
+        unix_ms: 7,
+    });
+    tune.steps[0].rungs[2].waived = Some(Waiver {
+        unix_ms: 8,
+        reason: Pause::DampingUnassessable,
+    });
+
+    let json = serde_json::to_string(&tune).unwrap();
+
+    assert_eq!(serde_json::from_str::<Tune>(&json).unwrap(), tune);
 }
