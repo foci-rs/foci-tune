@@ -1606,3 +1606,31 @@ async fn a_failed_rerun_ends_the_step_failed_and_keeps_the_superseded_attempt() 
     assert_eq!(step.rungs[1].superseded.len(), 1);
     assert!(step.rungs[2].skipped.is_some());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rerun_drops_the_rungs_damping_waiver() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        let dropped = Profile {
+            probe_edges: 0,
+            drop_flag: true,
+            ..Profile::default()
+        };
+        s.profile_by_velocity_p.insert(668, dropped);
+    });
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::Paused).await;
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+
+    sched.decide(&id, PauseDecision::Rerun).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::Paused).await;
+
+    assert_eq!(
+        tune.steps[0].paused.as_ref().map(|p| (p.rung, p.reason)),
+        Some((0, Pause::DampingUnassessable))
+    );
+    assert_eq!(tune.steps[0].rungs[0].waived, None);
+}

@@ -1128,6 +1128,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 };
                 rung.superseded.push(attempt);
                 rung.started_unix_ms = None;
+                rung.waived = None;
                 step.paused = None;
                 step.assessment = None;
                 let mut order = vec![paused.rung];
