@@ -1149,7 +1149,9 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         };
         let step = step_mut(&mut record, index)?;
         step.starts += 1;
-        let drift = step.drift_rung.is_none();
+        // A step that has ended once (halted, stopped or completed) is past its first pass:
+        // what runs now is an extension, which never repeats the drift check.
+        let drift = step.drift_rung.is_none() && step.ended_unix_ms.is_none();
         record.state = TuneState::Running;
         s.save(&record)?;
         let Some(ctx) = StepContext::new(&record) else {

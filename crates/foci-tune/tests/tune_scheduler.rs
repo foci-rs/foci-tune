@@ -14,7 +14,7 @@ use foci_tune::tune::{
 };
 use foci_tune_analysis::ladder::{LadderAxis, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation};
-use foci_tune_analysis::rungs::SeedRefused;
+use foci_tune_analysis::rungs::{SeedRefused, rung_values};
 use foci_tune_analysis::verdict::{
     Gates, Halt, InadmissibleReason, Pause, UnscoredReason, assess_ladder,
 };
@@ -1455,6 +1455,42 @@ async fn stop_skips_the_rungs_above_and_recommends_from_the_assessed_ones() {
     assert!(step.recommendation.is_some());
     assert!(step.drift_rung.is_none());
     assert!(!written_velocity_p(&rig).contains(&1060));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continuing_a_paused_extension_of_a_halted_step_runs_no_drift() {
+    let rig = rig().await;
+    tracking_lag(&rig);
+    rig.a.sim(|s| {
+        s.zeta_by_velocity_p.insert(841, 0.03);
+    });
+    let sched = scheduler(&rig);
+    let halted = run_step(&rig, &sched, step(-1, 1, 1)).await;
+    let id = halted.id.clone();
+    let first = &halted.steps[0];
+    assert!(matches!(
+        first.assessment.as_ref().unwrap().halt,
+        Some((1, Halt::BelowFloor { .. }))
+    ));
+    assert!(first.drift_rung.is_none());
+    assert_eq!(
+        first.recommendation.and_then(|r| r.extend),
+        Some(Extension::Below)
+    );
+    let below = rung_values(first.axis, first.seed_raw, first.pwm_hz, -2, -2).values[0].raw;
+    no_edges_at(&rig, below);
+
+    sched
+        .confirm_extension(&id, Extension::Below)
+        .await
+        .unwrap();
+    wait_state(&rig, &id, TuneState::Paused).await;
+    let stimuli = rig.stimuli();
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    assert!(tune.steps[0].drift_rung.is_none());
+    assert_eq!(rig.stimuli(), stimuli, "the seed rung was not run again");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
