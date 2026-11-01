@@ -11,7 +11,7 @@ use foci_tune::tune::{
     PauseDecision, ProbeSettings, Seed, StandstillSettings, StepRequest, TuneError, TuneId,
     TuneScheduler, TuneSetup, TuneState,
 };
-use foci_tune_analysis::verdict::Gates;
+use foci_tune_analysis::verdict::{Gates, Pause};
 use rig::*;
 
 fn setup() -> TuneSetup {
@@ -215,6 +215,11 @@ async fn restart_while_paused_marks_restore_pending_and_locks() {
         .unwrap();
     before.confirm_step(&id).await.unwrap();
     wait_tune_state(&rig, &id, TuneState::Paused).await;
+    let paused = rig.store.read_tune(&id).unwrap();
+    assert_eq!(
+        paused.steps[0].paused.as_ref().map(|p| p.reason),
+        Some(Pause::DampingUnassessable)
+    );
 
     let after = TuneScheduler::new(rig.engine.clone(), rig.store.clone());
     let recovered = after.recover().await.unwrap();
