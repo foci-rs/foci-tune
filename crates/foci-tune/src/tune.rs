@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use foci_tune_analysis::ladder::{LadderAxis, RungOutcome};
-use foci_tune_analysis::recommend::{Recommended, recommend};
+use foci_tune_analysis::recommend::{Extension, Recommended, recommend};
 use foci_tune_analysis::rungs::{Rungs, SeedRefused, rung_values, seed_from};
 use foci_tune_analysis::verdict::{Gates, Halt, LadderAssessment, RepeatResult, assess_ladder};
 use serde::{Deserialize, Serialize};
@@ -289,6 +289,9 @@ pub enum TuneError {
     /// The setup or step request is not valid; the text says why.
     #[error("{0}")]
     InvalidRequest(String),
+    /// The requested extension is not on offer or cannot be written; the text says why.
+    #[error("{0}")]
+    NoExtension(String),
     /// The store failed; the text is the I/O error.
     #[error("tune store: {0}")]
     Store(String),
@@ -738,6 +741,80 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             return Err(TuneError::NotAnnounced);
         };
         tokio::spawn(s.clone().execute(ctx, order, true));
+        Ok(())
+    }
+
+    /// Runs the one extra rung the step's recommendation offers, one exponent beyond the
+    /// ladder's lower or upper end, then re-assesses the step. The drift re-run is not
+    /// repeated.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the step awaits a choice, [`TuneError::NoExtension`]
+    /// when the recommendation does not offer `ext`, the ladder halted below the rung above
+    /// it, or the rung cannot be written or repeats a measured raw value,
+    /// [`TuneError::Precondition`] when a run could not start now, and store errors.
+    pub async fn confirm_extension(&self, tune: &TuneId, ext: Extension) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if record.state != TuneState::AwaitingChoice {
+            return Err(TuneError::OutOfOrder(
+                "an extension needs a step that awaits a choice".to_owned(),
+            ));
+        }
+        let Some(step) = record.steps.last_mut() else {
+            return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
+        };
+        if step.recommendation.and_then(|r| r.extend) != Some(ext) {
+            return Err(TuneError::NoExtension(
+                "the recommendation does not offer this extension".to_owned(),
+            ));
+        }
+        let halt = step.assessment.as_ref().and_then(|a| a.halt);
+        if let (Extension::Above, Some((_, halt))) = (ext, halt) {
+            return Err(TuneError::NoExtension(format!(
+                "the ladder halted ({}), so no rung is added above it",
+                halt_text(halt, &record.setup.gates)
+            )));
+        }
+        let k = match ext {
+            Extension::Below => step.lower_k - 1,
+            Extension::Above => step.upper_k + 1,
+        };
+        let Some(value) = rung_values(step.axis, step.seed_raw, step.pwm_hz, k, k)
+            .values
+            .first()
+            .copied()
+        else {
+            return Err(TuneError::NoExtension(
+                "the next rung cannot be written".to_owned(),
+            ));
+        };
+        if step.rungs.iter().any(|r| r.raw == value.raw) {
+            return Err(TuneError::NoExtension(
+                "the next rung repeats a measured raw value".to_owned(),
+            ));
+        }
+        s.engine.check(&record.setup.stepper).await?;
+        let index = match ext {
+            Extension::Below => {
+                step.lower_k = k;
+                step.rungs.insert(0, rung_record(value.shown, value.raw));
+                0
+            }
+            Extension::Above => {
+                step.upper_k = k;
+                step.rungs.push(rung_record(value.shown, value.raw));
+                step.rungs.len() - 1
+            }
+        };
+        step.recommendation = None;
+        record.state = TuneState::Running;
+        s.store.write_tune(&record)?;
+        let Some(ctx) = StepContext::new(&record) else {
+            return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
+        };
+        tokio::spawn(s.clone().execute(ctx, vec![index], false));
         Ok(())
     }
 }

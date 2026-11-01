@@ -12,6 +12,7 @@ use foci_tune::tune::{
     TuneSetup, TuneState, repeat_result,
 };
 use foci_tune_analysis::ladder::{LadderAxis, RungOutcome};
+use foci_tune_analysis::recommend::Extension;
 use foci_tune_analysis::rungs::SeedRefused;
 use foci_tune_analysis::verdict::{Gates, Halt, assess_ladder};
 use rig::*;
@@ -480,6 +481,45 @@ async fn zero_and_rounds_to_zero_seed_refuse_start() {
     assert_eq!(rig.store.read_tune(&id).unwrap().state, TuneState::Ready);
     assert_eq!(sched.confirm_step(&id).await, Err(TuneError::NotAnnounced));
     assert_eq!(rig.stimuli(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn extension_is_never_queued_without_confirm() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        for (raw, lag) in [(668, 60), (841, 40), (1060, 20), (1335, 30)] {
+            s.lag_by_velocity_p.insert(raw, lag);
+        }
+    });
+    let sched = scheduler(&rig);
+    let tune = run_step(&rig, &sched, step(-1, 1, 1)).await;
+    let id = tune.id.clone();
+    let drift_before = tune.steps[0].drift_rung.clone();
+    assert!(drift_before.is_some());
+    let offered = tune.steps[0].recommendation.unwrap();
+    assert_eq!(offered.extend, Some(Extension::Above));
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let stimuli = rig.stimuli();
+    assert_eq!(stimuli, 12);
+    assert!(rig.engine.is_idle());
+    let below = sched.confirm_extension(&id, Extension::Below).await;
+    assert!(matches!(below, Err(TuneError::NoExtension(_))), "{below:?}");
+    assert_eq!(rig.stimuli(), stimuli);
+
+    sched
+        .confirm_extension(&id, Extension::Above)
+        .await
+        .unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &tune.steps[0];
+    let raws: Vec<i32> = step.rungs.iter().map(|r| r.raw).collect();
+    assert_eq!(raws, vec![668, 841, 1060, 1335]);
+    assert_eq!(step.rungs[3].repeat_values.len(), 1);
+    assert_eq!(step.assessment.as_ref().unwrap().verdicts.len(), 4);
+    assert_eq!(rig.stimuli(), stimuli + 3);
+    assert_eq!(step.drift_rung, drift_before);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
