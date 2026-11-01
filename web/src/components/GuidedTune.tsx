@@ -487,6 +487,11 @@ function StepCard({
   const measured = rows.filter((r) => r.skipped === null && r.repeatsDone >= step.repeats);
   const [rungPick, setRungPick] = useState<number | null>(null);
   const [typed, setTyped] = useState(mark?.gain ?? rows[0]?.shown ?? 0);
+  const typedByOperator = useRef(false);
+  const markGain = mark?.gain ?? null;
+  useEffect(() => {
+    if (markGain !== null && !typedByOperator.current) setTyped(markGain);
+  }, [markGain]);
   const [extension, setExtension] = useState<"below" | "above" | null>(null);
   const rec = summary.recommendation;
   const pick = rungPick ?? measured[0]?.index ?? null;
@@ -561,7 +566,16 @@ function StepCard({
             </Button>
             <label className="flex flex-col text-xs text-muted-foreground">
               Value
-              <NumberField label="Value" value={typed} disabled={busy} onValue={setTyped} className="w-28" />
+              <NumberField
+                label="Value"
+                value={typed}
+                disabled={busy}
+                onValue={(v) => {
+                  typedByOperator.current = true;
+                  setTyped(v);
+                }}
+                className="w-28"
+              />
             </label>
             <Button disabled={busy || !(typed > 0)} onClick={() => onChoose({ value: typed })}>
               Use this value

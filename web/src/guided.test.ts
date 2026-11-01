@@ -186,6 +186,27 @@ describe("rungView", () => {
   });
 });
 
+describe("a record whose assessment predates an extension", () => {
+  const stale = (extra: "below" | "above") => {
+    const base = assessed({ recommendation: { choice: { Measured: { rung: 3 } }, extend: "Above" } });
+    const added = rung(extra === "below" ? -1 : 4);
+    base.rungs = extra === "below" ? [added, ...base.rungs] : [...base.rungs, added];
+    return tune("Running", [base]);
+  };
+
+  test.each(["below", "above"] as const)("ignores the verdicts after an extension %s", (side) => {
+    const t = stale(side);
+    const rows = rungView(t, 0);
+    expect(rows).toHaveLength(5);
+    expect(rows.every((r) => r.verdict === "Pending")).toBe(true);
+    expect(rows.every((r) => r.p99BySpeed.length === 0 && r.score === null && r.recommended === null)).toBe(true);
+    expect(curveData(rows, 2)[1].every((v) => v === null)).toBe(true);
+    const summary = stepSummary(t, 0);
+    expect(summary.halt).toBeNull();
+    expect(summary.recommendation).toBeNull();
+  });
+});
+
 describe("canChoose", () => {
   test.each<[TuneState, boolean]>([
     ["Ready", false],
@@ -341,6 +362,12 @@ describe("announcementOf", () => {
 
   test("leaves out the drift re-run when the ladder does not hold the seed", () => {
     expect(announcementOf(tune("Announced", [step({ seed_raw: 5 })]))?.runCount).toBe(4 * 1 * 4);
+  });
+
+  test("uses the run count the server stored over the client formula", () => {
+    const s = step({ repeats: 2, seed_raw: 0, run_count: 28, rungs: [rung(0), rung(1), rung(2)] });
+    expect(announcementOf(tune("Announced", [s]))?.runCount).toBe(28);
+    expect(announcementOf(tune("Announced", [{ ...s, run_count: null }]))?.runCount).toBe(3 * 2 * 4);
   });
 
   test("is null before any step exists", () => {

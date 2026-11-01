@@ -1,9 +1,11 @@
 import type {
   Halt,
+  LadderAssessment,
   InadmissibleReason,
   RungNote,
   Tune,
   TuneAxis,
+  TuneStep,
   TuneState,
   UnscoredReason,
 } from "./api";
@@ -105,10 +107,16 @@ export function noteText(note: RungNote): string {
   return `${note.Merged.shown} merged into ${note.Merged.into}: same raw value`;
 }
 
+function usableAssessment(step: TuneStep): LadderAssessment | null {
+  const a = step.assessment;
+  if (a === null) return null;
+  return a.verdicts.length === step.rungs.length && a.medians.length === step.rungs.length ? a : null;
+}
+
 /** Notes, recommendation and halt of one step, as the operator reads them. */
 export function stepSummary(tune: Tune, step: number): StepSummary {
   const s = tune.steps[step];
-  const choice = s.recommendation?.choice;
+  const choice = usableAssessment(s) === null ? undefined : s.recommendation?.choice;
   let recommendation: RecommendationView | null = null;
   if (choice !== undefined) {
     if ("Measured" in choice) recommendation = { kind: "measured", rung: choice.Measured.rung };
@@ -120,12 +128,12 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
       };
     } else recommendation = { kind: "none" };
   }
-  const halt = s.assessment?.halt ?? null;
+  const halt = usableAssessment(s)?.halt ?? null;
   return {
     axis: s.axis,
     notes: s.notes.map(noteText),
     recommendation,
-    extend: s.recommendation?.extend ?? null,
+    extend: usableAssessment(s) === null ? null : (s.recommendation?.extend ?? null),
     halt: halt === null ? null : `Assessment stopped at rung ${halt[0] + 1}: ${haltText(halt[1])}`,
     failed: s.failed,
   };
@@ -134,11 +142,12 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
 /** One row per rung of a step: gain, verdict with its reason, scores and per-speed p99. */
 export function rungView(tune: Tune, step: number): RungView[] {
   const s = tune.steps[step];
-  const choice = s.recommendation?.choice;
-  const halt = s.assessment?.halt ?? null;
+  const assessment = usableAssessment(s);
+  const choice = assessment === null ? undefined : s.recommendation?.choice;
+  const halt = assessment?.halt ?? null;
   return s.rungs.map((rung, index) => {
-    const verdict = s.assessment?.verdicts[index];
-    const medians = s.assessment?.medians[index];
+    const verdict = assessment?.verdicts[index];
+    const medians = assessment?.medians[index];
     const flagged = verdict !== undefined && (verdict.inadmissible !== null || verdict.unscored !== null || verdict.marginal || verdict.score !== null);
     const repeatsDone = rung.repeat_values.length;
 
@@ -148,7 +157,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (verdict?.unscored != null) text = `Unscored: ${UNSCORED_TEXT[verdict.unscored]}`;
     else if (verdict?.marginal) text = "Marginal damping";
     else if (verdict?.score != null) text = "Admissible";
-    else if (s.assessment !== null && !flagged) {
+    else if (assessment !== null && !flagged) {
       text =
         halt !== null && index > halt[0]
           ? `Not assessed: assessment stopped at rung ${halt[0] + 1}`
@@ -303,6 +312,7 @@ export function announcementOf(tune: Tune): Announcement | null {
   if (step === undefined || step.rungs.length === 0) return null;
   const perRepeat = tune.setup.speeds_mm_s.length + 2;
   const seedInLadder = step.rungs.some((r) => r.raw === step.seed_raw);
+  const computed = step.rungs.length * step.repeats * perRepeat + (seedInLadder ? perRepeat : 0);
   return {
     stepper: tune.setup.stepper,
     axis: step.axis,
@@ -310,7 +320,7 @@ export function announcementOf(tune: Tune): Announcement | null {
     lastGain: step.rungs[step.rungs.length - 1].shown,
     rungs: step.rungs.length,
     repeats: step.repeats,
-    runCount: step.rungs.length * step.repeats * perRepeat + (seedInLadder ? perRepeat : 0),
+    runCount: step.run_count ?? computed,
   };
 }
 

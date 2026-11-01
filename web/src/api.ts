@@ -518,6 +518,7 @@ export interface TuneStep {
   started_unix_ms: number | null;
   ended_unix_ms: number | null;
   failed: string | null;
+  run_count?: number | null;
   assessment: LadderAssessment | null;
   recommendation: Recommended | null;
   drift_rung: RungRecord | null;

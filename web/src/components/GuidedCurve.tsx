@@ -17,6 +17,8 @@ export function GuidedCurve({
   axisLabel: string;
   recommended: { gain: number; kind: RecommendationKind } | null;
 }) {
+  const recommendedGain = recommended?.gain ?? null;
+  const recommendedKind = recommended?.kind ?? null;
   const options = useMemo<PlotOptions>(
     () => ({
       scales: { x: { time: false } },
@@ -34,14 +36,14 @@ export function GuidedCurve({
       hooks: {
         draw: [
           (u: uPlot) => {
-            if (recommended === null) return;
-            const x = u.valToPos(recommended.gain, "x", true);
+            if (recommendedGain === null) return;
+            const x = u.valToPos(recommendedGain, "x", true);
             const { top, height } = u.bbox;
             const ctx = u.ctx;
             ctx.save();
             ctx.strokeStyle = MARK;
             ctx.lineWidth = 2;
-            ctx.setLineDash(recommended.kind === "interpolated" ? [6, 4] : []);
+            ctx.setLineDash(recommendedKind === "interpolated" ? [6, 4] : []);
             ctx.beginPath();
             ctx.moveTo(x, top);
             ctx.lineTo(x, top + height);
@@ -51,7 +53,7 @@ export function GuidedCurve({
         ],
       },
     }),
-    [speeds, axisLabel, recommended],
+    [speeds, axisLabel, recommendedGain, recommendedKind],
   );
   const data = useMemo(() => curveData(rows, speeds.length) as uPlot.AlignedData, [rows, speeds.length]);
   return <PlotPanel label={`p99 by ${axisLabel}`} options={options} data={data} height={220} />;
