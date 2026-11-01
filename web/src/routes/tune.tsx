@@ -46,6 +46,7 @@ import {
   nextSession,
   parseNumberList,
   patternProblem,
+  probeToggleSpacing,
   isUnknownSession,
   pickRestoreSession,
   restoreStillApplies,
@@ -57,6 +58,7 @@ import {
   savePattern,
   stateLabel,
   TERMINAL_STATES,
+  toggleSpacingProblem,
   type LadderInput,
   type Limits,
   type RunBody,
@@ -399,6 +401,18 @@ function Workbench({ printer }: { printer: PrinterView }) {
   if (gains === null || filters === null) blocked.push("no control-state frame for the stepper's channel yet");
   if (gains !== null && filters !== null) blocked.push(...gainProblems(gains, filters));
   if (type === "tracking" && !speeds.ok) blocked.push(speeds.error);
+  const spacing =
+    type === "probe" && pattern !== null && stepper !== undefined
+      ? probeToggleSpacing(
+          pattern,
+          stepper.kinematics,
+          params.probe.speed_mm_s,
+          params.probe.segments_between_toggles,
+          printer.moonraker.max_velocity,
+        )
+      : null;
+  const spacingProblem = spacing === null ? null : toggleSpacingProblem(spacing);
+  if (spacingProblem !== null) blocked.push(spacingProblem);
 
   const runBody = (): RunBody | null =>
     setup === null || gains === null || filters === null
@@ -530,6 +544,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
                 onSetup={updateSetup}
               />
             )}
+            {spacingProblem !== null && <p className="text-xs text-amber-400">{spacingProblem}</p>}
             {stepper?.proposal.refusal != null && (
               <p className="text-xs text-amber-400">
                 No proposed pattern: {stepper.proposal.refusal}. The pattern is yours to choose.

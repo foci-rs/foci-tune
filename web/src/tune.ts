@@ -518,6 +518,65 @@ export function patternInside(p: Pattern, limits: Limits): boolean {
   });
 }
 
+/** Mirrors `MIN_TOGGLE_SPACING_S` in the stimulus composer. */
+export const MIN_TOGGLE_SPACING_S = 0.1;
+const SEGMENT_MM = 5;
+const SPACING_TOLERANCE_S = 1e-9;
+
+function pathToStepperRatio(kinematics: string): number | null {
+  return kinematics === "corexy" ? Math.SQRT1_2 : kinematics === "cartesian" ? 1 : null;
+}
+
+/** Stepper travel of one stroke segment as the composer cuts it, in mm; null for other kinematics. */
+export function segmentTravelMm(p: Pattern, kinematics: string): number | null {
+  const ratio = pathToStepperRatio(kinematics);
+  if (ratio === null) return null;
+  const [dx, dy] = [p.end[0] - p.start[0], p.end[1] - p.start[1]];
+  const n = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / SEGMENT_MM));
+  return Math.hypot(dx, dy) / n / ratio;
+}
+
+export interface ToggleSpacing {
+  spacingS: number;
+  /** Stepper speed after the `max_velocity` clamp. */
+  speedMmS: number;
+  minSegments: number;
+  ok: boolean;
+}
+
+/** The probe's predicted time between gain toggles; null when the inputs leave it undefined. */
+export function probeToggleSpacing(
+  p: Pattern,
+  kinematics: string,
+  speedMmS: number,
+  segments: number,
+  maxVelocity: number,
+): ToggleSpacing | null {
+  const ratio = pathToStepperRatio(kinematics);
+  const travel = segmentTravelMm(p, kinematics);
+  if (ratio === null || travel === null || !(travel > 0) || !(speedMmS > 0) || !(segments >= 1)) {
+    return null;
+  }
+  const speed = maxVelocity > 0 ? Math.min(speedMmS, maxVelocity / ratio) : speedMmS;
+  const spacingS = (travel * segments) / speed;
+  const needed = (MIN_TOGGLE_SPACING_S * speed) / travel - SPACING_TOLERANCE_S;
+  return {
+    spacingS,
+    speedMmS: speed,
+    minSegments: Math.max(1, Math.ceil(needed)),
+    ok: spacingS + SPACING_TOLERANCE_S >= MIN_TOGGLE_SPACING_S,
+  };
+}
+
+/** Why the probe's edge detector would find no edges at this spacing; null when it is far enough. */
+export function toggleSpacingProblem(s: ToggleSpacing): string | null {
+  if (s.ok) return null;
+  return (
+    `At ${s.speedMmS.toFixed(0)} mm/s toggles are ${(s.spacingS * 1000).toFixed(0)} ms apart; the fit needs ` +
+    `at least ${(MIN_TOGGLE_SPACING_S * 1000).toFixed(0)} ms: use ${s.minSegments} or more segments`
+  );
+}
+
 export interface PatternStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;

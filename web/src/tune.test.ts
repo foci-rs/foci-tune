@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ApiRequestError, type LiveChannel, type Run, type RunKind, type SessionView } from "./api";
+import { ApiRequestError, type LiveChannel, type Pattern, type Run, type RunKind, type SessionView } from "./api";
 import {
   alignSeries,
   appendLive,
@@ -12,6 +12,9 @@ import {
   ladderMedians,
   ladderPlotData,
   patternProblem,
+  probeToggleSpacing,
+  segmentTravelMm,
+  toggleSpacingProblem,
   isUnknownSession,
   pickRestoreSession,
   restoreStillApplies,
@@ -472,5 +475,55 @@ describe("pattern helpers", () => {
       type: "standstill",
       parameters: { rests: 4, dwell_s: 2 },
     });
+  });
+});
+
+describe("probe toggle spacing", () => {
+  const diagonal: Pattern = { start: [100.5, 100.5], end: [200.5, 200.5] };
+  const alongX: Pattern = { start: [100.5, 150.5], end: [200.5, 150.5] };
+  const at = (speed: number, segments = 3, p = diagonal, kinematics = "corexy") =>
+    probeToggleSpacing(p, kinematics, speed, segments, 500);
+
+  test("a corexy diagonal segment is 10 mm of stepper travel, a cartesian one 5 mm", () => {
+    expect(segmentTravelMm(diagonal, "corexy")).toBeCloseTo(10, 9);
+    expect(segmentTravelMm(alongX, "cartesian")).toBeCloseTo(5, 9);
+    expect(segmentTravelMm(diagonal, "delta")).toBeNull();
+  });
+
+  test.each([
+    [50, 600, true, 1],
+    [195, 153.8, true, 2],
+    [400, 75, false, 4],
+    [600, 50, false, 6],
+  ])("corexy at %d mm/s with 3 segments: %d ms apart", (speed, ms, ok, minSegments) => {
+    const s = at(speed)!;
+    expect(s.spacingS * 1000).toBeCloseTo(ms, 1);
+    expect(s.ok).toBe(ok);
+    expect(s.minSegments).toBe(minSegments);
+  });
+
+  test("cartesian toggles at the same speed come twice as often", () => {
+    expect(at(400, 3, alongX, "cartesian")!.spacingS * 1000).toBeCloseTo(37.5, 6);
+  });
+
+  test("exactly the minimum passes, just below it does not", () => {
+    expect(at(400, 4)!.ok).toBe(true);
+    expect(at(401, 4)!.ok).toBe(false);
+    expect(at(401, 4)!.minSegments).toBe(5);
+  });
+
+  test("the estimate uses the speed after the max_velocity clamp", () => {
+    const s = probeToggleSpacing(alongX, "cartesian", 700, 10, 500)!;
+    expect(s.speedMmS).toBe(500);
+    expect(s.ok).toBe(true);
+  });
+
+  test("the run is blocked with the spacing, the minimum and the segments to use", () => {
+    const problem = toggleSpacingProblem(at(400)!);
+    expect(problem).toContain("400 mm/s");
+    expect(problem).toContain("75 ms");
+    expect(problem).toContain("100 ms");
+    expect(problem).toContain("4 or more segments");
+    expect(toggleSpacingProblem(at(195)!)).toBeNull();
   });
 });
