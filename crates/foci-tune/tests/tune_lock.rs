@@ -6,6 +6,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use bytes::Bytes;
+
 use foci_tune::engine::{CommandError, Engine, EngineEvent, LadderRejected, Lock, Precondition};
 use foci_tune::model::{Filters, Gains, RunState};
 use foci_tune_analysis::ladder::PID_GAIN_MAX_RAW;
@@ -420,4 +422,67 @@ async fn a_queued_run_on_a_stepper_locked_mid_ladder_fails_without_motion() {
         RunState::Failed(locked().to_string())
     );
     assert_eq!(rig.stimuli(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_control_frame_queued_before_the_lock_does_not_clear_it() {
+    let rig = rig().await;
+    let (gains, filters) = snapshot();
+    rig.a.sim(|s| {
+        s.failures
+            .push(("FOCI_SET_GAINS".into(), "!! refused".into()))
+    });
+    let filler = Bytes::from(frame_bytes(
+        25,
+        1,
+        0,
+        (1, 1),
+        1,
+        1,
+        &critical_payload(0, 0, 0),
+    ));
+    for _ in 0..60_000 {
+        let _ = rig.frames.send((SERIAL_A.to_owned(), filler.clone()));
+    }
+    let showing_snapshot = Channel {
+        change_sequence: 99,
+        gains: [
+            gains.velocity_p,
+            gains.velocity_i,
+            gains.position_p,
+            gains.position_i,
+        ],
+        filters: [
+            filters.velocity_hz,
+            filters.torque_hz,
+            filters.position_hz,
+            filters.flux_hz,
+        ],
+    };
+    let stale = frame_bytes(
+        25,
+        10,
+        0,
+        (1, 0),
+        2,
+        2,
+        &control_payload(&showing_snapshot, 0),
+    );
+    let _ = rig.frames.send((SERIAL_A.to_owned(), Bytes::from(stale)));
+
+    let failed = rig
+        .engine
+        .restore_snapshot("stepper_x", gains, filters)
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert!(failed.is_err());
+    assert!(rig.engine.lock_state("stepper_x").is_some());
+    assert_eq!(
+        rig.store
+            .read_lock("stepper_x")
+            .unwrap()
+            .map(|l| l.snapshot),
+        Some(snapshot())
+    );
 }
