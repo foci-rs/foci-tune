@@ -246,7 +246,12 @@ function TuneView({ id }: { id: TuneId }) {
             onExtend={(direction) => run(() => postTuneExtension(id, direction))}
           />
           {actions.decide && i === last && (
-            <PausePanel tune={detail} step={i} busy={busy} onDecide={(d) => run(() => postTuneDecision(id, d))} />
+            <PausePanel
+              tune={detail}
+              step={i}
+              busy={busy}
+              onDecide={(d) => run(() => postTuneDecision(id, d))}
+            />
           )}
         </div>
       ))}

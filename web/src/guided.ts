@@ -134,7 +134,8 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
     } else recommendation = { kind: "none" };
   }
   const halt = usableAssessment(s)?.halt ?? null;
-  const pause = s.paused !== null ? ([s.paused.rung, s.paused.reason] as const) : (usableAssessment(s)?.pause ?? null);
+  const pause: [number, Pause] | null =
+    s.paused !== null ? [s.paused.rung, s.paused.reason] : (usableAssessment(s)?.pause ?? null);
   return {
     axis: s.axis,
     notes: s.notes.map(noteText),
@@ -147,6 +148,18 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
 }
 
 /** One row per rung of a step: gain, verdict with its reason, scores and per-speed p99. */
+function notAssessedText(index: number, pause: [number, Pause] | null, halt: [number, Halt] | null): string {
+  if (pause !== null) {
+    if (index === pause[0]) return `Not assessed: ${pauseText(pause[1])}`;
+    if (index > pause[0]) return `Not assessed: paused at rung ${pause[0] + 1}`;
+  }
+  if (halt !== null) {
+    if (index > halt[0]) return `Not assessed: assessment stopped at rung ${halt[0] + 1}`;
+    if (index === halt[0]) return `Not assessed: ${haltText(halt[1])}`;
+  }
+  return "Not assessed";
+}
+
 export function rungView(tune: Tune, step: number): RungView[] {
   const s = tune.steps[step];
   const assessment = usableAssessment(s);
@@ -156,7 +169,9 @@ export function rungView(tune: Tune, step: number): RungView[] {
   return s.rungs.map((rung, index) => {
     const verdict = assessment?.verdicts[index];
     const medians = assessment?.medians[index];
-    const flagged = verdict !== undefined && (verdict.inadmissible !== null || verdict.unscored !== null || verdict.marginal || verdict.score !== null);
+    const flagged =
+      verdict !== undefined &&
+      (verdict.inadmissible !== null || verdict.unscored !== null || verdict.marginal || verdict.score !== null);
     const repeatsDone = rung.repeat_values.length;
 
     let text: string;
@@ -167,16 +182,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (verdict?.marginal) text = "Marginal damping";
     else if (verdict?.score != null) text = "Admissible";
     else if (assessment !== null && !flagged) {
-      text =
-        pause !== null && index === pause[0]
-          ? `Not assessed: ${pauseText(pause[1])}`
-          : pause !== null && index > pause[0]
-            ? `Not assessed: paused at rung ${pause[0] + 1}`
-            : halt !== null && index > halt[0]
-          ? `Not assessed: assessment stopped at rung ${halt[0] + 1}`
-          : halt !== null && index === halt[0]
-            ? `Not assessed: ${haltText(halt[1])}`
-            : "Not assessed";
+      text = notAssessedText(index, pause, halt);
     } else if (repeatsDone >= s.repeats) text = "Measured, awaiting verdict";
     else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
     else text = "Pending";
