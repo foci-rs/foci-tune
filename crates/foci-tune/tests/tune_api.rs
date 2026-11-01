@@ -166,6 +166,28 @@ async fn the_probe_speed_must_be_explicit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gates_that_would_disable_a_check_are_rejected() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let cases = [
+        ("damping_floor", json!(-1.0)),
+        ("marginal", json!(0.04)),
+        ("standstill_factor", json!(0.5)),
+    ];
+
+    for (field, bad) in &cases {
+        let mut body = setup_body(&[50.0]);
+        body["gates"][field] = bad.clone();
+
+        let reply = post(&app, "/api/tunes", body).await;
+
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{field}");
+        assert_eq!(reply.json()["field"], format!("gates.{field}"));
+    }
+    assert_eq!(get(&app, "/api/tunes").await.json(), json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn closely_spaced_probe_toggles_are_rejected() {
     let rig = rig().await;
     let (app, _) = app(&rig);

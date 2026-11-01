@@ -21,6 +21,7 @@ use foci_tune_analysis::ladder::PID_GAIN_MAX_RAW;
 use foci_tune_analysis::recommend::Extension;
 use foci_tune_analysis::signals::corner_hz;
 use foci_tune_analysis::units::POSITION_UNITS_PER_REV;
+use foci_tune_analysis::verdict::Gates;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1372,6 +1373,29 @@ impl<M: MoonrakerApi + 'static> Api<M> {
     }
 }
 
+/// Refuses gate values that would let a rung through unchecked.
+fn check_gates(gates: &Gates) -> ApiResult<()> {
+    if !(gates.damping_floor.is_finite() && gates.damping_floor >= 0.0) {
+        return Err(ApiError::bad_field(
+            "gates.damping_floor",
+            "the damping floor must be a finite number of at least 0",
+        ));
+    }
+    if !(gates.marginal.is_finite() && gates.marginal >= gates.damping_floor) {
+        return Err(ApiError::bad_field(
+            "gates.marginal",
+            "the marginal threshold must be finite and not below the damping floor",
+        ));
+    }
+    if !(gates.standstill_factor.is_finite() && gates.standstill_factor >= 1.0) {
+        return Err(ApiError::bad_field(
+            "gates.standstill_factor",
+            "the standstill factor must be a finite number of at least 1",
+        ));
+    }
+    Ok(())
+}
+
 async fn create_tune<M: MoonrakerApi + 'static>(
     State(api): State<App<M>>,
     body: Result<Json<Value>, JsonRejection>,
@@ -1394,6 +1418,7 @@ async fn create_tune<M: MoonrakerApi + 'static>(
         ));
     }
     let setup: TuneSetup = from_body(body)?;
+    check_gates(&setup.gates)?;
     api.check_tune_setup(&setup).await?;
     let id = api.tunes.create(setup).await?;
     Ok(Json(read_tune_record(&api, &id).await?))
