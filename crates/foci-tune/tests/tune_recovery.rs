@@ -4,7 +4,8 @@ mod rig;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use foci_tune::engine::{Engine, Precondition};
+use foci_tune::engine::{Engine, EngineEvent, Precondition};
+use foci_tune::model::RunState;
 use foci_tune::moonraker::MoonrakerClient;
 use foci_tune::tune::{
     ProbeSettings, Seed, StandstillSettings, StepRequest, TuneScheduler, TuneSetup, TuneState,
@@ -51,7 +52,22 @@ async fn restart_during_rung_marks_restore_pending_and_does_not_resume() {
     let id = before.create(setup()).await.unwrap();
     before.prepare_step(&id, STEP).await.unwrap();
     let _gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
     before.confirm_step(&id).await.unwrap();
+    // The old engine stays alive behind the gate and writes run records through the same
+    // store; its Moving event follows the Moving write, after which it writes nothing more
+    // until the stimulus returns, so the new engine's reconcile cannot race it.
+    tokio::time::timeout(WAIT, async {
+        while !matches!(
+            events.recv().await,
+            Ok(EngineEvent::State {
+                state: RunState::Moving,
+                ..
+            })
+        ) {}
+    })
+    .await
+    .expect("run never moved");
     let deadline = Instant::now() + WAIT;
     while rig.stimuli() == 0 {
         assert!(Instant::now() < deadline, "stimulus not sent");

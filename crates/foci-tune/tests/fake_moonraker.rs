@@ -46,6 +46,7 @@ struct Inner {
     estop_delay: Duration,
     estop_shutdown: Option<Duration>,
     settings_delay: Duration,
+    settings_held: watch::Sender<bool>,
     settings_queries: u32,
     config_root: String,
     shutdown_on: Option<(String, Duration)>,
@@ -137,12 +138,13 @@ async fn query(
     Query(params): Query<serde_json::Map<String, Value>>,
 ) -> Response {
     if params.contains_key("configfile") {
-        let delay = {
+        let (delay, mut held) = {
             let mut inner = shared.inner.lock().unwrap();
             inner.settings_queries += 1;
-            inner.settings_delay
+            (inner.settings_delay, inner.settings_held.subscribe())
         };
         tokio::time::sleep(delay).await;
+        let _ = held.wait_for(|held| !held).await;
     }
     http_reply(shared.call("printer.objects.query", &Value::Object(params)))
 }
@@ -300,6 +302,7 @@ impl FakeMoonraker {
                 estop_delay: Duration::ZERO,
                 estop_shutdown: None,
                 settings_delay: Duration::ZERO,
+                settings_held: watch::channel(false).0,
                 settings_queries: 0,
                 config_root: "/home/pi/printer_data/config".to_owned(),
                 shutdown_on: None,
@@ -393,6 +396,16 @@ impl FakeMoonraker {
     /// Delays every `configfile.settings` query by `delay`.
     pub fn delay_settings(&self, delay: Duration) {
         self.shared.inner.lock().unwrap().settings_delay = delay;
+    }
+
+    /// While `held`, every `configfile.settings` query waits; releasing answers them all.
+    pub fn hold_settings(&self, held: bool) {
+        self.shared
+            .inner
+            .lock()
+            .unwrap()
+            .settings_held
+            .send_replace(held);
     }
 
     /// Merges `patch` into the subscribed objects without notifying anyone.

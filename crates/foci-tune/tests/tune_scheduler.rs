@@ -837,11 +837,11 @@ async fn abandon_between_two_runs_submits_nothing_more() {
     wait_stimuli(&rig, 1).await;
 
     // A second announced record on the same stepper: confirming it holds the stepper's mutex
-    // across a slow settings read, so the step task's filing of run one and the abandon queue
+    // across a held settings read, so the step task's filing of run one and the abandon queue
     // behind it in that order, and the abandon lands before the step task's next submit.
     holder_tune.id = TuneId::generate(std::time::SystemTime::now());
     rig.store.write_tune(&holder_tune).unwrap();
-    rig.fake.delay_settings(Duration::from_millis(1500));
+    rig.fake.hold_settings(true);
     rig.engine.refresh_steppers();
     let queries = rig.fake.settings_queries();
     let holder = tokio::spawn({
@@ -861,22 +861,19 @@ async fn abandon_between_two_runs_submits_nothing_more() {
     })
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let abandon = tokio::spawn({
         let (sched, id) = (sched.clone(), id.clone());
         async move { sched.abandon(&id).await }
     });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(
-        !holder.is_finished(),
-        "the holder released the stepper too early"
-    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!holder.is_finished());
+    rig.fake.hold_settings(false);
 
     let held = holder.await.unwrap();
     assert_eq!(held, Err(TuneError::Precondition(Precondition::Busy)));
     let abandoned = tokio::time::timeout(WAIT, abandon).await;
     abandoned.expect("abandon did not finish").unwrap().unwrap();
-    rig.fake.delay_settings(Duration::ZERO);
 
     let tune = rig.store.read_tune(&id).unwrap();
     assert_eq!(tune.state, TuneState::Abandoned);
