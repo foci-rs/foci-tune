@@ -12,6 +12,7 @@ use foci_tune::assets;
 use foci_tune::engine::Precondition;
 use foci_tune::model::{RunId, SessionId};
 use foci_tune::moonraker::{KlippyState, MoonrakerApi};
+use foci_tune::tune::TuneScheduler;
 use futures_util::{SinkExt, StreamExt};
 use rig::*;
 use serde_json::{Value, json};
@@ -25,6 +26,7 @@ fn app(rig: &Rig) -> Router {
         live: rig.live.clone(),
         frames: rig.frames.clone(),
         store: rig.store.clone(),
+        tunes: TuneScheduler::new(rig.engine.clone(), rig.store.clone()),
     })
 }
 

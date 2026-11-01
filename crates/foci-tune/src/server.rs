@@ -17,6 +17,7 @@ use crate::live::LiveState;
 use crate::moonraker::{ClientConfig, MoonrakerApi, MoonrakerClient};
 use crate::store::Store;
 use crate::trace::run_trace_reader;
+use crate::tune::TuneScheduler;
 
 const DATA_DIR: &str = "foci-results";
 const CONFIG_ROOT_ATTEMPTS: u32 = 30;
@@ -144,6 +145,17 @@ pub async fn serve_with(
         source,
     })?;
     let engine = Arc::new(engine);
+    let tunes = TuneScheduler::new(engine.clone(), store.clone());
+    let recovered = tunes
+        .recover()
+        .await
+        .map_err(|source| ServeError::DataDir {
+            path: data.clone(),
+            source,
+        })?;
+    for tune in &recovered {
+        tracing::warn!(%tune, "unfinished tune awaits its restore; its stepper is locked");
+    }
     let discovery = tokio::spawn(run_trace_discovery(
         engine.clone(),
         live.clone(),
@@ -155,6 +167,7 @@ pub async fn serve_with(
         live,
         frames,
         store,
+        tunes,
     });
     let listener = tokio::net::TcpListener::bind(&config.listen)
         .await

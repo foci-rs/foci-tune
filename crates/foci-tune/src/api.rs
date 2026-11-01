@@ -41,6 +41,7 @@ use crate::pattern::{Pattern, PatternError, propose_pattern};
 use crate::steppers::{BedLimits, Stepper};
 use crate::stimulus::{RunKind, StimulusError, compose};
 use crate::store::{SessionSummary, Store, StoreError};
+use crate::tune::TuneScheduler;
 use crate::ws;
 
 const SNAPSHOT_PERIOD: Duration = Duration::from_secs(1);
@@ -64,6 +65,8 @@ pub struct Api<M> {
     pub frames: broadcast::Sender<(String, Bytes)>,
     /// The data directory.
     pub store: Store,
+    /// The guided tune scheduler.
+    pub tunes: TuneScheduler<M>,
 }
 
 impl<M> Clone for Api<M> {
@@ -74,6 +77,7 @@ impl<M> Clone for Api<M> {
             live: self.live.clone(),
             frames: self.frames.clone(),
             store: self.store.clone(),
+            tunes: self.tunes.clone(),
         }
     }
 }
