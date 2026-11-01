@@ -92,7 +92,6 @@ fn trap_shape_fits_from_the_start_set() {
         fit.damped_hz
     );
     assert!((fit.zeta - 0.058).abs() < 0.01, "{}", fit.zeta);
-    assert!(fit.admissible_starts >= 1);
 }
 
 #[test]

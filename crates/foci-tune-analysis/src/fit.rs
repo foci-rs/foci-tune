@@ -220,7 +220,7 @@ fn solve_from(problem: Problem<'_>, initial: Vector6<f64>, peak: f64) -> SolveOu
 /// The solver runs from a fixed set of 24 starts; the admissible converged solution
 /// with the lowest residual wins. A solution is admissible when `0 < z < 1`, the
 /// damped frequency lies in the analysis band and `|A|` is at most twice the peak
-/// magnitude of the fitted samples.
+/// magnitude of `mean[..55]`.
 ///
 /// # Errors
 ///
@@ -239,6 +239,7 @@ pub fn fit_damped(mean: &[f64], dt_s: f64) -> Result<DampedFit, FitError> {
     if y.iter().chain([&mean[10]]).any(|v| !v.is_finite()) {
         return Err(FitError::NoConvergence);
     }
+    // A is the t = 0 amplitude, so the reference peak includes samples 0 and 1.
     let peak = mean[..end].iter().fold(0.0f64, |m, v| m.max(v.abs()));
     let t: Vec<f64> = (start..end).map(|k| k as f64 * dt_s).collect();
 
