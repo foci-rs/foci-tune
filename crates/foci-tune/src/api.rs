@@ -44,7 +44,7 @@ use crate::steppers::{BedLimits, Stepper};
 use crate::stimulus::{RunKind, StimulusError, compose};
 use crate::store::{SessionSummary, Store, StoreError};
 use crate::tune::{
-    Choice, StepPlan, StepRequest, Tune, TuneError, TuneId, TuneScheduler, TuneSetup,
+    Choice, PauseDecision, StepPlan, StepRequest, Tune, TuneError, TuneId, TuneScheduler, TuneSetup,
 };
 use crate::ws;
 
@@ -954,6 +954,7 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         )
         .route("/api/tunes/{id}/extension", post(tune_extension::<M>))
         .route("/api/tunes/{id}/choice", post(tune_choice::<M>))
+        .route("/api/tunes/{id}/decision", post(tune_decision::<M>))
         .route("/api/tunes/{id}/abandon", post(abandon_tune::<M>))
         .route("/api/tunes/{id}/restore", post(restore_tune::<M>))
         .route("/api/tunes/{id}/acknowledge", post(acknowledge_tune::<M>))
@@ -1509,6 +1510,22 @@ async fn tune_choice<M: MoonrakerApi + 'static>(
     };
     api.tunes.choose(&id, choice).await?;
     Ok(Json(json!({"tune": id, "chosen": true})))
+}
+
+#[derive(Deserialize)]
+struct DecisionRequest {
+    decision: PauseDecision,
+}
+
+async fn tune_decision<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Value>> {
+    let id = tune_id(&id)?;
+    let request: DecisionRequest = from_body(json_body(body)?)?;
+    api.tunes.decide(&id, request.decision).await?;
+    Ok(Json(json!({"tune": id, "decided": true})))
 }
 
 async fn abandon_tune<M: MoonrakerApi + 'static>(

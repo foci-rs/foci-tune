@@ -382,3 +382,51 @@ async fn the_event_stream_broadcasts_a_tune_when_a_rung_changes() {
     }
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_decision_waits_for_a_paused_step() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let early = post(
+        &app,
+        &format!("/api/tunes/{id}/decision"),
+        json!({"decision": "continue"}),
+    )
+    .await;
+    assert_eq!(early.status, StatusCode::CONFLICT);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_tune_accepts_stop_and_awaits_a_choice() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        let no_edges = Profile {
+            probe_edges: 0,
+            ..Profile::default()
+        };
+        s.profile_by_velocity_p.insert(841, no_edges);
+    });
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 1)).await;
+    post_empty(&app, &format!("/api/tunes/{id}/steps/confirm")).await;
+    wait_state(&app, &id, "Paused").await;
+
+    let bad = post(
+        &app,
+        &format!("/api/tunes/{id}/decision"),
+        json!({"decision": "skip"}),
+    )
+    .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let stopped = post(
+        &app,
+        &format!("/api/tunes/{id}/decision"),
+        json!({"decision": "stop"}),
+    )
+    .await;
+    assert_eq!(stopped.status, StatusCode::OK, "{}", stopped.error());
+    let detail = wait_state(&app, &id, "AwaitingChoice").await;
+    assert_eq!(detail["steps"][0]["paused"], Value::Null);
+}
