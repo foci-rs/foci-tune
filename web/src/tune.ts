@@ -577,6 +577,115 @@ export function toggleSpacingProblem(s: ToggleSpacing): string | null {
   );
 }
 
+/** Mirrors `MIN_PROBE_EDGES` in the run verifier. */
+export const PROBE_MIN_EDGES = 20;
+/** Edge count from which the ensemble damping estimate is steady enough to compare runs. */
+export const PROBE_STEADY_EDGES = 40;
+/** Mirrors `MAX_STROKES` in the stimulus composer. */
+const PROBE_MAX_STROKES = 50;
+// The three constants below are fitted to the stepper_x corexy probe runs of 2026-10-31/11-01
+// (195-707 mm/s, 100-260 mm diagonals) so that no recorded run found fewer edges than estimated.
+// The gain toggles run when Klipper parses them, not in step with the motion, so they lose
+// their spacing below about 150 ms.
+/** Time of each pass in which no clean edge lands: the reversal and the toggle lag. */
+const PROBE_DEAD_S = 0.26;
+/** Toggle spacing at and below which no edge was recorded clean. */
+const PROBE_NO_YIELD_SPACING_S = 0.105;
+/** Toggle spacing from which every toggle away from the reversals gave a clean edge. */
+const PROBE_FULL_YIELD_SPACING_S = 0.15;
+const ESTIMATE_TOLERANCE = 1e-9;
+
+export interface ProbeEdgeInput {
+  pattern: Pattern;
+  kinematics: string;
+  /** Requested stepper speed; the `max_velocity` clamp is applied here. */
+  speedMmS: number;
+  segmentsBetweenToggles: number;
+  strokes: number;
+  maxVelocity: number;
+}
+
+interface EdgeModel {
+  perStroke: number;
+  spacing: ToggleSpacing;
+  ratio: number;
+  yieldFraction: number;
+}
+
+function edgeModel(input: ProbeEdgeInput): EdgeModel | null {
+  const { pattern, kinematics, speedMmS, segmentsBetweenToggles, maxVelocity } = input;
+  const ratio = pathToStepperRatio(kinematics);
+  const spacing = probeToggleSpacing(pattern, kinematics, speedMmS, segmentsBetweenToggles, maxVelocity);
+  if (ratio === null || spacing === null) return null;
+  const lengthMm = Math.hypot(pattern.end[0] - pattern.start[0], pattern.end[1] - pattern.start[1]);
+  const passS = lengthMm / ratio / spacing.speedMmS;
+  const band = PROBE_FULL_YIELD_SPACING_S - PROBE_NO_YIELD_SPACING_S;
+  const yieldFraction = Math.min(1, Math.max(0, (spacing.spacingS - PROBE_NO_YIELD_SPACING_S) / band));
+  const perStroke = spacing.ok ? (Math.max(0, passS - PROBE_DEAD_S) / spacing.spacingS) * yieldFraction : 0;
+  return { perStroke, spacing, ratio, yieldFraction };
+}
+
+const floorEdges = (v: number) => Math.max(0, Math.floor(v + ESTIMATE_TOLERANCE));
+
+/** Conservative estimate of the probe edges a run will locate; null for other kinematics. */
+export function expectedProbeEdges(input: ProbeEdgeInput): number | null {
+  const m = edgeModel(input);
+  return m === null ? null : floorEdges(m.perStroke * Math.max(0, input.strokes));
+}
+
+export interface ProbeEdgeHint {
+  tone: "ok" | "caution" | "warning";
+  text: string;
+}
+
+function edgeSuggestion(m: EdgeModel, input: ProbeEdgeInput): string {
+  if (m.yieldFraction === 0) {
+    const travel = segmentTravelMm(input.pattern, input.kinematics) as number;
+    const segments = Math.ceil((PROBE_FULL_YIELD_SPACING_S * m.spacing.speedMmS) / travel - ESTIMATE_TOLERANCE);
+    const ms = (m.spacing.spacingS * 1000).toFixed(0);
+    return `toggles ${ms} ms apart rarely give clean edges: use ${segments} or more segments`;
+  }
+  const options: string[] = [];
+  if (m.perStroke > 0) {
+    const strokes = Math.ceil(PROBE_STEADY_EDGES / m.perStroke - ESTIMATE_TOLERANCE);
+    if (strokes <= PROBE_MAX_STROKES) {
+      options.push(`use ${strokes} strokes for about ${floorEdges(m.perStroke * strokes)}`);
+    }
+  }
+  const passS = (PROBE_STEADY_EDGES * m.spacing.spacingS) / (input.strokes * m.yieldFraction) + PROBE_DEAD_S;
+  const lengthMm = Math.ceil((passS * m.spacing.speedMmS * m.ratio) / 10) * 10;
+  options.push(`lengthen the pattern to about ${lengthMm} mm`);
+  return options.join(", or ");
+}
+
+/** The edge estimate as a note for the probe parameters; null when there is none to give. */
+export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
+  const m = edgeModel(input);
+  if (m === null || !m.spacing.ok) return null;
+  const n = floorEdges(m.perStroke * Math.max(0, input.strokes));
+  if (n >= PROBE_STEADY_EDGES) {
+    return {
+      tone: "ok",
+      text:
+        `Expected about ${n} edges (the run needs at least ${PROBE_MIN_EDGES}; ` +
+        `${PROBE_STEADY_EDGES} or more gives a steadier damping estimate)`,
+    };
+  }
+  const suggestion = edgeSuggestion(m, input);
+  if (n >= PROBE_MIN_EDGES) {
+    return {
+      tone: "caution",
+      text:
+        `Expected about ${n} edges: enough to pass (${PROBE_MIN_EDGES}) but a steadier estimate needs ` +
+        `${PROBE_STEADY_EDGES} or more: add strokes or lengthen the pattern (${suggestion})`,
+    };
+  }
+  return {
+    tone: "warning",
+    text: `Expected about ${n} edges: the run will likely be not comparable (needs ${PROBE_MIN_EDGES}); ${suggestion}`,
+  };
+}
+
 export interface PatternStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;

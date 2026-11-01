@@ -46,6 +46,7 @@ import {
   nextSession,
   parseNumberList,
   patternProblem,
+  probeEdgeHint,
   probeToggleSpacing,
   isUnknownSession,
   pickRestoreSession,
@@ -60,6 +61,7 @@ import {
   TERMINAL_STATES,
   toggleSpacingProblem,
   type LadderInput,
+  type ProbeEdgeHint,
   type Limits,
   type RunBody,
   type RunType,
@@ -88,6 +90,12 @@ const DEFAULT_LADDER: LadderInput = {
 };
 
 const AWAIT_PICKUP_MS = 10_000;
+
+const EDGE_HINT_CLASS: Record<ProbeEdgeHint["tone"], string> = {
+  ok: "text-xs text-muted-foreground",
+  caution: "rounded border border-amber-500/60 px-2 py-1 text-xs text-amber-300",
+  warning: "rounded border border-red-500/60 px-2 py-1 text-xs text-red-300",
+};
 
 /** State kept in the module-level workbench store, so it survives leaving the page. */
 function useStored<K extends keyof WorkbenchState>(
@@ -413,6 +421,17 @@ function Workbench({ printer }: { printer: PrinterView }) {
       : null;
   const spacingProblem = spacing === null ? null : toggleSpacingProblem(spacing);
   if (spacingProblem !== null) blocked.push(spacingProblem);
+  const edgeHint =
+    type === "probe" && pattern !== null && stepper !== undefined
+      ? probeEdgeHint({
+          pattern,
+          kinematics: stepper.kinematics,
+          speedMmS: params.probe.speed_mm_s,
+          segmentsBetweenToggles: params.probe.segments_between_toggles,
+          strokes: params.probe.strokes,
+          maxVelocity: printer.moonraker.max_velocity,
+        })
+      : null;
 
   const runBody = (): RunBody | null =>
     setup === null || gains === null || filters === null
@@ -545,6 +564,11 @@ function Workbench({ printer }: { printer: PrinterView }) {
               />
             )}
             {spacingProblem !== null && <p className="text-xs text-amber-400">{spacingProblem}</p>}
+            {edgeHint !== null && (
+              <p role="note" className={EDGE_HINT_CLASS[edgeHint.tone]}>
+                {edgeHint.text}
+              </p>
+            )}
             {stepper?.proposal.refusal != null && (
               <p className="text-xs text-amber-400">
                 No proposed pattern: {stepper.proposal.refusal}. The pattern is yours to choose.

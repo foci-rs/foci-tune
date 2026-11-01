@@ -12,6 +12,8 @@ import {
   ladderMedians,
   ladderPlotData,
   patternProblem,
+  expectedProbeEdges,
+  probeEdgeHint,
   probeToggleSpacing,
   segmentTravelMm,
   toggleSpacingProblem,
@@ -525,5 +527,126 @@ describe("probe toggle spacing", () => {
     expect(problem).toContain("100 ms");
     expect(problem).toContain("4 or more segments");
     expect(toggleSpacingProblem(at(195)!)).toBeNull();
+  });
+});
+
+describe("expected probe edges", () => {
+  const diag = (reach: number, from = 50): Pattern => ({ start: [from, from], end: [from + reach, from + reach] });
+  const recorded: Pattern = { start: [100.5, 104], end: [200.5, 204] };
+  const edges = (speed: number, segments: number, p: Pattern, strokes = 8, kinematics = "corexy") =>
+    expectedProbeEdges({
+      pattern: p,
+      kinematics,
+      speedMmS: speed,
+      segmentsBetweenToggles: segments,
+      strokes,
+      maxVelocity: 500,
+    });
+
+  test.each([
+    ["195 mm/s, 3 segments, 100 mm", 195, 3, recorded, [40, 41, 42, 41, 41]],
+    ["400 mm/s, 6 segments, 100 mm (operator report)", 400, 6, recorded, [19]],
+    ["400 mm/s, 5 segments, 100 mm", 400, 5, recorded, [8]],
+    ["400 mm/s, 5 segments, 200 mm", 400, 5, diag(200), [22]],
+    ["600 mm/s, 6 segments, 200 mm", 600, 6, diag(200), [6]],
+    ["600 mm/s, 10 segments, 200 mm", 600, 10, diag(200), [19]],
+    ["600 mm/s, 10 segments, 260 mm", 600, 10, diag(260, 20), [29]],
+    ["800 mm/s clamped, 10 segments, 260 mm", 800, 10, diag(260, 20), [23]],
+  ])("%s: never above the fewest recorded edges, at most 7 below", (_, speed, segments, p, seen) => {
+    const fewest = Math.min(...seen);
+    const estimate = edges(speed, segments, p)!;
+    expect(estimate).toBeLessThanOrEqual(fewest);
+    expect(estimate).toBeGreaterThanOrEqual(fewest - 7);
+  });
+
+  test("the 195 mm/s reference reproduces within 3 of every recorded run", () => {
+    expect(edges(195, 3, recorded)).toBeGreaterThanOrEqual(39);
+  });
+
+  test("more strokes or a longer pattern never lowers the estimate", () => {
+    const byStrokes = [1, 4, 8, 16, 32, 50].map((n) => edges(400, 6, diag(100), n)!);
+    const bySpan = [50, 100, 150, 200, 250].map((r) => edges(400, 6, diag(r))!);
+    for (const series of [byStrokes, bySpan]) {
+      series.slice(1).forEach((v, i) => expect(v).toBeGreaterThanOrEqual(series[i]));
+    }
+    expect(byStrokes[5]).toBeGreaterThan(byStrokes[0]);
+    expect(bySpan[4]).toBeGreaterThan(bySpan[0]);
+  });
+
+  test("toggles closer than the minimum spacing give no edges", () => {
+    expect(edges(400, 3, recorded)).toBe(0);
+  });
+
+  test("a pass shorter than the dead time gives no edges", () => {
+    expect(edges(600, 10, diag(40))).toBe(0);
+  });
+
+  test("600 mm/s on 260 mm reaches the pass threshold, 6 segments at 600 mm/s do not", () => {
+    expect(edges(600, 10, diag(260, 20))).toBeGreaterThanOrEqual(20);
+    expect(edges(600, 6, diag(200))).toBeLessThan(20);
+  });
+
+  test("cartesian needs twice the segments for the corexy diagonal's estimate", () => {
+    const alongX: Pattern = { start: [50, 150], end: [250, 150] };
+    expect(edges(195, 6, alongX, 8, "cartesian")).toBe(edges(195, 3, diag(100)));
+    expect(edges(195, 3, alongX, 8, "cartesian")).toBe(0);
+  });
+
+  test("unknown kinematics give no estimate", () => {
+    expect(edges(195, 3, recorded, 8, "delta")).toBeNull();
+  });
+});
+
+describe("probe edge hint", () => {
+  const diag = (reach: number): Pattern => ({ start: [50, 50], end: [50 + reach, 50 + reach] });
+  const hint = (speed: number, segments: number, reach: number, strokes = 8) =>
+    probeEdgeHint({
+      pattern: diag(reach),
+      kinematics: "corexy",
+      speedMmS: speed,
+      segmentsBetweenToggles: segments,
+      strokes,
+      maxVelocity: 500,
+    });
+
+  test("40 or more is a neutral note", () => {
+    const h = hint(195, 3, 100, 10)!;
+    expect(h.tone).toBe("ok");
+    expect(h.text).toContain("Expected about 49 edges");
+    expect(h.text).toContain("at least 20");
+  });
+
+  test("between 20 and 39 is a caution naming the strokes that reach 40", () => {
+    const h = hint(400, 6, 150)!;
+    expect(h.tone).toBe("caution");
+    expect(h.text).toContain("about 26 edges");
+    expect(h.text).toContain("enough to pass (20)");
+    expect(h.text).toContain("13 strokes");
+  });
+
+  test("below 20 is a warning with the strokes and the pattern length that reach 40", () => {
+    const h = hint(400, 6, 100)!;
+    expect(h.tone).toBe("warning");
+    expect(h.text).toContain("about 12 edges");
+    expect(h.text).toContain("not comparable (needs 20)");
+    expect(h.text).toContain("25 strokes");
+    expect(h.text).toContain("290 mm");
+  });
+
+  test("when 50 strokes cannot reach 40 only the pattern length is offered", () => {
+    const h = hint(600, 10, 60)!;
+    expect(h.tone).toBe("warning");
+    expect(h.text).not.toContain("strokes for");
+    expect(h.text).toContain("lengthen the pattern");
+  });
+
+  test("toggles in the low-yield spacing band ask for more segments", () => {
+    const h = hint(600, 6, 200)!;
+    expect(h.text).toContain("about 0 edges");
+    expect(h.text).toContain("9 or more segments");
+  });
+
+  test("no hint when the spacing rule already blocks the run", () => {
+    expect(hint(400, 3, 100)).toBeNull();
   });
 });
