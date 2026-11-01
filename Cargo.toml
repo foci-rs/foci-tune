@@ -13,3 +13,12 @@ repository = "https://github.com/foci-rs/foci-tune"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+[profile.dev.package.foci-tune-analysis]
+opt-level = 3
+
+[profile.dev.package.levenberg-marquardt]
+opt-level = 3
+
+[profile.dev.package.nalgebra]
+opt-level = 3
