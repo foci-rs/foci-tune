@@ -23,6 +23,7 @@ import { ParametersBlock } from "@/components/ParametersBlock";
 import { BedMap } from "@/components/BedMap";
 import { EnsemblePlot } from "@/components/EnsemblePlot";
 import { gainProblems, GainsBlock, ladderAxisLabel, LadderSetup, RunControls } from "@/components/GainsBlock";
+import { GuidedTune } from "@/components/GuidedTune";
 import { LadderPlot } from "@/components/LadderPlot";
 import { LivePanels } from "@/components/LivePanels";
 import { MAX_OVERLAY, PALETTE } from "@/components/PlotPanel";
@@ -89,6 +90,11 @@ const DEFAULT_LADDER: LadderInput = {
   floor: 0.05,
   marginal: 0.08,
 };
+
+const MODES: { mode: "manual" | "guided"; label: string }[] = [
+  { mode: "manual", label: "Manual" },
+  { mode: "guided", label: "Guided" },
+];
 
 const AWAIT_PICKUP_MS = 10_000;
 
@@ -165,6 +171,7 @@ function useSessionView(id: SessionId | null, onGone: () => void) {
 
 function TunePage() {
   const { printer, loadError } = useFeed();
+  const [mode, setMode] = useState<"manual" | "guided">("manual");
   if (printer === null) {
     return (
       <main className="mx-auto max-w-6xl px-4 py-6">
@@ -181,7 +188,29 @@ function TunePage() {
       </main>
     );
   }
-  return <Workbench printer={printer} />;
+  return (
+    <main className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+      <div role="radiogroup" aria-label="Tune mode" className="flex gap-1">
+        {MODES.map((m) => (
+          <button
+            key={m.mode}
+            type="button"
+            role="radio"
+            aria-checked={mode === m.mode}
+            onClick={() => setMode(m.mode)}
+            className={
+              mode === m.mode
+                ? "rounded-full border border-emerald-500 px-3 py-1 text-sm text-emerald-300"
+                : "rounded-full border px-3 py-1 text-sm text-muted-foreground"
+            }
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {mode === "guided" ? <GuidedTune printer={printer} /> : <Workbench printer={printer} />}
+    </main>
+  );
 }
 
 function Workbench({ printer }: { printer: PrinterView }) {
@@ -440,7 +469,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const changedSetup = link !== null && active === null;
 
   return (
-    <main className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+    <div className="space-y-4">
       <h1 className="sr-only">Tune</h1>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card label="Setup">
@@ -624,7 +653,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
       {view !== null && view.session !== null && (
         <SessionResults view={view} />
       )}
-    </main>
+    </div>
   );
 }
 
