@@ -7,6 +7,7 @@ import {
   postTuneAcknowledge,
   postTuneChoice,
   postTuneConfirm,
+  postTuneDecision,
   postTuneExtension,
   postTuneRestore,
   postTuneStep,
@@ -36,6 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
+import { PausePanel } from "./PausePanel";
 import { Button, Card, Field, NumberField } from "./ui";
 
 function errorText(e: unknown): string {
@@ -232,17 +234,21 @@ function TuneView({ id }: { id: TuneId }) {
       )}
 
       {detail.steps.map((_, i) => (
-        <StepCard
-          key={i}
-          tune={detail}
-          index={i}
-          active={i === last}
-          busy={busy}
-          canChoose={actions.choose && i === last}
-          canExtend={actions.extension && i === last}
-          onChoose={(choice) => run(() => postTuneChoice(id, choice))}
-          onExtend={(direction) => run(() => postTuneExtension(id, direction))}
-        />
+        <div key={i} className="space-y-4">
+          <StepCard
+            tune={detail}
+            index={i}
+            active={i === last}
+            busy={busy}
+            canChoose={actions.choose && i === last}
+            canExtend={actions.extension && i === last}
+            onChoose={(choice) => run(() => postTuneChoice(id, choice))}
+            onExtend={(direction) => run(() => postTuneExtension(id, direction))}
+          />
+          {actions.decide && i === last && (
+            <PausePanel tune={detail} step={i} busy={busy} onDecide={(d) => run(() => postTuneDecision(id, d))} />
+          )}
+        </div>
       ))}
 
       {announced && actions.start && (

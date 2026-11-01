@@ -144,3 +144,20 @@ test("the typed value follows the recommendation until the operator types", asyn
   const field = await screen.findByRole("spinbutton", { name: "Value" });
   await waitFor(() => expect(field).toHaveValue(1100));
 });
+
+test("a paused tune shows the pause panel and no choice controls", async () => {
+  current = detail("Paused");
+  current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Stop the ladder" });
+  expect(screen.queryByRole("button", { name: "Accept the recommendation" })).not.toBeInTheDocument();
+});
+
+test("a pause decision is posted through the tune's decision route", async () => {
+  current = detail("Paused");
+  current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Stop the ladder" }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
+  expect(bodies[0]).toEqual({ decision: "stop" });
+});
