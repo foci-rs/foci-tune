@@ -1,5 +1,7 @@
 //! Seed validation and geometric (third-octave) rung values.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ladder::{LadderAxis, LadderError, LadderValue, to_raw};
 use crate::signals::corner_hz;
 
@@ -25,7 +27,7 @@ pub enum SeedRefused {
 }
 
 /// Why a rung is absent from [`Rungs::values`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum RungNote {
     /// The shown value converts outside the writable range.
     OutOfRange(f64),
@@ -41,7 +43,7 @@ pub enum RungNote {
 }
 
 /// Ascending rung values and the reasons any rung was left out.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rungs {
     /// Writable rungs, ascending by raw value.
     pub values: Vec<LadderValue>,
