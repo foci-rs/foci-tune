@@ -143,7 +143,7 @@ fn a_spike_on_the_last_retained_sample_counts_once() {
 
 #[test]
 fn slow_creep_has_a_low_rate_and_no_large_steps() {
-    let torque: Vec<i32> = (0..1000).map(|k| -60 - (k / 500) as i32).collect();
+    let torque: Vec<i32> = (0..1000).map(|k| -60 - k / 500).collect();
     let m = standstill_metrics(&rest_of(torque), &regime(), 500, 200);
     assert!(m.rests[0].transitions_per_s <= 2.0, "{m:?}");
     assert_eq!(m.rests[0].large_transitions_per_s, 0.0);
