@@ -124,6 +124,33 @@ test("home posts once, disables while homing and shows a refusal", async () => {
   expect(screen.getByRole("button", { name: "Home" })).toBeEnabled();
 });
 
+test("home is offered only while klipper is ready", async () => {
+  respond(printerView({ klippy: "disconnected" }));
+  await mount();
+  expect(await screen.findByRole("button", { name: "Home" })).toBeDisabled();
+});
+
+test("a home refusal clears once klipper's state changes", async () => {
+  respond(printerView());
+  const base = fetchMock.getMockImplementation() as (p: string, i?: RequestInit) => Promise<Response>;
+  fetchMock.mockImplementation(async (path: string, init?: RequestInit) =>
+    path === "/api/home"
+      ? new Response(JSON.stringify({ error: "Klippy Host not connected" }), { status: 502 })
+      : base(path, init),
+  );
+  await mount();
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Home" }));
+  });
+  expect(await screen.findByText("Klippy Host not connected")).toBeInTheDocument();
+
+  await act(async () => {
+    StubSocket.last!.deliver({ type: "printer", ...printerView({ klippy: "disconnected" }) });
+  });
+
+  expect(screen.queryByText("Klippy Host not connected")).not.toBeInTheDocument();
+});
+
 test("firmware restart shows only when klipper is shut down", async () => {
   respond(printerView());
   await mount();

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiRequestError, postHome, type PrinterView } from "@/api";
 import { useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
@@ -28,6 +28,7 @@ export function Header() {
 
   const [homing, setHoming] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
+  useEffect(() => setHomeError(null), [klippy]);
   const home = () => {
     setHoming(true);
     setHomeError(null);
@@ -82,7 +83,7 @@ export function Header() {
             Homed {printer && printer.moonraker.homed_axes !== "" ? printer.moonraker.homed_axes : "none"}
           </li>
           <li className="flex items-center gap-2">
-            <Button disabled={homing} onClick={home}>
+            <Button disabled={homing || klippy !== "ready"} onClick={home}>
               {homing ? "Homing" : "Home"}
             </Button>
             {homeError !== null && <span className="text-amber-400">{homeError}</span>}
