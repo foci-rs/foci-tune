@@ -945,6 +945,7 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         .route("/api/sessions/{id}", get(session::<M>))
         .route("/api/sessions/{id}/revert", post(revert::<M>))
         .route("/api/firmware-restart", post(firmware_restart::<M>))
+        .route("/api/home", post(home::<M>))
         .route("/api/tunes", get(list_tunes::<M>).post(create_tune::<M>))
         .route("/api/tunes/{id}", get(read_tune::<M>))
         .route("/api/tunes/{id}/steps", post(prepare_tune_step::<M>))
@@ -1199,6 +1200,36 @@ async fn firmware_restart<M: MoonrakerApi + 'static>(
     }
     api.moonraker
         .firmware_restart()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn home<M: MoonrakerApi + 'static>(State(api): State<App<M>>) -> ApiResult<Json<Value>> {
+    let printer = api.moonraker.state().borrow().clone();
+    if printer.klippy != KlippyState::Ready {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!(
+                "klipper is {}; homing needs it ready",
+                klippy_name(printer.klippy)
+            ),
+        ));
+    }
+    if matches!(printer.print_state.as_str(), "printing" | "paused") {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "a print is in progress".to_owned(),
+        ));
+    }
+    if !api.engine.is_idle() {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "a run is in progress".to_owned(),
+        ));
+    }
+    api.moonraker
+        .script("G28")
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(Json(json!({"ok": true})))

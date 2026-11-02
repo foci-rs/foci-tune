@@ -1178,6 +1178,49 @@ async fn firmware_restart_is_offered_only_once_klipper_is_shut_down() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn home_runs_g28_when_klipper_is_ready_and_nothing_is_running() {
+    let rig = rig().await;
+    let app = app(&rig);
+
+    let reply = post(&app, "/api/home", json!({})).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text());
+    assert_eq!(rig.fake.scripts(), vec!["G28".to_owned()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn home_is_refused_while_klipper_is_shut_down() {
+    let rig = rig().await;
+    let app = app(&rig);
+    rig.fake.push("notify_klippy_shutdown", json!([]));
+    let mut state = rig.client.state();
+    tokio::time::timeout(WAIT, state.wait_for(|s| s.klippy == KlippyState::Shutdown))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let reply = post(&app, "/api/home", json!({})).await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(rig.fake.scripts().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn home_reports_klippers_refusal() {
+    let rig = rig().await;
+    let app = app(&rig);
+    rig.fake.on_script(|_| fake_moonraker::ScriptReply {
+        result: Err("Must home before probe".to_owned()),
+        gate: None,
+    });
+
+    let reply = post(&app, "/api/home", json!({})).await;
+
+    assert_eq!(reply.status, StatusCode::BAD_GATEWAY);
+    assert!(reply.error().contains("Must home"), "{}", reply.error());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_lagging_live_subscriber_gets_resync_and_stays_connected() {
     let rig = rig_with(Options {
         frames_capacity: 8,
