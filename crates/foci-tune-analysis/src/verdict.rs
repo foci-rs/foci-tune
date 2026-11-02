@@ -22,8 +22,10 @@ pub struct Gates {
     pub damping_floor: f64,
     /// Median zeta below this (and at or above the floor) makes a rung marginal.
     pub marginal: f64,
-    /// Standstill median above this multiple of the lowest rung's median is inadmissible.
-    pub standstill_factor: f64,
+    /// Standstill median above this multiple of the lowest rung's median is inadmissible; `None`
+    /// leaves the standstill gate off.
+    #[serde(default)]
+    pub standstill_factor: Option<f64>,
 }
 
 impl Default for Gates {
@@ -31,7 +33,7 @@ impl Default for Gates {
         Self {
             damping_floor: 0.05,
             marginal: 0.08,
-            standstill_factor: 2.0,
+            standstill_factor: None,
         }
     }
 }
@@ -194,7 +196,8 @@ pub fn assess_ladder(
 /// whose standstill baseline (rung 0) is unusable; later rungs keep default verdicts. A waived
 /// rung is unscored but still contributes its standstill result. A rung's score is the largest
 /// ratio, over speeds, of its median p99 to the lowest median p99 of that speed among
-/// score-eligible rungs.
+/// score-eligible rungs. The standstill baseline and gate apply only when the gates carry a
+/// `standstill_factor` and the waivers leave the gate on.
 pub fn assess_ladder_with(
     rungs: &[Vec<RepeatResult>],
     repeats: usize,
@@ -212,6 +215,9 @@ pub fn assess_ladder_with(
     let mut halt = None;
     let mut pause = None;
     let mut baseline: Option<f64> = None;
+    let standstill_gate = gates
+        .standstill_factor
+        .filter(|_| !waivers.standstill_gate_off);
 
     for (i, results) in rungs.iter().enumerate() {
         if repeats == 0 || results.len() < repeats {
@@ -239,7 +245,7 @@ pub fn assess_ladder_with(
             }
         };
 
-        if i == 0 && !waivers.standstill_gate_off {
+        if i == 0 && standstill_gate.is_some() {
             match m.worst_torque_sd {
                 Some(sd) => baseline = Some(sd),
                 None => {
@@ -256,13 +262,12 @@ pub fn assess_ladder_with(
             let tracking_complete = n_speeds > 0 && m.p99_by_speed.iter().all(Option::is_some);
             if !tracking_complete {
                 verdicts[i].unscored = Some(UnscoredReason::TrackingMissing);
-            } else if m.worst_torque_sd.is_none() && !waivers.standstill_gate_off {
+            } else if m.worst_torque_sd.is_none() && standstill_gate.is_some() {
                 verdicts[i].unscored = Some(UnscoredReason::StandstillMissing);
             }
         }
-        if let (Some(sd), Some(base)) = (m.worst_torque_sd, baseline)
-            && !waivers.standstill_gate_off
-            && sd > gates.standstill_factor * base
+        if let (Some(sd), Some(base), Some(factor)) = (m.worst_torque_sd, baseline, standstill_gate)
+            && sd > factor * base
         {
             verdicts[i].inadmissible = Some(InadmissibleReason::StandstillHigh);
         }

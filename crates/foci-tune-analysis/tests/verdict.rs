@@ -4,6 +4,13 @@ use foci_tune_analysis::verdict::{
     UnscoredReason, Waivers, assess_ladder, assess_ladder_with,
 };
 
+fn gated() -> Gates {
+    Gates {
+        standstill_factor: Some(2.0),
+        ..Gates::default()
+    }
+}
+
 fn rep(zeta: f64, p99: &[Option<f64>], sd: Option<f64>) -> RepeatResult {
     RepeatResult {
         zeta: RungOutcome::Assessed(zeta),
@@ -120,7 +127,7 @@ fn standstill_gate_marks_inadmissible_without_halting() {
         rung(0.2, [75.0, 75.0], 1.5, 3),
     ];
 
-    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    let a = assess_ladder(&rungs, 3, &gated(), false);
 
     assert_eq!(
         a.verdicts[1].inadmissible,
@@ -159,7 +166,7 @@ fn missing_standstill_on_later_rung_is_unscored() {
     r1[0].worst_torque_sd = None;
     let rungs = vec![rung(0.2, [80.0, 80.0], 1.0, 3), r1];
 
-    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    let a = assess_ladder(&rungs, 3, &gated(), false);
 
     assert_eq!(
         a.verdicts[1].unscored,
@@ -175,7 +182,7 @@ fn unusable_standstill_baseline_halts() {
     r0[1].worst_torque_sd = None;
     let rungs = vec![r0, rung(0.2, [70.0, 70.0], 1.0, 3)];
 
-    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    let a = assess_ladder(&rungs, 3, &gated(), false);
 
     assert_eq!(a.halt, Some((0, Halt::StandstillBaselineUnassessable)));
     assert_eq!(a.verdicts[0].score, None);
@@ -187,13 +194,13 @@ fn non_finite_standstill_is_unusable_not_a_passed_gate() {
     let mut bad_base = rung(0.2, [80.0, 80.0], 1.0, 3);
     bad_base[0].worst_torque_sd = Some(f64::NAN);
     let rungs = vec![bad_base, rung(0.2, [70.0, 70.0], 1.0, 3)];
-    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    let a = assess_ladder(&rungs, 3, &gated(), false);
     assert_eq!(a.halt, Some((0, Halt::StandstillBaselineUnassessable)));
 
     let mut bad_later = rung(0.2, [70.0, 70.0], 50.0, 3);
     bad_later[2].worst_torque_sd = Some(f64::INFINITY);
     let rungs = vec![rung(0.2, [80.0, 80.0], 1.0, 3), bad_later];
-    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    let a = assess_ladder(&rungs, 3, &gated(), false);
     assert_eq!(
         a.verdicts[1].unscored,
         Some(UnscoredReason::StandstillMissing)
@@ -291,7 +298,7 @@ fn a_waived_rung_zero_still_provides_the_standstill_baseline() {
         standstill_gate_off: false,
     };
 
-    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &waivers);
+    let a = assess_ladder_with(&rungs, 3, &gated(), false, &waivers);
 
     assert_eq!(a.pause, None);
     assert_eq!(a.verdicts[0].unscored, Some(UnscoredReason::DampingWaived));
@@ -312,7 +319,7 @@ fn a_waived_rung_zero_without_a_usable_standstill_still_pauses_for_the_baseline(
         standstill_gate_off: false,
     };
 
-    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &waivers);
+    let a = assess_ladder_with(&rungs, 3, &gated(), false, &waivers);
 
     assert_eq!(a.pause, Some((0, Pause::StandstillBaselineUnassessable)));
 }
@@ -335,7 +342,7 @@ fn an_unusable_standstill_baseline_pauses_and_the_disabled_gate_scores_without_o
         rung(0.2, [70.0, 70.0], 5.0, 3),
     ];
 
-    let paused = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    let paused = assess_ladder_with(&rungs, 3, &gated(), false, &Waivers::default());
     assert_eq!(
         paused.pause,
         Some((0, Pause::StandstillBaselineUnassessable))
@@ -345,7 +352,7 @@ fn an_unusable_standstill_baseline_pauses_and_the_disabled_gate_scores_without_o
         continued: vec![],
         standstill_gate_off: true,
     };
-    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &off);
+    let a = assess_ladder_with(&rungs, 3, &gated(), false, &off);
     assert_eq!(a.pause, None);
     assert_eq!(a.verdicts[0].unscored, None);
     assert!(
@@ -388,8 +395,83 @@ fn a_later_rung_without_a_standstill_metric_is_scored_when_the_gate_is_off() {
         standstill_gate_off: true,
     };
 
-    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &off);
+    let a = assess_ladder_with(&rungs, 3, &gated(), false, &off);
 
     assert_eq!(a.verdicts[1].unscored, None);
     assert!(a.verdicts[1].score.is_some());
+}
+
+#[test]
+fn the_default_gates_leave_the_standstill_gate_off() {
+    assert_eq!(Gates::default().standstill_factor, None);
+}
+
+#[test]
+fn an_absent_factor_scores_a_ladder_whose_baseline_is_missing() {
+    let rungs = vec![
+        vec![rep(0.2, &[Some(80.0), Some(80.0)], None); 3],
+        rung(0.2, [70.0, 70.0], 50.0, 3),
+    ];
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    assert_eq!(a.pause, None);
+    assert_eq!(a.verdicts[0].unscored, None);
+    assert!(a.verdicts[0].score.is_some());
+    assert_eq!(a.verdicts[1].inadmissible, None);
+    assert!(a.verdicts[1].score.is_some());
+}
+
+#[test]
+fn an_absent_factor_admits_a_rung_ten_times_the_baseline() {
+    let rungs = vec![
+        rung(0.2, [80.0, 80.0], 1.0, 3),
+        rung(0.2, [70.0, 70.0], 10.0, 3),
+    ];
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    assert_eq!(a.verdicts[1].inadmissible, None);
+    let g = assess_ladder_with(&rungs, 3, &gated(), false, &Waivers::default());
+    assert_eq!(
+        g.verdicts[1].inadmissible,
+        Some(InadmissibleReason::StandstillHigh)
+    );
+}
+
+#[test]
+fn an_absent_factor_scores_a_rung_with_one_repeat_lacking_a_standstill() {
+    let mut r1 = rung(0.2, [70.0, 70.0], 1.0, 3);
+    r1[2].worst_torque_sd = None;
+    let rungs = vec![rung(0.2, [80.0, 80.0], 1.0, 3), r1];
+    let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    assert_eq!(a.verdicts[1].unscored, None);
+    assert!(a.verdicts[1].score.is_some());
+}
+
+#[test]
+fn an_absent_factor_and_the_step_waiver_give_the_same_verdicts() {
+    let rungs = vec![
+        vec![rep(0.2, &[Some(80.0), Some(80.0)], None); 3],
+        rung(0.2, [70.0, 70.0], 50.0, 3),
+        rung(0.2, [75.0, 75.0], 0.5, 3),
+    ];
+    let off = Waivers {
+        continued: vec![],
+        standstill_gate_off: true,
+    };
+    let by_setup = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
+    let by_waiver = assess_ladder_with(&rungs, 3, &gated(), false, &off);
+    assert_eq!(by_setup, by_waiver);
+}
+
+#[test]
+fn gates_without_a_standstill_factor_deserialise_as_off() {
+    let base = serde_json::json!({"damping_floor": 0.05, "marginal": 0.08});
+    let g: Gates = serde_json::from_value(base.clone()).unwrap();
+    assert_eq!(g.standstill_factor, None);
+    let mut with_null = base.clone();
+    with_null["standstill_factor"] = serde_json::Value::Null;
+    let g: Gates = serde_json::from_value(with_null).unwrap();
+    assert_eq!(g.standstill_factor, None);
+    let mut with_value = base;
+    with_value["standstill_factor"] = serde_json::json!(2.0);
+    let g: Gates = serde_json::from_value(with_value).unwrap();
+    assert_eq!(g.standstill_factor, Some(2.0));
 }
