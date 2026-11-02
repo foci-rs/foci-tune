@@ -1110,6 +1110,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 )));
                 let setup = record.setup.clone();
                 let assessment = assess(&record.steps[index], &setup);
+                step_mut(&mut record, index)?.assessment = Some(assessment.clone());
                 if pause_if_unassessable(&mut record, index, assessment) {
                     s.save(&record)?;
                     return Ok(());

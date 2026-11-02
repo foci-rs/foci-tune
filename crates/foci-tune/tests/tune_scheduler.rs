@@ -1372,6 +1372,27 @@ async fn continue_waives_the_rung_and_runs_the_rest() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continuing_keeps_the_results_visible_while_the_rung_above_runs() {
+    let rig = rig().await;
+    tracking_lag(&rig);
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+    let stimuli = rig.stimuli();
+    let gate = rig.hold_stimulus();
+
+    sched.decide(&id, PauseDecision::Continue).await.unwrap();
+    wait_stimuli(&rig, stimuli + 1).await;
+
+    let running = rig.store.read_tune(&id).unwrap();
+    let a = running.steps[0].assessment.as_ref().unwrap();
+    assert_eq!(a.verdicts[1].unscored, Some(UnscoredReason::DampingWaived));
+    assert!(a.medians[0].zeta.is_some());
+
+    release(&rig, &gate);
+    wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn continue_on_the_last_rung_completes_the_step() {
     let rig = rig().await;
     no_edges_at(&rig, 1060);
