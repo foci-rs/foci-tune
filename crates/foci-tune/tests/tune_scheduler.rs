@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use foci_tune::engine::{EngineEvent, LadderRejected, Precondition};
-use foci_tune::model::{Filters, Gains, Run, RunId, RunState};
+use foci_tune::model::{DampingOutcome, Filters, FitOutcome, Gains, Run, RunId, RunState};
 use foci_tune::moonraker::MoonrakerClient;
 use foci_tune::stimulus::RunKind;
 use foci_tune::tune::{
@@ -646,6 +646,37 @@ async fn repeat_result_drops_not_comparable_and_missing_runs() {
     let result = repeat_result(Some(&unassessable), &[Some(&slow)], None);
     assert_eq!(result.zeta, RungOutcome::Unassessable);
     assert_eq!(result.worst_torque_sd, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeat_result_reads_per_edge_damping_not_the_ensemble_fit() {
+    let rig = rig().await;
+    let probe_run = rig.run_once(probe()).await;
+    let recorded = probe_run.metrics.as_ref().unwrap().channels[0]
+        .probe
+        .as_ref()
+        .unwrap();
+    assert!(
+        matches!(
+            recorded.damping,
+            Some(DampingOutcome::Assessed { fitted: 25, .. })
+        ),
+        "{recorded:?}"
+    );
+
+    let mut incoherent = probe_run.clone();
+    let p = incoherent.metrics.as_mut().unwrap().channels[0]
+        .probe
+        .as_mut()
+        .unwrap();
+    assert!(matches!(p.velocity, FitOutcome::Fit { .. }));
+    p.damping = Some(DampingOutcome::Unassessable {
+        reason: "ring frequency spread 7.1 Hz exceeds 3 Hz".into(),
+    });
+
+    let result = repeat_result(Some(&incoherent), &[], None);
+
+    assert_eq!(result.zeta, RungOutcome::Unassessable);
 }
 
 fn board(rig: &Rig) -> ([i32; 4], [u16; 4]) {

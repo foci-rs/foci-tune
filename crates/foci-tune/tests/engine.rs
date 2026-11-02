@@ -8,7 +8,7 @@ use foci_tune::engine::{
     Engine, EngineConfig, LadderRejected, MAX_LADDER_REPEATS, MAX_LADDER_RUNS, MAX_LADDER_VALUES,
     Precondition,
 };
-use foci_tune::model::{RunId, RunState};
+use foci_tune::model::{DampingOutcome, ProbeRecord, RunId, RunState};
 use foci_tune::moonraker::{KlippyState, MoonrakerApi};
 use foci_tune::stimulus::RunKind;
 use foci_tune_analysis::ladder::LadderError;
@@ -1303,4 +1303,39 @@ async fn preconditions_list_every_failing_item_and_check_reports_the_first() {
     );
     assert!(y.is_empty(), "{y:?}");
     assert_eq!(first, Err(Precondition::NotHomed('x')));
+}
+
+fn ensemble_only_record() -> ProbeRecord {
+    let json = r#"{"velocity":{"status":"fit","damped_hz":150.0,"zeta":0.07,"amplitude":0.5,
+                   "phase":0.0,"offset":0.2,"tau_s":0.005,"residual_rms":0.03},
+        "torque":{"status":"failed","reason":"x"},
+        "position_error":{"status":"failed","reason":"x"},
+        "edges":33,"stderr_at_peak":null,"torque_psd_peak_hz":null}"#;
+    serde_json::from_str(json).unwrap()
+}
+
+#[test]
+fn old_record_without_damping_gates_on_the_ensemble_fit() {
+    let p = ensemble_only_record();
+
+    assert_eq!(p.damping, None);
+    assert_eq!(p.headline_zeta(), Some(0.07));
+}
+
+#[test]
+fn headline_zeta_prefers_per_edge_damping() {
+    let mut p = ensemble_only_record();
+    p.damping = Some(DampingOutcome::Assessed {
+        zeta: 0.034,
+        damped_hz: 152.0,
+        hz_spread: 0.8,
+        fitted: 33,
+        edges: 33,
+    });
+    assert_eq!(p.headline_zeta(), Some(0.034));
+
+    p.damping = Some(DampingOutcome::Unassessable {
+        reason: "ring frequency spread 7.1 Hz exceeds 3 Hz".into(),
+    });
+    assert_eq!(p.headline_zeta(), None);
 }

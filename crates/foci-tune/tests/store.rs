@@ -11,7 +11,7 @@ use foci_tune::pattern::Pattern;
 use foci_tune::stimulus::RunKind;
 use foci_tune::store::{Store, StoreError, new_id, write_json_atomic};
 use foci_tune_analysis::fit::{DampedFit, FitError};
-use foci_tune_analysis::probe::ProbeMetrics;
+use foci_tune_analysis::probe::{EdgeDampingError, ProbeMetrics};
 use foci_tune_analysis::tracking::TrackingMetrics;
 use serde::ser::{Error as _, Serialize, Serializer};
 
@@ -235,6 +235,10 @@ fn non_finite_metrics_round_trip_as_null() {
         edges: 0,
         stderr_at_peak: f64::NAN,
         torque_psd_peak_hz: f64::INFINITY,
+        damping: Err(EdgeDampingError::TooFewFits {
+            fitted: 0,
+            edges: 0,
+        }),
     };
     let metrics = Metrics::for_tracking_and_probe(
         0,

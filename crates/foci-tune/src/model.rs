@@ -7,7 +7,7 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use foci_tune_analysis::fit::{DampedFit, FitError};
-use foci_tune_analysis::probe::ProbeMetrics;
+use foci_tune_analysis::probe::{EdgeDamping, EdgeDampingError, ProbeMetrics};
 use foci_tune_analysis::protocol::{ControlState, Metadata};
 use foci_tune_analysis::standstill::StandstillMetrics;
 use foci_tune_analysis::tracking::TrackingMetrics;
@@ -561,6 +561,56 @@ impl TrackingRecord {
     }
 }
 
+/// A per-edge damping assessment or the reason there is none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DampingOutcome {
+    /// The edges share one ring frequency and give a median damping ratio.
+    Assessed {
+        /// Median damping ratio over the fitted edges.
+        zeta: f64,
+        /// Median damped frequency in Hz.
+        damped_hz: f64,
+        /// Scaled MAD of the per-edge damped frequency in Hz.
+        hz_spread: f64,
+        /// Edges whose fit was admissible.
+        fitted: usize,
+        /// Edge responses offered to the fit.
+        edges: usize,
+    },
+    /// No single damping ratio applies.
+    Unassessable {
+        /// Why.
+        reason: String,
+    },
+}
+
+impl From<&Result<EdgeDamping, EdgeDampingError>> for DampingOutcome {
+    fn from(r: &Result<EdgeDamping, EdgeDampingError>) -> Self {
+        match r {
+            Ok(d)
+                if [d.zeta, d.damped_hz, d.hz_spread]
+                    .iter()
+                    .all(|v| v.is_finite()) =>
+            {
+                Self::Assessed {
+                    zeta: d.zeta,
+                    damped_hz: d.damped_hz,
+                    hz_spread: d.hz_spread,
+                    fitted: d.fitted,
+                    edges: d.edges,
+                }
+            }
+            Ok(_) => Self::Unassessable {
+                reason: "damping values are not finite".to_owned(),
+            },
+            Err(e) => Self::Unassessable {
+                reason: e.to_string(),
+            },
+        }
+    }
+}
+
 /// Probe metrics for one channel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProbeRecord {
@@ -576,6 +626,25 @@ pub struct ProbeRecord {
     pub stderr_at_peak: Option<f64>,
     /// Welch PSD peak of torque in Hz.
     pub torque_psd_peak_hz: Option<f64>,
+    /// Per-edge damping; absent in records written before it was tracked.
+    #[serde(default)]
+    pub damping: Option<DampingOutcome>,
+}
+
+impl ProbeRecord {
+    /// The damping ratio rungs are gated on.
+    ///
+    /// The per-edge assessment when the record has one; otherwise the ensemble velocity fit.
+    pub fn headline_zeta(&self) -> Option<f64> {
+        match &self.damping {
+            Some(DampingOutcome::Assessed { zeta, .. }) => Some(*zeta),
+            Some(DampingOutcome::Unassessable { .. }) => None,
+            None => match self.velocity {
+                FitOutcome::Fit { zeta, .. } => Some(zeta),
+                FitOutcome::Failed { .. } => None,
+            },
+        }
+    }
 }
 
 impl From<&ProbeMetrics> for ProbeRecord {
@@ -587,6 +656,7 @@ impl From<&ProbeMetrics> for ProbeRecord {
             edges: m.edges,
             stderr_at_peak: finite(m.stderr_at_peak),
             torque_psd_peak_hz: finite(m.torque_psd_peak_hz),
+            damping: Some((&m.damping).into()),
         }
     }
 }

@@ -23,7 +23,7 @@ use crate::config_block;
 use crate::engine::{CommandError, Engine, EngineEvent, Precondition};
 pub use crate::model::TuneId;
 use crate::model::{
-    ChannelMetrics, ControlSnapshot, FORMAT_VERSION, Filters, FitOutcome, Gains, Run, RunId,
+    ChannelMetrics, ControlSnapshot, FORMAT_VERSION, Filters, Gains, ProbeRecord, Run, RunId,
     RunRequest, RunState, Session, SessionId,
 };
 use crate::moonraker::MoonrakerApi;
@@ -431,13 +431,10 @@ pub fn repeat_result(
     tracking: &[Option<&Run>],
     standstill: Option<&Run>,
 ) -> RepeatResult {
-    let zeta = match done_channel(probe).and_then(|c| c.probe.as_ref()) {
-        Some(p) => match p.velocity {
-            FitOutcome::Fit { zeta, .. } => RungOutcome::Assessed(zeta),
-            FitOutcome::Failed { .. } => RungOutcome::Unassessable,
-        },
-        None => RungOutcome::Unassessable,
-    };
+    let zeta = done_channel(probe)
+        .and_then(|c| c.probe.as_ref())
+        .and_then(ProbeRecord::headline_zeta)
+        .map_or(RungOutcome::Unassessable, RungOutcome::Assessed);
     let p99_by_speed = tracking
         .iter()
         .map(|run| {

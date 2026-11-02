@@ -32,8 +32,8 @@ use crate::capture::{Capture, CaptureSummary};
 use crate::live::{LiveState, TraceMode};
 pub use crate::model::Lock;
 use crate::model::{
-    CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, FitOutcome, Gains,
-    LadderDef, Run, RunId, RunRegime, RunRequest, RunState, Session, SessionId, StepTime,
+    CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, Gains, LadderDef,
+    ProbeRecord, Run, RunId, RunRegime, RunRequest, RunState, Session, SessionId, StepTime,
 };
 use crate::moonraker::{KlippyState, MoonrakerApi, PrinterState};
 use crate::run_analysis::{AnalysisInput, analyze, decode_capture, stimulus_window};
@@ -566,10 +566,7 @@ fn rung_outcome(run: &Run) -> RungOutcome {
         .as_ref()
         .and_then(|m| m.channels.iter().find(|c| c.declared))
         .and_then(|c| c.probe.as_ref())
-        .and_then(|p| match p.velocity {
-            FitOutcome::Fit { zeta, .. } => Some(zeta),
-            FitOutcome::Failed { .. } => None,
-        });
+        .and_then(ProbeRecord::headline_zeta);
     match (&run.state, zeta) {
         (RunState::Done, Some(z)) => RungOutcome::Assessed(z),
         _ => RungOutcome::Unassessable,
