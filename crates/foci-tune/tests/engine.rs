@@ -12,6 +12,7 @@ use foci_tune::model::{DampingOutcome, ProbeRecord, RunId, RunState};
 use foci_tune::moonraker::{KlippyState, MoonrakerApi};
 use foci_tune::stimulus::RunKind;
 use foci_tune_analysis::ladder::LadderError;
+use foci_tune_analysis::probe::{EdgeDamping, EdgeDampingError};
 use rig::*;
 use serde_json::json;
 
@@ -1338,4 +1339,69 @@ fn headline_zeta_prefers_per_edge_damping() {
         reason: "ring frequency spread 7.1 Hz exceeds 3 Hz".into(),
     });
     assert_eq!(p.headline_zeta(), None);
+}
+
+fn edge_damping_with(zeta: f64, damped_hz: f64) -> EdgeDamping {
+    EdgeDamping {
+        zeta,
+        damped_hz,
+        hz_spread: 0.8,
+        fitted: 30,
+        edges: 33,
+    }
+}
+
+#[test]
+fn damping_outcome_maps_ok_err_and_non_finite() {
+    let ok = Ok(edge_damping_with(0.034, 152.0));
+    assert_eq!(
+        DampingOutcome::from(&ok),
+        DampingOutcome::Assessed {
+            zeta: 0.034,
+            damped_hz: 152.0,
+            hz_spread: 0.8,
+            fitted: 30,
+            edges: 33,
+        }
+    );
+
+    for bad in [
+        edge_damping_with(f64::NAN, 152.0),
+        edge_damping_with(0.034, f64::INFINITY),
+    ] {
+        assert_eq!(
+            DampingOutcome::from(&Ok(bad)),
+            DampingOutcome::Unassessable {
+                reason: "damping values are not finite".into()
+            }
+        );
+    }
+
+    let err = Err(EdgeDampingError::Incoherent { hz_spread: 7.1 });
+    let expected = EdgeDampingError::Incoherent { hz_spread: 7.1 }.to_string();
+    assert_eq!(
+        DampingOutcome::from(&err),
+        DampingOutcome::Unassessable { reason: expected }
+    );
+}
+
+#[test]
+fn damping_outcome_serialises_with_a_status_tag() {
+    let assessed = DampingOutcome::Assessed {
+        zeta: 0.034,
+        damped_hz: 152.0,
+        hz_spread: 0.8,
+        fitted: 30,
+        edges: 33,
+    };
+    let unassessable = DampingOutcome::Unassessable {
+        reason: "spread".into(),
+    };
+
+    for (outcome, tag) in [(assessed, "assessed"), (unassessable, "unassessable")] {
+        let value = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(value["status"], tag);
+        let back: DampingOutcome = serde_json::from_value(value).unwrap();
+        assert_eq!(back, outcome);
+    }
 }
