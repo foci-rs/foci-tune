@@ -26,7 +26,7 @@ const HINT_CLASS = {
   warning: "rounded border border-red-500/60 px-2 py-1 text-xs text-red-300",
 } as const;
 
-const DEFAULT_GATES = { damping_floor: 0.05, marginal: 0.08, standstill_factor: 2 };
+const DEFAULT_GATES = { damping_floor: 0.02, marginal: 0.025, standstill_factor: 2 };
 const DEFAULT_SPEEDS = [50, 195, 400];
 
 function errorText(e: unknown): string {
