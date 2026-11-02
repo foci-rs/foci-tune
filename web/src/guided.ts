@@ -181,7 +181,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (verdict?.unscored != null) text = `Unscored: ${UNSCORED_TEXT[verdict.unscored]}`;
     else if (verdict?.marginal) text = "Marginal damping";
     else if (verdict?.score != null) text = "Admissible";
-    else if (assessment !== null && !flagged) {
+    else if (assessment !== null && !flagged && (repeatsDone >= s.repeats || pause !== null || halt !== null)) {
       text = notAssessedText(index, pause, halt);
     } else if (repeatsDone >= s.repeats) text = "Measured, awaiting verdict";
     else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;

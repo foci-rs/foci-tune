@@ -116,6 +116,28 @@ describe("rungView", () => {
     expect(rows[1].verdict).toMatch(/damping below (the )?floor/i);
   });
 
+  test("a running step shows finished rungs assessed and the others as still to run", () => {
+    const s = step({
+      repeats: 2,
+      rungs: [
+        rung(0, { repeat_values: [{} as never, {} as never] }),
+        rung(1, { repeat_values: [{} as never] }),
+        rung(2),
+        rung(3),
+      ],
+      assessment: {
+        verdicts: [{ ...none, score: 1 }, { ...none }, { ...none }, { ...none }],
+        medians: [medians([3, 6]), medians([null, null]), medians([null, null]), medians([null, null])],
+        halt: null,
+      },
+    });
+    const rows = rungView(tune("Running", [s]), 0);
+    expect(rows[0].verdict).toBe("Admissible");
+    expect(rows[0].score).toBe(1);
+    expect(rows[1].verdict).toBe("1 of 2 repeats");
+    expect(rows[2].verdict).toBe("Pending");
+  });
+
   test("names the standstill reasons", () => {
     const s = assessed();
     s.assessment!.verdicts[0] = { ...none, unscored: "StandstillMissing" };

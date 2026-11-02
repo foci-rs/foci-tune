@@ -521,6 +521,11 @@ function StepCard({
       {summary.failed !== null && <p className="mb-2 text-sm text-amber-400">Stopped: {summary.failed}</p>}
       {summary.halt !== null && <p className="mb-2 text-sm text-amber-400">{summary.halt}</p>}
       <RungTable rows={rows} speeds={tune.setup.speeds_mm_s} axis={label} />
+      {tune.state === "Running" && rows.some((r) => r.score !== null) && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Scores compare each rung with the best rung so far and can change as later rungs finish.
+        </p>
+      )}
       {summary.notes.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
           {summary.notes.map((n) => (

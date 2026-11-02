@@ -156,6 +156,17 @@ test("the typed value follows the recommendation until the operator types", asyn
   await waitFor(() => expect(field).toHaveValue(1100));
 });
 
+test("a running step warns that scores can still change", async () => {
+  current = detail("Running");
+  const scored = { inadmissible: null, marginal: false, unscored: null, score: 1 };
+  const open = { inadmissible: null, marginal: false, unscored: null, score: null };
+  const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
+  current.steps[0].rungs[0].repeat_values = [{} as never, {} as never];
+  current.steps[0].assessment = { verdicts: [scored, open, open], medians: [medians, medians, medians], halt: null };
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByText(/can change as later rungs finish/i)).toBeInTheDocument();
+});
+
 test("a paused tune shows the pause panel and no choice controls", async () => {
   current = detail("Paused");
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
