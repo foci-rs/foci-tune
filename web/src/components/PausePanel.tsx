@@ -35,6 +35,11 @@ interface Loaded {
   series: Record<string, Series>;
 }
 
+function runProblem(run: Run | undefined): string | null {
+  if (run === undefined || !("reason" in run)) return null;
+  return `${run.state.replace("_", " ")}: ${run.reason}`;
+}
+
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : "request failed";
 }
@@ -111,7 +116,7 @@ export function PausePanel({
   const rows = refs.map((r) => {
     const run = loaded.runs[r.probeId];
     const probe = run === undefined ? null : (declaredMetrics(run)?.probe ?? null);
-    return { r, probe, loading: run === undefined };
+    return { r, probe, loading: run === undefined, probeProblem: runProblem(run) };
   });
 
   const overlays: OverlayRun<ProbePlot>[] = refs.flatMap((r) => {
@@ -132,7 +137,7 @@ export function PausePanel({
   const restsByRepeat = pausedRefs.map((r) => {
     const run = r.standstillId === null ? undefined : loaded.runs[r.standstillId];
     const rests: RestRecord[] | null = run === undefined ? null : (declaredMetrics(run)?.standstill?.rests ?? []);
-    return { r, rests };
+    return { r, rests, problem: runProblem(run) };
   });
 
   return (
@@ -169,11 +174,13 @@ export function PausePanel({
             </tr>
           </thead>
           <tbody className="font-mono">
-            {rows.map(({ r, probe, loading }) => (
+            {rows.map(({ r, probe, loading, probeProblem }) => (
               <tr key={r.probeId} className={r.rung === pausedRung ? "" : "text-muted-foreground"}>
                 <td className="pr-3">{r.repeat + 1}</td>
                 <td className="pr-3">{r.rung + 1}</td>
-                <td className="pr-3 font-sans">{probe === null ? (loading ? "loading" : "no probe record") : fitText(probe.velocity)}</td>
+                <td className="pr-3 font-sans">
+                  {probe === null ? (loading ? "loading" : (probeProblem ?? "no probe record")) : fitText(probe.velocity)}
+                </td>
                 <td className="pr-3">
                   {probe?.velocity.status === "fit" ? (probe.velocity.admissible_starts ?? "-") : "-"}
                 </td>
@@ -219,12 +226,13 @@ export function PausePanel({
 
       {standstillPause && (
         <div className="mt-4 space-y-2 text-sm">
-          {restsByRepeat.map(({ r, rests }) => (
+          {restsByRepeat.map(({ r, rests, problem }) => (
             <div key={r.probeId}>
               <p>
                 Repeat {r.repeat + 1}: worst torque sd {fixed(s.rungs[pausedRung].repeat_values[r.repeat]?.worst_torque_sd)}
                 {rests !== null && `, ${rests.length} of ${required} rests qualified`}
               </p>
+              {problem !== null && <p className="text-xs text-amber-400">Standstill run {problem}</p>}
               {rests !== null && rests.length > 0 && (
                 <ul className="font-mono text-xs text-muted-foreground">
                   {rests.map((x) => (

@@ -157,6 +157,17 @@ test("a standstill pause counts every emitted rest and shows a placeholder for a
   expect(within(nullRest).getByText("-")).toBeInTheDocument();
 });
 
+test("a run that did not finish well gives its reason beside the repeat", async () => {
+  const base = getRun.getMockImplementation()!;
+  getRun.mockImplementation(async (id: string) =>
+    id === "s1"
+      ? ({ ...(await base(id)), state: "not_comparable", reason: "channel 0 did not move" } as Run)
+      : base(id),
+  );
+  render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />);
+  expect(await screen.findByText(/channel 0 did not move/)).toBeInTheDocument();
+});
+
 test("shows this and the previous rung's median p99 per speed and worst torque sd", async () => {
   const tune = pausedTune();
   tune.steps[0].assessment = {
