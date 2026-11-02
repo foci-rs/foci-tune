@@ -15,6 +15,7 @@ import {
   patternProblem,
   expectedProbeEdges,
   probeEdgeHint,
+  suggestedProbeStrokes,
   probeToggleSpacing,
   segmentTravelMm,
   toggleSpacingProblem,
@@ -627,6 +628,21 @@ describe("probe edge hint", () => {
       maxVelocity: 500,
     })!;
     expect(h.tone).toBe("ok");
+  });
+
+  test("the suggested strokes are the fewest that clear the steady-estimate bar", () => {
+    for (const [speed, segments, reach] of [[195, 3, 100], [195, 3, 150], [400, 6, 150], [195, 3, 70]]) {
+      const input = { pattern: diag(reach), kinematics: "corexy", speedMmS: speed, segmentsBetweenToggles: segments, maxVelocity: 500 };
+      const strokes = suggestedProbeStrokes(input)!;
+      expect(probeEdgeHint({ ...input, strokes })!.tone).toBe("ok");
+      expect(probeEdgeHint({ ...input, strokes: strokes - 1 })?.tone).not.toBe("ok");
+    }
+  });
+
+  test("no strokes are suggested when the toggles are too close or the pattern is too short", () => {
+    const input = { pattern: diag(100), kinematics: "corexy", speedMmS: 195, segmentsBetweenToggles: 1, maxVelocity: 500 };
+    expect(suggestedProbeStrokes(input)).toBeNull();
+    expect(suggestedProbeStrokes({ ...input, segmentsBetweenToggles: 3, pattern: diag(5) })).toBeNull();
   });
 
   test("between 20 and 39 is a caution naming the strokes that reach 40", () => {

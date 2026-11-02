@@ -664,6 +664,14 @@ function edgeSuggestion(m: EdgeModel, input: ProbeEdgeInput): string {
   return options.join(", or ");
 }
 
+/** The fewest strokes whose expected edges reach the steady-estimate bar; null when none do. */
+export function suggestedProbeStrokes(input: Omit<ProbeEdgeInput, "strokes">): number | null {
+  const m = edgeModel({ ...input, strokes: 1 });
+  if (m === null || !m.spacing.ok || m.perStroke <= 0) return null;
+  const strokes = Math.ceil(PROBE_STEADY_EDGES / m.perStroke - ESTIMATE_TOLERANCE);
+  return strokes <= PROBE_MAX_STROKES ? strokes : null;
+}
+
 /** The edge estimate as a note for the probe parameters; null when there is none to give. */
 export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
   const m = edgeModel(input);

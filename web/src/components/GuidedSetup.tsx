@@ -10,6 +10,7 @@ import {
   parseNumberList,
   patternProblem,
   probeEdgeHint,
+  suggestedProbeStrokes,
   probeToggleSpacing,
   savePattern,
   toggleSpacingProblem,
@@ -46,6 +47,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   const [trackingStrokes, setTrackingStrokes] = useState<number>(DEFAULT_PARAMETERS.tracking.strokes);
   const [probe, setProbe] = useState(DEFAULT_PARAMETERS.probe);
   const [probeSpeedTouched, setProbeSpeedTouched] = useState(false);
+  const [probeStrokesTouched, setProbeStrokesTouched] = useState(false);
   const [standstill, setStandstill] = useState(DEFAULT_PARAMETERS.standstill);
   const [gates, setGates] = useState(DEFAULT_GATES);
   const [includeMarginal, setIncludeMarginal] = useState(false);
@@ -76,17 +78,33 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
             pattern,
             kinematics: stepper.kinematics,
             segmentsBetweenToggles: probe.segments_between_toggles,
-            strokes: probe.strokes,
+            strokes: probeStrokesTouched ? probe.strokes : DEFAULT_PARAMETERS.probe.strokes,
             maxVelocity,
           })
         : null,
-    [speedsText, pattern?.start[0], pattern?.start[1], pattern?.end[0], pattern?.end[1], stepper?.kinematics, probe.segments_between_toggles, probe.strokes, maxVelocity],
+    [speedsText, pattern?.start[0], pattern?.start[1], pattern?.end[0], pattern?.end[1], stepper?.kinematics, probe.segments_between_toggles, probeStrokesTouched, probe.strokes, maxVelocity],
   );
   useEffect(() => {
     if (!probeSpeedTouched && derived !== null && derived.speed > 0) {
       setProbe((p) => (p.speed_mm_s === derived.speed ? p : { ...p, speed_mm_s: derived.speed }));
     }
   }, [derived, probeSpeedTouched]);
+
+  const suggestedStrokes =
+    pattern !== null && stepper !== undefined
+      ? suggestedProbeStrokes({
+          pattern,
+          kinematics: stepper.kinematics,
+          speedMmS: probe.speed_mm_s,
+          segmentsBetweenToggles: probe.segments_between_toggles,
+          maxVelocity,
+        })
+      : null;
+  useEffect(() => {
+    if (!probeStrokesTouched && suggestedStrokes !== null) {
+      setProbe((p) => (p.strokes === suggestedStrokes ? p : { ...p, strokes: suggestedStrokes }));
+    }
+  }, [suggestedStrokes, probeStrokesTouched]);
 
   const spacing =
     pattern !== null && stepper !== undefined
@@ -192,6 +210,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               onSetup={(s) => {
                 if (s.type !== "probe") return;
                 if (s.parameters.speed_mm_s !== probe.speed_mm_s) setProbeSpeedTouched(true);
+                if (s.parameters.strokes !== probe.strokes) setProbeStrokesTouched(true);
                 setProbe(s.parameters);
               }}
             />
