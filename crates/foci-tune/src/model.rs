@@ -672,6 +672,12 @@ pub struct RestRecord {
     pub torque_sd: Option<f64>,
     /// Peak-to-peak position error in um.
     pub position_pp_um: Option<f64>,
+    /// Torque-target value changes per second.
+    #[serde(default)]
+    pub transitions_per_s: Option<f64>,
+    /// Torque-target changes of more than one count per second.
+    #[serde(default)]
+    pub large_transitions_per_s: Option<f64>,
 }
 
 /// Standstill metrics for one channel.
@@ -681,26 +687,37 @@ pub struct StandstillRecord {
     pub rests: Vec<RestRecord>,
     /// Largest torque standard deviation.
     pub worst_torque_sd: Option<f64>,
+    /// Largest large-transition rate over the rests that carry one.
+    #[serde(default)]
+    pub worst_large_transitions_per_s: Option<f64>,
 }
 
 impl From<&StandstillMetrics> for StandstillRecord {
     fn from(m: &StandstillMetrics) -> Self {
+        let rests: Vec<RestRecord> = m
+            .rests
+            .iter()
+            .map(|r| RestRecord {
+                index: r.index,
+                samples: r.samples,
+                torque_sd: finite(r.torque_sd),
+                position_pp_um: finite(r.position_pp_um),
+                transitions_per_s: finite(r.transitions_per_s),
+                large_transitions_per_s: finite(r.large_transitions_per_s),
+            })
+            .collect();
+        let worst_large_transitions_per_s = rests
+            .iter()
+            .filter_map(|r| r.large_transitions_per_s)
+            .fold(None, |m, v| Some(m.map_or(v, |m: f64| m.max(v))));
         Self {
-            rests: m
-                .rests
-                .iter()
-                .map(|r| RestRecord {
-                    index: r.index,
-                    samples: r.samples,
-                    torque_sd: finite(r.torque_sd),
-                    position_pp_um: finite(r.position_pp_um),
-                })
-                .collect(),
+            rests,
             worst_torque_sd: if m.rests.is_empty() {
                 None
             } else {
                 finite(m.worst_torque_sd)
             },
+            worst_large_transitions_per_s,
         }
     }
 }

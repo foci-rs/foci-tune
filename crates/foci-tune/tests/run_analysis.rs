@@ -21,7 +21,7 @@ fn regimes() -> HashMap<u8, Regime> {
     HashMap::from([(0, regime()), (1, regime())])
 }
 
-fn critical(channel: u8, ms: usize, step: i32, tmc: i32) -> Frame {
+fn critical(channel: u8, ms: usize, step: i32, tmc: i32, torque: i16) -> Frame {
     Frame::Critical(
         FrameHeader {
             protocol_version: 25,
@@ -43,7 +43,7 @@ fn critical(channel: u8, ms: usize, step: i32, tmc: i32) -> Frame {
             cached_pid_velocity_offset: 0,
             velocity_error: 0,
             sample_flags: 0,
-            torque_target: 0,
+            torque_target: torque,
             torque_actual: 0,
         },
     )
@@ -84,14 +84,19 @@ const fn approach(ms: usize) -> Piece {
 
 /// Frames at 1 kHz for both channels; actual positions follow the command ten to one.
 fn frames(pieces: &[Piece]) -> Vec<Frame> {
+    frames_with_torque(pieces, |_| 0)
+}
+
+/// As `frames`, with the commanded torque of both channels given per millisecond.
+fn frames_with_torque(pieces: &[Piece], torque: impl Fn(usize) -> i16) -> Vec<Frame> {
     let (mut a, mut b, mut ms) = (0, 0, 0);
     let mut out = Vec::new();
     for piece in pieces {
         for _ in 0..piece.ms {
             a += piece.declared;
             b += piece.other;
-            out.push(critical(0, ms, a, a * 10));
-            out.push(critical(1, ms, b, b * 10));
+            out.push(critical(0, ms, a, a * 10, torque(ms)));
+            out.push(critical(1, ms, b, b * 10, torque(ms)));
             ms += 1;
         }
     }
@@ -238,4 +243,40 @@ fn standstill_rests_start_after_the_approach() {
             to: ticks(7750),
         }
     );
+}
+
+#[test]
+fn an_analysed_standstill_run_records_the_rates_per_rest_and_per_run() {
+    let f = frames_with_torque(
+        &[
+            hold(250),
+            approach(1000),
+            hold(3500),
+            Piece {
+                ms: 1,
+                declared: 1,
+                other: 0,
+            },
+            hold(3000),
+        ],
+        |ms| if ms % 2 == 0 { -2 } else { -3 },
+    );
+    let kind = RunKind::Standstill {
+        rests: 2,
+        dwell_s: 3.0,
+    };
+    let r = regimes();
+    let input = input(&kind, &f, &r, &[]);
+
+    let window = stimulus_window(&input);
+    let metrics = analyze(&input, &window, &mut Vec::new());
+
+    let standstill = metrics.channels[0].standstill.as_ref().unwrap();
+    assert_eq!(standstill.rests.len(), 2);
+    for rest in &standstill.rests {
+        let rate = rest.transitions_per_s.unwrap();
+        assert!((rate - 1000.0).abs() < 1e-6, "{rest:?}");
+        assert_eq!(rest.large_transitions_per_s, Some(0.0));
+    }
+    assert_eq!(standstill.worst_large_transitions_per_s, Some(0.0));
 }
