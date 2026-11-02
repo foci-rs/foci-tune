@@ -751,8 +751,6 @@ export const postTuneAbandon = (id: TuneId) => request<unknown>("POST", tunePath
 
 export const postTuneRestore = (id: TuneId) => request<unknown>("POST", tunePath(id, "/restore"));
 
-export const postTuneAcknowledge = (id: TuneId) =>
-  request<unknown>("POST", tunePath(id, "/acknowledge"));
 
 export const getRun = (id: RunId) => request<Run>("GET", `/api/runs/${encodeURIComponent(id)}`);
 

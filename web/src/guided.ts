@@ -242,7 +242,6 @@ export interface Actions {
   extension: boolean;
   abandon: boolean;
   restore: boolean;
-  acknowledge: boolean;
 }
 
 /** Which controls the guided view offers for the tune's state and its stepper lock. */
@@ -255,9 +254,8 @@ export function availableActions(tune: Tune, lock: string | null): Actions {
     extension: false,
     abandon: false,
     restore: false,
-    acknowledge: false,
   };
-  if (isLocked(tune.state, lock)) return { ...off, restore: true, acknowledge: true };
+  if (isLocked(tune.state, lock)) return { ...off, restore: true };
   switch (tune.state) {
     case "Ready":
       return { ...off, prepare: true, abandon: true };

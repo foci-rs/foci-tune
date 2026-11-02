@@ -127,12 +127,12 @@ test("preparing a step posts the request and never the confirmation", async () =
   expect(screen.queryByRole("button", { name: "Start the step" })).not.toBeInTheDocument();
 });
 
-test("a locked tune shows the reason with only restore and acknowledge", async () => {
+test("a locked tune shows the reason with only restore", async () => {
   current = detail("AwaitingChoice", "the restore has not run");
   render(<GuidedTune printer={printer} />);
   expect(await screen.findByText("the restore has not run")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Restore the starting gains" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Acknowledge" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
   for (const name of [/abandon/i, /accept/i, /start the step/i, /extend/i, /use this/i]) {
     expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
   }

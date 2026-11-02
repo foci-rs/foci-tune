@@ -4,7 +4,6 @@ import {
   getTune,
   getTunes,
   postTuneAbandon,
-  postTuneAcknowledge,
   postTuneChoice,
   postTuneConfirm,
   postTuneDecision,
@@ -217,14 +216,12 @@ function TuneView({ id }: { id: TuneId }) {
         )}
       </Card>
 
-      {(actions.restore || actions.acknowledge) && (
+      {actions.restore && (
         <LockBanner
           detail={detail}
           busy={busy}
           canRestore={actions.restore}
-          canAcknowledge={actions.acknowledge}
           onRestore={() => run(() => postTuneRestore(id))}
-          onAcknowledge={() => run(() => postTuneAcknowledge(id))}
         />
       )}
 
@@ -288,16 +285,12 @@ function LockBanner({
   detail,
   busy,
   canRestore,
-  canAcknowledge,
   onRestore,
-  onAcknowledge,
 }: {
   detail: TuneDetail;
   busy: boolean;
   canRestore: boolean;
-  canAcknowledge: boolean;
   onRestore: () => void;
-  onAcknowledge: () => void;
 }) {
   const reason =
     detail.lock ?? (typeof detail.state === "object" ? detail.state.RestoreFailed : "the starting gains have not been written back yet");
@@ -309,11 +302,6 @@ function LockBanner({
         {canRestore && (
           <Button disabled={busy} onClick={onRestore}>
             Restore the starting gains
-          </Button>
-        )}
-        {canAcknowledge && (
-          <Button disabled={busy} onClick={onAcknowledge}>
-            Acknowledge
           </Button>
         )}
       </div>

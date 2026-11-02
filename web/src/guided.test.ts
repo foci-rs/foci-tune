@@ -279,7 +279,7 @@ describe("availableActions", () => {
     expect(running.extension).toBe(false);
   });
 
-  test("a restore-pending tune offers only restore and acknowledge", () => {
+  test("a restore-pending tune offers only restore", () => {
     const a = availableActions(tune("RestorePending"), null);
     expect(a).toEqual({
       prepare: false,
@@ -289,15 +289,14 @@ describe("availableActions", () => {
       extension: false,
       abandon: false,
       restore: true,
-      acknowledge: true,
     });
   });
 
-  test("a restore-failed tune or a lock reason also limits to restore and acknowledge", () => {
+  test("a restore-failed tune or a lock reason also limits to restore", () => {
     const failed = availableActions(tune({ RestoreFailed: "no link" }), null);
-    expect([failed.restore, failed.acknowledge, failed.abandon, failed.start, failed.choose]).toEqual([true, true, false, false, false]);
+    expect([failed.restore, failed.abandon, failed.start, failed.choose]).toEqual([true, false, false, false]);
     const locked = availableActions(tune("AwaitingChoice"), "stepper locked");
-    expect([locked.restore, locked.acknowledge, locked.abandon, locked.choose]).toEqual([true, true, false, false]);
+    expect([locked.restore, locked.abandon, locked.choose]).toEqual([true, false, false]);
   });
 
   test("abandon is offered in every live state and nothing is offered once over", () => {
