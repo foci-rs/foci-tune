@@ -154,7 +154,7 @@ function useEarlierTunes(id: TuneId, enabled: boolean): Tune[] {
       .then((list) =>
         Promise.all(
           list
-            .filter((s) => s.id !== id && s.state === "Done")
+            .filter((s) => s.id !== id)
             .sort((a, b) => b.created - a.created)
             .slice(0, 5)
             .map((s) => getTune(s.id)),
@@ -402,7 +402,7 @@ function AnnouncementPanel({
 }) {
   const a = announcementOf(tune);
   if (a === null) return null;
-  const duration = durationText(expectedDurationSeconds(earlier, a.runCount));
+  const duration = durationText(expectedDurationSeconds([tune, ...earlier], a.runCount));
   return (
     <Card label="Announcement" className="border-emerald-500/60">
       <dl className="flex flex-wrap gap-x-8 gap-y-2">

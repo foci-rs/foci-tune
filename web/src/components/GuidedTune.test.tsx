@@ -107,6 +107,17 @@ test("an announced step states what will happen and only Start confirms it", asy
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps/confirm"]));
 });
 
+test("the duration estimate uses the run times of the tune's own earlier steps", async () => {
+  current = detail("Announced");
+  const finished = structuredClone(current.steps[0]);
+  finished.rungs[0].run_times = [{ id: "r1", started_unix_ms: 0, ended_unix_ms: 30000 }];
+  current.steps = [finished, current.steps[0]];
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Start the step" });
+  expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+  expect(screen.getByText(/about \d+ min/)).toBeInTheDocument();
+});
+
 test("preparing a step posts the request and never the confirmation", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
