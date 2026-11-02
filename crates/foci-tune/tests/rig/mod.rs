@@ -520,7 +520,7 @@ impl Board {
             let ramp = |k: i32| (i64::from(r) * i64::from(k) / 150) as i32;
             let trail = |k: i32, sign: i32| if k > 0 && k < 150 { sign * lag } else { 0 };
             samples.extend((0..=150).map(|k| (ramp(k), ramp(k) - trail(k, 1), 0)));
-            samples.extend((0..400).map(|_| (r, r, 0)));
+            samples.extend((0..800).map(|_| (r, r, 0)));
             samples.extend((0..=150).map(|k| (ramp(150 - k), ramp(150 - k) + trail(k, 1), 0)));
         }
         let mut out = Vec::new();

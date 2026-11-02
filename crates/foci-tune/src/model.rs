@@ -626,7 +626,11 @@ impl From<&StandstillMetrics> for StandstillRecord {
                     position_pp_um: finite(r.position_pp_um),
                 })
                 .collect(),
-            worst_torque_sd: finite(m.worst_torque_sd),
+            worst_torque_sd: if m.rests.is_empty() {
+                None
+            } else {
+                finite(m.worst_torque_sd)
+            },
         }
     }
 }
