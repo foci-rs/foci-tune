@@ -58,6 +58,12 @@ fn setup(speeds: &[f64]) -> TuneSetup {
     }
 }
 
+fn gated_setup() -> TuneSetup {
+    let mut s = setup(&[50.0]);
+    s.gates.standstill_factor = Some(2.0);
+    s
+}
+
 fn scheduler(rig: &Rig) -> TuneScheduler<MoonrakerClient> {
     TuneScheduler::new(rig.engine.clone(), rig.store.clone())
 }
@@ -391,7 +397,7 @@ async fn damping_halt_leaves_higher_rungs_unqueued() {
         s.profile_by_script.push(("G4 P200".into(), dropped));
     });
     let sched = scheduler(&rig);
-    let id = sched.create(setup(&[50.0])).await.unwrap();
+    let id = sched.create(gated_setup()).await.unwrap();
     sched.prepare_step(&id, crate::step(0, 1, 1)).await.unwrap();
     sched.confirm_step(&id).await.unwrap();
 
@@ -1582,7 +1588,7 @@ async fn standstill_baseline_pause_continue_disables_the_gate() {
         s.profile_by_script.push(("G4 P200".into(), dropped));
     });
     let sched = scheduler(&rig);
-    let id = sched.create(setup(&[50.0])).await.unwrap();
+    let id = sched.create(gated_setup()).await.unwrap();
     sched.prepare_step(&id, step(0, 1, 1)).await.unwrap();
     sched.confirm_step(&id).await.unwrap();
     let paused = wait_state(&rig, &id, TuneState::Paused).await;
@@ -1632,7 +1638,7 @@ async fn a_waived_rung_zero_pauses_for_its_baseline_before_a_rung_above_runs() {
         s.profile_by_velocity_p.insert(668, dropped);
     });
     let sched = scheduler(&rig);
-    let id = sched.create(setup(&[50.0])).await.unwrap();
+    let id = sched.create(gated_setup()).await.unwrap();
     sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
     sched.confirm_step(&id).await.unwrap();
     wait_state(&rig, &id, TuneState::Paused).await;
@@ -1728,7 +1734,7 @@ async fn a_rerun_drops_the_rungs_damping_waiver() {
         s.profile_by_velocity_p.insert(668, dropped);
     });
     let sched = scheduler(&rig);
-    let id = sched.create(setup(&[50.0])).await.unwrap();
+    let id = sched.create(gated_setup()).await.unwrap();
     sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
     sched.confirm_step(&id).await.unwrap();
     wait_state(&rig, &id, TuneState::Paused).await;
