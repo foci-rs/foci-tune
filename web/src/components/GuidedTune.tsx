@@ -25,6 +25,7 @@ import {
   availableActions,
   axisLabel,
   currentStep,
+  driftCheckRunning,
   durationText,
   expectedDurationSeconds,
   nextAxis,
@@ -521,6 +522,11 @@ function StepCard({
       {summary.failed !== null && <p className="mb-2 text-sm text-amber-400">Stopped: {summary.failed}</p>}
       {summary.halt !== null && <p className="mb-2 text-sm text-amber-400">{summary.halt}</p>}
       <RungTable rows={rows} speeds={tune.setup.speeds_mm_s} axis={label} />
+      {driftCheckRunning(tune, index) && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Drift check running: the seed rung is repeated once more, so the machine is still moving.
+        </p>
+      )}
       {tune.state === "Running" && rows.some((r) => r.score !== null) && (
         <p className="mt-1 text-xs text-muted-foreground">
           Scores compare each rung with the best rung so far and can change as later rungs finish.

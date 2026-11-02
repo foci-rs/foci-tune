@@ -9,6 +9,7 @@ import {
   expectedDurationSeconds,
   nextAxis,
   recommendedGain,
+  driftCheckRunning,
   rungView,
   stepSummary,
 } from "./guided";
@@ -106,6 +107,21 @@ function assessed(overrides: Partial<TuneStep> = {}): TuneStep {
     ...overrides,
   });
 }
+
+describe("driftCheckRunning", () => {
+  const drifting = (over: Partial<TuneStep> = {}) => step({ drift_rung: rung(1, { started_unix_ms: 1 }), ...over });
+
+  test("is true from the seed re-run's start until its drift is recorded", () => {
+    expect(driftCheckRunning(tune("Running", [drifting()]), 0)).toBe(true);
+  });
+
+  test("is false before the re-run starts, once drift is recorded and after the step ends", () => {
+    expect(driftCheckRunning(tune("Running", [step()]), 0)).toBe(false);
+    const recorded = drifting({ drift: [{ metric: "zeta", first: 0.1, rerun: 0.09 }] });
+    expect(driftCheckRunning(tune("Running", [recorded]), 0)).toBe(false);
+    expect(driftCheckRunning(tune("AwaitingChoice", [drifting({ ended_unix_ms: 5 })]), 0)).toBe(false);
+  });
+});
 
 describe("rungView", () => {
   test("states why a rung is unscored and why another is inadmissible", () => {

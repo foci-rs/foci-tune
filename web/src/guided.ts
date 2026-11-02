@@ -214,6 +214,12 @@ export function rungView(tune: Tune, step: number): RungView[] {
   });
 }
 
+/** True while the seed rung's drift re-run is moving the machine after the last rung. */
+export function driftCheckRunning(tune: Tune, step: number): boolean {
+  const s = tune.steps[step];
+  return tune.state === "Running" && s.drift_rung !== null && s.drift.length === 0 && s.ended_unix_ms === null;
+}
+
 export function isLocked(state: TuneState, lock: string | null): boolean {
   return lock !== null || state === "RestorePending" || typeof state === "object";
 }

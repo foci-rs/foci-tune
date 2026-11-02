@@ -167,6 +167,13 @@ test("a running step warns that scores can still change", async () => {
   expect(await screen.findByText(/can change as later rungs finish/i)).toBeInTheDocument();
 });
 
+test("the drift re-run is announced while the machine is still moving after the last rung", async () => {
+  current = detail("Running");
+  current.steps[0].drift_rung = { ...current.steps[0].rungs[1], started_unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByText(/drift check running/i)).toBeInTheDocument();
+});
+
 test("a paused tune shows the pause panel and no choice controls", async () => {
   current = detail("Paused");
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
