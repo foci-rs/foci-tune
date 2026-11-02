@@ -1215,6 +1215,32 @@ async fn an_extension_clears_the_assessment_while_its_rung_runs() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_assessment_is_stored_as_each_rung_completes() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0, 120.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    for n in 1..=4 {
+        wait_stimuli(&rig, n).await;
+        gate.notify_one();
+    }
+    wait_stimuli(&rig, 5).await;
+
+    let running = rig.store.read_tune(&id).unwrap();
+    let step = &running.steps[0];
+    assert_eq!(running.state, TuneState::Running);
+    assert_eq!(step.rungs[0].repeat_values.len(), 1);
+    assert!(step.rungs[1].repeat_values.is_empty());
+    assert_eq!(step.assessment.as_ref().unwrap().verdicts.len(), 3);
+    assert!(step.recommendation.is_none());
+
+    release(&rig, &gate);
+    wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_stored_run_count_is_the_announced_one() {
     let rig = rig().await;
     let sched = scheduler(&rig);

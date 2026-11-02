@@ -1805,6 +1805,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                     let step = step_mut(t, ctx.index)?;
                     rung_mut(step, index)?.ended_unix_ms = Some(now_ms());
                     let assessment = assess(step, &setup);
+                    step.assessment = Some(assessment.clone());
                     if let Some((at, h)) = assessment.halt {
                         let reason = format!("not run: {}", halt_text(h, &setup.gates));
                         for rung in step.rungs.iter_mut().skip(at + 1) {
