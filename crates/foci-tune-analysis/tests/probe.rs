@@ -1,4 +1,6 @@
-use foci_tune_analysis::probe::{POST, ensemble, locate_edges, probe_ensembles, probe_metrics};
+use foci_tune_analysis::probe::{
+    POST, edge_responses, ensemble, locate_edges, probe_ensembles, probe_metrics,
+};
 use foci_tune_analysis::signals::ChannelSeries;
 
 struct Gaussian(u64);
@@ -125,4 +127,21 @@ fn probe_ensembles_are_the_ensembles_the_metrics_fit() {
     assert!(e.velocity.mean.iter().all(|&v| (v - 0.1).abs() < 1e-12));
     assert_eq!(e.torque.edges, 2);
     assert_eq!(probe_metrics(&s).edges, e.velocity.edges);
+}
+
+#[test]
+fn ensemble_is_the_mean_of_the_edge_responses() {
+    let mut rng = Gaussian(0x2545_f491_4f6c_dd1d);
+    let (signal, ff) = noisy_run(6, &mut rng);
+    let edges = locate_edges(&ff);
+
+    let responses = edge_responses(&signal, &ff, &edges);
+    let e = ensemble(&signal, &ff, &edges);
+
+    assert_eq!(responses.len(), e.edges);
+    assert!(responses.iter().all(|r| r.len() == POST));
+    for k in 0..POST {
+        let mean = responses.iter().map(|r| r[k]).sum::<f64>() / responses.len() as f64;
+        assert!((mean - e.mean[k]).abs() < 1e-12, "sample {k}");
+    }
 }

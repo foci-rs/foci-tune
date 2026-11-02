@@ -1,6 +1,7 @@
 //! Feedforward-step probe: edge location, ensemble response and per-signal fits.
 
 use crate::fit::{DampedFit, FitError, fit_damped};
+use crate::ladder::median;
 use crate::psd::{Psd, moving_mean_detrend, welch_peak_hz, welch_psd};
 use crate::signals::ChannelSeries;
 
@@ -55,13 +56,13 @@ pub struct Ensemble {
     pub edges: usize,
 }
 
-/// Averages the baselined, step-normalised response of `signal` over `edges`.
+/// Baselined, step-normalised response of `signal` at each usable edge, in edge order.
 ///
 /// Each response is `(x - mean(x[i-PRE..i])) / (ff[i] - ff[i-1])` over `x[i..i+POST]`;
 /// edges whose window does not fit inside both slices are skipped.
-pub fn ensemble(signal: &[f64], ff_offset: &[i32], edges: &[usize]) -> Ensemble {
+pub fn edge_responses(signal: &[f64], ff_offset: &[i32], edges: &[usize]) -> Vec<Vec<f64>> {
     let len = signal.len().min(ff_offset.len());
-    let responses: Vec<Vec<f64>> = edges
+    edges
         .iter()
         .filter(|&&i| i >= PRE && i + POST <= len)
         .map(|&i| {
@@ -72,7 +73,12 @@ pub fn ensemble(signal: &[f64], ff_offset: &[i32], edges: &[usize]) -> Ensemble 
                 .map(|x| (x - base) / step)
                 .collect()
         })
-        .collect();
+        .collect()
+}
+
+/// Averages the [`edge_responses`] of `signal` over `edges`.
+pub fn ensemble(signal: &[f64], ff_offset: &[i32], edges: &[usize]) -> Ensemble {
+    let responses = edge_responses(signal, ff_offset, edges);
     let n = responses.len();
     if n == 0 {
         return Ensemble {
@@ -108,10 +114,90 @@ pub fn ensemble(signal: &[f64], ff_offset: &[i32], edges: &[usize]) -> Ensemble 
     }
 }
 
+/// Fewest admissible per-edge fits that make a damping assessment.
+pub const MIN_FITTED_EDGES: usize = 12;
+/// Largest scaled MAD of the per-edge damped frequency, in Hz, that still counts as one ring.
+pub const MAX_HZ_SPREAD: f64 = 3.0;
+
+const MAD_TO_SIGMA: f64 = 1.4826;
+
+/// Damping assessed from independent per-edge fits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EdgeDamping {
+    /// Median damping ratio over the fitted edges.
+    pub zeta: f64,
+    /// Median damped frequency over the fitted edges, in Hz.
+    pub damped_hz: f64,
+    /// Scaled median absolute deviation of the per-edge damped frequency, in Hz.
+    pub hz_spread: f64,
+    /// Edges whose fit was admissible.
+    pub fitted: usize,
+    /// Edge responses offered to the fit.
+    pub edges: usize,
+}
+
+/// Reasons a per-edge damping assessment is withheld.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum EdgeDampingError {
+    /// Too few edges produced an admissible fit.
+    #[error("{fitted} of {edges} edges fitted, fewer than {MIN_FITTED_EDGES}")]
+    TooFewFits {
+        /// Edges whose fit was admissible.
+        fitted: usize,
+        /// Edge responses offered to the fit.
+        edges: usize,
+    },
+    /// The edges do not share one ring frequency, so no single damping ratio applies.
+    #[error("ring frequency spread {hz_spread:.1} Hz exceeds {MAX_HZ_SPREAD} Hz")]
+    Incoherent {
+        /// Scaled MAD of the per-edge damped frequency, in Hz.
+        hz_spread: f64,
+    },
+}
+
+/// Fits each edge response on its own and reports the median damping ratio.
+///
+/// Averaging edges whose ring frequency differs decoheres the mean and inflates the fitted
+/// damping, so the fit is done per edge and the edges must agree on frequency.
+///
+/// # Errors
+///
+/// [`EdgeDampingError::TooFewFits`] with fewer than [`MIN_FITTED_EDGES`] admissible fits;
+/// [`EdgeDampingError::Incoherent`] when the scaled MAD of the damped frequencies exceeds
+/// [`MAX_HZ_SPREAD`].
+pub fn edge_damping(responses: &[Vec<f64>], dt_s: f64) -> Result<EdgeDamping, EdgeDampingError> {
+    let fits: Vec<DampedFit> = responses
+        .iter()
+        .filter_map(|r| fit_damped(r, dt_s).ok())
+        .collect();
+    let (fitted, edges) = (fits.len(), responses.len());
+    if fitted < MIN_FITTED_EDGES {
+        return Err(EdgeDampingError::TooFewFits { fitted, edges });
+    }
+    let hz: Vec<f64> = fits.iter().map(|f| f.damped_hz).collect();
+    let zeta: Vec<f64> = fits.iter().map(|f| f.zeta).collect();
+    let damped_hz = median(&hz);
+    let deviations: Vec<f64> = hz.iter().map(|h| (h - damped_hz).abs()).collect();
+    let hz_spread = MAD_TO_SIGMA * median(&deviations);
+    if hz_spread > MAX_HZ_SPREAD {
+        return Err(EdgeDampingError::Incoherent { hz_spread });
+    }
+    Ok(EdgeDamping {
+        zeta: median(&zeta),
+        damped_hz,
+        hz_spread,
+        fitted,
+        edges,
+    })
+}
+
 /// Probe results for one channel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeMetrics {
-    /// Damping fit of the velocity response.
+    /// Per-edge damping of the velocity response: the gated headline. [`Self::velocity`] is
+    /// the ensemble fit kept for display.
+    pub damping: Result<EdgeDamping, EdgeDampingError>,
+    /// Damping fit of the velocity ensemble response.
     pub velocity: Result<DampedFit, FitError>,
     /// Damping fit of the target-torque response.
     pub torque: Result<DampedFit, FitError>,
@@ -175,7 +261,10 @@ pub fn torque_psd(s: &ChannelSeries) -> Option<Psd> {
 /// ensembles, plus the torque PSD peak.
 pub fn probe_metrics(s: &ChannelSeries) -> ProbeMetrics {
     let e = probe_ensembles(s);
+    let edges = locate_edges(&s.ff_offset);
+    let responses = edge_responses(&s.velocity_mm_s, &s.ff_offset, &edges);
     ProbeMetrics {
+        damping: edge_damping(&responses, e.dt_s),
         velocity: fit_damped(&e.velocity.mean, e.dt_s),
         torque: fit_damped(&e.torque.mean, e.dt_s),
         position_error: fit_damped(&e.position_error.mean, e.dt_s),
