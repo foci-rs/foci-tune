@@ -1486,6 +1486,24 @@ async fn stop_skips_the_rungs_above_and_recommends_from_the_assessed_ones() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_records_a_note_naming_the_rung_and_the_reason() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+
+    sched.decide(&id, PauseDecision::Stop).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let note = tune
+        .notes
+        .iter()
+        .find(|n| n.text.contains("stopped"))
+        .unwrap();
+    assert!(note.text.contains("rung 2"), "{}", note.text);
+    assert!(note.text.contains("unassessable"), "{}", note.text);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn continuing_a_paused_extension_of_a_halted_step_runs_no_drift() {
     let rig = rig().await;
     tracking_lag(&rig);

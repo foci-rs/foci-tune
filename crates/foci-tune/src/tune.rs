@@ -1143,6 +1143,11 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                     rung_mut(step, i)?.skipped = Some(reason.clone());
                 }
                 step.paused = None;
+                record.notes.push(TuneNote::now(format!(
+                    "operator stopped the ladder at rung {}: {}",
+                    paused.rung + 1,
+                    pause_text(paused.reason)
+                )));
                 conclude(&mut record, index, None);
                 s.save(&record)?;
                 return Ok(());
