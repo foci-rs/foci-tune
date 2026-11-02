@@ -1368,6 +1368,10 @@ fn damping_outcome_maps_ok_err_and_non_finite() {
     for bad in [
         edge_damping_with(f64::NAN, 152.0),
         edge_damping_with(0.034, f64::INFINITY),
+        EdgeDamping {
+            hz_spread: f64::NAN,
+            ..edge_damping_with(0.034, 152.0)
+        },
     ] {
         assert_eq!(
             DampingOutcome::from(&Ok(bad)),
