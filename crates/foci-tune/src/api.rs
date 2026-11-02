@@ -1418,7 +1418,9 @@ fn check_gates(gates: &Gates) -> ApiResult<()> {
             "the marginal threshold must be finite and above the damping floor",
         ));
     }
-    if !(gates.standstill_factor.is_finite() && gates.standstill_factor >= 1.0) {
+    if let Some(factor) = gates.standstill_factor
+        && !(factor.is_finite() && factor >= 1.0)
+    {
         return Err(ApiError::bad_field(
             "gates.standstill_factor",
             "the standstill factor must be a finite number of at least 1",
@@ -1574,4 +1576,24 @@ async fn restore_tune<M: MoonrakerApi + 'static>(
     let id = tune_id(&id)?;
     api.tunes.restore(&id).await?;
     Ok(Json(json!({"tune": id, "restored": true})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_non_finite_standstill_factor_is_rejected_by_the_shared_validation() {
+        let g = Gates {
+            standstill_factor: Some(f64::NAN),
+            ..Gates::default()
+        };
+        assert!(check_gates(&g).is_err());
+        let g = Gates {
+            standstill_factor: Some(f64::INFINITY),
+            ..Gates::default()
+        };
+        assert!(check_gates(&g).is_err());
+        assert!(check_gates(&Gates::default()).is_ok());
+    }
 }

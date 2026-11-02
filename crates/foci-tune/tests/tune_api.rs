@@ -9,7 +9,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use foci_tune::api::{Api, router};
 use foci_tune::model::{Filters, Gains};
-use foci_tune::tune::TuneScheduler;
+use foci_tune::tune::{TuneScheduler, TuneSetup};
 use futures_util::StreamExt;
 use rig::*;
 use serde_json::{Value, json};
@@ -107,7 +107,7 @@ fn setup_body(speeds: &[f64]) -> Value {
         },
         "tracking_strokes": 1,
         "standstill": {"rests": 2, "dwell_s": 0.2},
-        "gates": {"damping_floor": 0.05, "marginal": 0.08, "standstill_factor": 2.0},
+        "gates": {"damping_floor": 0.05, "marginal": 0.08},
         "include_marginal": false,
     })
 }
@@ -185,6 +185,51 @@ async fn gates_that_would_disable_a_check_are_rejected() {
         assert_eq!(reply.json()["field"], format!("gates.{field}"));
     }
     assert_eq!(get(&app, "/api/tunes").await.json(), json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tune_without_a_standstill_factor_stores_none_and_one_with_it_keeps_it() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+
+    let reply = post(&app, "/api/tunes", setup_body(&[50.0])).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+    assert_eq!(
+        reply.json()["setup"]["gates"]["standstill_factor"],
+        Value::Null
+    );
+
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let mut body = setup_body(&[50.0]);
+    body["gates"]["standstill_factor"] = json!(2.0);
+    let reply = post(&app, "/api/tunes", body).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+    assert_eq!(reply.json()["setup"]["gates"]["standstill_factor"], 2.0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_non_numeric_standstill_factor_is_malformed_input() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let mut body = setup_body(&[50.0]);
+    body["gates"]["standstill_factor"] = json!("two");
+
+    let reply = post(&app, "/api/tunes", body).await;
+
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    assert!(reply.json().get("field").is_none_or(Value::is_null));
+    assert_eq!(get(&app, "/api/tunes").await.json(), json!([]));
+}
+
+#[test]
+fn a_stored_setup_keeps_its_numeric_factor_and_reads_a_missing_one_as_off() {
+    let without: TuneSetup = serde_json::from_value(setup_body(&[195.0])).unwrap();
+    assert_eq!(without.gates.standstill_factor, None);
+    let mut body = setup_body(&[195.0]);
+    body["gates"]["standstill_factor"] = json!(2.0);
+    let with: TuneSetup = serde_json::from_value(body).unwrap();
+    assert_eq!(with.gates.standstill_factor, Some(2.0));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
