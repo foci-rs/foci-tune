@@ -981,25 +981,6 @@ async fn failed_restore_locks_and_blocks_every_route() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acknowledge_does_not_clear() {
-    let rig = rig().await;
-    let sched = scheduler(&rig);
-    let id = failed_abandon(&rig, &sched).await;
-    let before = rig.store.read_tune(&id).unwrap();
-
-    sched.acknowledge(&id).await.unwrap();
-
-    let after = rig.store.read_tune(&id).unwrap();
-    assert_eq!(after.state, before.state);
-    assert_eq!(after.notes.len(), before.notes.len() + 1);
-    assert!(rig.engine.lock_state("stepper_x").is_some());
-    assert!(matches!(
-        rig.engine.submit(rig.request(tracking())).await,
-        Err(Precondition::TuneLocked(_))
-    ));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lock_cleared_event_updates_the_tune() {
     let rig = rig().await;
     let sched = scheduler(&rig);

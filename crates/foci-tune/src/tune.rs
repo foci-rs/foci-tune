@@ -294,7 +294,7 @@ pub struct Tune {
     pub state: TuneState,
     /// Creation time, seconds since the UNIX epoch.
     pub created_unix_s: u64,
-    /// Remarks on the tune's life cycle, such as a restart or an operator acknowledgement.
+    /// Remarks on the tune's life cycle, such as a restart or an operator decision.
     #[serde(default)]
     pub notes: Vec<TuneNote>,
 }
@@ -1244,28 +1244,6 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     pub async fn restore(&self, tune: &TuneId) -> Result<(), TuneError> {
         let (shared, tune) = (self.shared.clone(), tune.clone());
         detached(async move { shared.restore_held(&tune, false).await }).await
-    }
-
-    /// Records the operator's acknowledgement of a tune that awaits its restore. It changes
-    /// neither the tune's state nor its stepper's lock, so runs stay refused.
-    ///
-    /// # Errors
-    /// [`TuneError::OutOfOrder`] unless the tune is restore-pending or restore-failed, and
-    /// store errors.
-    pub async fn acknowledge(&self, tune: &TuneId) -> Result<(), TuneError> {
-        let s = &self.shared;
-        let _held = s.hold_tune(tune).await?;
-        let mut record = s.read(tune)?;
-        if !awaits_restore(&record.state) {
-            return Err(TuneError::OutOfOrder(
-                "only a tune that awaits its restore can be acknowledged".to_owned(),
-            ));
-        }
-        record.notes.push(TuneNote::now(
-            "the operator acknowledged the pending restore",
-        ));
-        s.save(&record)?;
-        Ok(())
     }
 
     /// Restart recovery: marks every unfinished tune restore-pending without resuming it and

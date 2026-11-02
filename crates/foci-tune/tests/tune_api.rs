@@ -224,29 +224,6 @@ async fn a_locked_stepper_refuses_a_step_with_the_lock_reason() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn acknowledge_returns_ok_and_keeps_the_lock() {
-    let rig = rig().await;
-    let (app, _) = app(&rig);
-    let id = create(&app).await;
-    rig.engine
-        .lock_stepper("stepper_x", REASON.to_owned(), snapshot())
-        .unwrap();
-    let mut record = rig
-        .store
-        .read_tune(&foci_tune::tune::TuneId::parse(&id).unwrap())
-        .unwrap();
-    record.state = foci_tune::tune::TuneState::RestorePending;
-    rig.store.write_tune(&record).unwrap();
-
-    let reply = post_empty(&app, &format!("/api/tunes/{id}/acknowledge")).await;
-
-    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
-    let detail = get(&app, &format!("/api/tunes/{id}")).await.json();
-    assert_eq!(detail["state"], json!("RestorePending"));
-    assert_eq!(detail["lock"], REASON);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_step_out_of_order_is_a_conflict() {
     let rig = rig().await;
     let (app, _) = app(&rig);

@@ -958,7 +958,6 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         .route("/api/tunes/{id}/decision", post(tune_decision::<M>))
         .route("/api/tunes/{id}/abandon", post(abandon_tune::<M>))
         .route("/api/tunes/{id}/restore", post(restore_tune::<M>))
-        .route("/api/tunes/{id}/acknowledge", post(acknowledge_tune::<M>))
         .route("/api/events", get(ws::events::<M>))
         .fallback(static_or_index)
         .with_state(app)
@@ -1575,13 +1574,4 @@ async fn restore_tune<M: MoonrakerApi + 'static>(
     let id = tune_id(&id)?;
     api.tunes.restore(&id).await?;
     Ok(Json(json!({"tune": id, "restored": true})))
-}
-
-async fn acknowledge_tune<M: MoonrakerApi + 'static>(
-    State(api): State<App<M>>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    let id = tune_id(&id)?;
-    api.tunes.acknowledge(&id).await?;
-    Ok(Json(json!({"tune": id, "acknowledged": true})))
 }
