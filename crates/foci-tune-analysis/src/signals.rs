@@ -5,6 +5,19 @@ use core::f64::consts::TAU;
 use crate::protocol::{Critical, FLAG_DROP_GAP_BEFORE_THIS_FRAME, FrameHeader};
 use crate::units::{POSITION_UNITS_PER_REV, Regime};
 
+/// Sample period assumed when a series has no usable timestamps.
+pub const FALLBACK_DT_S: f64 = 1e-3;
+
+/// Median spacing of `t_s` in seconds, or [`FALLBACK_DT_S`] when it is not positive and finite.
+pub fn sample_period_s(t_s: &[f64]) -> f64 {
+    let mut dt: Vec<f64> = t_s.windows(2).map(|w| w[1] - w[0]).collect();
+    dt.sort_by(f64::total_cmp);
+    dt.get(dt.len() / 2)
+        .copied()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(FALLBACK_DT_S)
+}
+
 /// Per-frame series for one channel, all vectors the same length.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ChannelSeries {

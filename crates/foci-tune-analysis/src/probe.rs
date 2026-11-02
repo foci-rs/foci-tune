@@ -3,7 +3,7 @@
 use crate::fit::{DampedFit, FitError, fit_damped};
 use crate::ladder::median;
 use crate::psd::{Psd, moving_mean_detrend, welch_peak_hz, welch_psd};
-use crate::signals::ChannelSeries;
+use crate::signals::{ChannelSeries, sample_period_s};
 
 /// Samples before an edge used for the flatness check and the baseline.
 pub const PRE: usize = 15;
@@ -15,7 +15,6 @@ pub const FIT_RANGE: (usize, usize) = (2, 55);
 const PSD_FS_HZ: f64 = 1000.0;
 pub(crate) const PSD_BAND_HZ: (f64, f64) = (60.0, 490.0);
 const DETREND_WINDOW: usize = 25;
-const FALLBACK_DT_S: f64 = 1e-3;
 
 fn span(xs: &[i32]) -> i64 {
     let max = xs.iter().copied().max().unwrap_or(0);
@@ -209,15 +208,6 @@ pub struct ProbeMetrics {
     pub stderr_at_peak: f64,
     /// Peak of the detrended torque Welch PSD within 60-490 Hz; NaN when too short.
     pub torque_psd_peak_hz: f64,
-}
-
-fn sample_period_s(t_s: &[f64]) -> f64 {
-    let mut dt: Vec<f64> = t_s.windows(2).map(|w| w[1] - w[0]).collect();
-    dt.sort_by(f64::total_cmp);
-    dt.get(dt.len() / 2)
-        .copied()
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .unwrap_or(FALLBACK_DT_S)
 }
 
 /// The three ensemble responses of one channel and their sample period.

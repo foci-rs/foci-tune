@@ -15,6 +15,7 @@ fn span(s: &mut ChannelSeries, pos: i32, n: usize, torque_sd: i32, err_amp: f64,
     for k in 0..n {
         let sign = if k % 2 == 0 { 1 } else { -1 };
         let hot = spike && k == 10;
+        s.t_s.push(s.t_s.len() as f64 * 1e-3);
         s.step_position.push(pos);
         s.torque.push(if hot { 9000 } else { sign * torque_sd });
         s.position_error_um.push(if hot {
@@ -23,6 +24,17 @@ fn span(s: &mut ChannelSeries, pos: i32, n: usize, torque_sd: i32, err_amp: f64,
             f64::from(sign) * err_amp
         });
     }
+}
+
+fn rest_of(torque: Vec<i32>) -> ChannelSeries {
+    let mut s = ChannelSeries::default();
+    for &tq in std::iter::repeat_n(&0, 500).chain(torque.iter()) {
+        s.t_s.push(s.t_s.len() as f64 * 1e-3);
+        s.step_position.push(100);
+        s.torque.push(tq);
+        s.position_error_um.push(0.0);
+    }
+    s
 }
 
 fn capture(spike_in_settle: bool) -> ChannelSeries {
@@ -75,4 +87,100 @@ fn empty_series_has_no_rests() {
 
     assert!(m.rests.is_empty());
     assert_eq!(m.worst_torque_sd, 0.0);
+}
+
+#[test]
+fn a_constant_rest_has_no_transitions() {
+    let m = standstill_metrics(&rest_of(vec![15; 1000]), &regime(), 500, 200);
+    assert_eq!(m.rests.len(), 1);
+    assert_eq!(m.rests[0].transitions_per_s, 0.0);
+    assert_eq!(m.rests[0].large_transitions_per_s, 0.0);
+    assert_eq!(m.rests[0].torque_sd, 0.0);
+}
+
+#[test]
+fn one_count_chatter_has_a_high_rate_and_no_large_steps() {
+    let torque: Vec<i32> = (0..1000)
+        .map(|k| if k % 2 == 0 { -2 } else { -3 })
+        .collect();
+    let m = standstill_metrics(&rest_of(torque), &regime(), 500, 200);
+    assert!(
+        (m.rests[0].transitions_per_s - 1000.0).abs() < 1e-6,
+        "{m:?}"
+    );
+    assert_eq!(m.rests[0].large_transitions_per_s, 0.0);
+}
+
+#[test]
+fn isolated_spikes_count_two_transitions_each() {
+    let mut torque = vec![-62; 1000];
+    for k in [100, 400, 700] {
+        torque[k] = -102;
+    }
+    let m = standstill_metrics(&rest_of(torque), &regime(), 500, 200);
+    let span = 0.999;
+    assert!(
+        (m.rests[0].transitions_per_s - 6.0 / span).abs() < 1e-6,
+        "{m:?}"
+    );
+    assert!(
+        (m.rests[0].large_transitions_per_s - 6.0 / span).abs() < 1e-6,
+        "{m:?}"
+    );
+    assert!(m.rests[0].torque_sd > 2.0);
+}
+
+#[test]
+fn a_spike_on_the_last_retained_sample_counts_once() {
+    let mut torque = vec![-62; 1000];
+    torque[999] = -102;
+    let m = standstill_metrics(&rest_of(torque), &regime(), 500, 200);
+    assert!(
+        (m.rests[0].large_transitions_per_s - 1.0 / 0.999).abs() < 1e-6,
+        "{m:?}"
+    );
+}
+
+#[test]
+fn slow_creep_has_a_low_rate_and_no_large_steps() {
+    let torque: Vec<i32> = (0..1000).map(|k| -60 - (k / 500) as i32).collect();
+    let m = standstill_metrics(&rest_of(torque), &regime(), 500, 200);
+    assert!(m.rests[0].transitions_per_s <= 2.0, "{m:?}");
+    assert_eq!(m.rests[0].large_transitions_per_s, 0.0);
+}
+
+#[test]
+fn multi_count_hunting_has_a_high_large_step_rate() {
+    let torque: Vec<i32> = (0..1000)
+        .map(|k| if k % 2 == 0 { -13 } else { -8 })
+        .collect();
+    let m = standstill_metrics(&rest_of(torque), &regime(), 500, 200);
+    assert!((m.rests[0].large_transitions_per_s - m.rests[0].transitions_per_s).abs() < 1e-9);
+    assert!(m.rests[0].large_transitions_per_s > 900.0, "{m:?}");
+    assert!((m.worst_large_transitions_per_s - m.rests[0].large_transitions_per_s).abs() < 1e-9);
+}
+
+#[test]
+fn a_spike_in_the_settle_prefix_changes_neither_rate() {
+    let clean = standstill_metrics(&capture(false), &regime(), 500, 200);
+    let spiked = standstill_metrics(&capture(true), &regime(), 500, 200);
+    assert_eq!(clean, spiked);
+}
+
+#[test]
+fn a_series_without_timestamps_uses_the_fallback_period() {
+    let torque: Vec<i32> = (0..1000).map(|k| if k % 2 == 0 { 0 } else { 1 }).collect();
+    let mut s = rest_of(torque);
+    s.t_s.clear();
+    let m = standstill_metrics(&s, &regime(), 500, 200);
+    assert!(
+        (m.rests[0].transitions_per_s - 1000.0).abs() < 1e-6,
+        "{m:?}"
+    );
+}
+
+#[test]
+fn empty_series_has_no_large_transition_rate() {
+    let m = standstill_metrics(&ChannelSeries::default(), &regime(), 500, 200);
+    assert_eq!(m.worst_large_transitions_per_s, 0.0);
 }
