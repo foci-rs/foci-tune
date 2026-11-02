@@ -702,6 +702,8 @@ export const postKill = () => request<KillResponse>("POST", "/api/kill", undefin
 export const postFirmwareRestart = () =>
   request<{ ok: true }>("POST", "/api/firmware-restart");
 
+export const postHome = () => request<{ ok: true }>("POST", "/api/home");
+
 export const getSessions = () => request<SessionView[]>("GET", "/api/sessions");
 
 export const getSession = (id: SessionId) =>

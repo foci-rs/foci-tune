@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import type { PrinterView } from "@/api";
+import { useState } from "react";
+import { ApiRequestError, postHome, type PrinterView } from "@/api";
 import { useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
 import { formatBytes } from "@/units";
@@ -24,6 +25,20 @@ export function Header() {
       : klippy === "shutdown" || klippy === "error"
         ? "text-red-400"
         : "text-muted-foreground";
+
+  const [homing, setHoming] = useState(false);
+  const [homeError, setHomeError] = useState<string | null>(null);
+  const home = () => {
+    setHoming(true);
+    setHomeError(null);
+    postHome().then(
+      () => setHoming(false),
+      (e: unknown) => {
+        setHoming(false);
+        setHomeError(e instanceof ApiRequestError ? e.message : "request failed");
+      },
+    );
+  };
 
   const confirm = useConfirmClick(kill);
   const onKill = killUnconfirmed ? kill : confirm.click;
@@ -65,6 +80,12 @@ export function Header() {
           <li className={cn("font-mono", klippyClass)}>Klipper {klippy}</li>
           <li className="font-mono text-muted-foreground">
             Homed {printer && printer.moonraker.homed_axes !== "" ? printer.moonraker.homed_axes : "none"}
+          </li>
+          <li className="flex items-center gap-2">
+            <Button disabled={homing} onClick={home}>
+              {homing ? "Homing" : "Home"}
+            </Button>
+            {homeError !== null && <span className="text-amber-400">{homeError}</span>}
           </li>
           <li className="font-mono text-muted-foreground">
             Free {printer?.free_bytes != null ? formatBytes(printer.free_bytes) : "unknown"}

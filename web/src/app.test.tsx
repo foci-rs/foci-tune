@@ -103,6 +103,27 @@ test("an unconfirmed kill shows the banner and re-posts on one click", async () 
   expect(fetchMock.mock.calls.filter(([p]) => p === "/api/kill")).toHaveLength(2);
 });
 
+test("home posts once, disables while homing and shows a refusal", async () => {
+  let release: (r: Response) => void = () => {};
+  respond(printerView());
+  const base = fetchMock.getMockImplementation() as (p: string, i?: RequestInit) => Promise<Response>;
+  fetchMock.mockImplementation(async (path: string, init?: RequestInit) =>
+    path === "/api/home" ? new Promise<Response>((r) => (release = r)) : base(path, init),
+  );
+  await mount();
+  const button = await screen.findByRole("button", { name: "Home" });
+  await act(async () => {
+    fireEvent.click(button);
+  });
+  expect(fetchMock.mock.calls.filter(([p]) => p === "/api/home")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Homing" })).toBeDisabled();
+  await act(async () => {
+    release(new Response(JSON.stringify({ error: "a run is in progress" }), { status: 409 }));
+  });
+  expect(await screen.findByText("a run is in progress")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Home" })).toBeEnabled();
+});
+
 test("firmware restart shows only when klipper is shut down", async () => {
   respond(printerView());
   await mount();
