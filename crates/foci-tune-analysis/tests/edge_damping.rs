@@ -88,7 +88,7 @@ fn frequency_drift_across_edges_is_unassessable_where_the_ensemble_fit_is_merely
     // The decohered mean either over-reports damping or does not fit at all; both are
     // what the per-edge gate protects against.
     assert!(
-        ensemble.as_ref().map_or(true, |f| f.zeta > 0.05),
+        !ensemble.as_ref().is_ok_and(|f| f.zeta <= 0.05),
         "{ensemble:?}"
     );
     assert!(
@@ -153,6 +153,7 @@ fn one_outlier_frequency_does_not_trip_the_spread_limit() {
     let d = edge_damping(&responses, DT).unwrap();
 
     assert!(d.hz_spread < 1.0, "{d:?}");
+    assert!((d.damped_hz - 152.0).abs() < 1.0, "{d:?}");
     assert_eq!(d.fitted, 21);
 }
 

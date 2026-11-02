@@ -236,13 +236,16 @@ pub struct ProbeEnsembles {
 /// Locates feedforward edges in `s` and averages the velocity, torque and position-error
 /// responses over them.
 pub fn probe_ensembles(s: &ChannelSeries) -> ProbeEnsembles {
-    let edges = locate_edges(&s.ff_offset);
+    ensembles_at(s, &locate_edges(&s.ff_offset))
+}
+
+fn ensembles_at(s: &ChannelSeries, edges: &[usize]) -> ProbeEnsembles {
     let torque: Vec<f64> = s.torque.iter().map(|&v| f64::from(v)).collect();
     ProbeEnsembles {
         dt_s: sample_period_s(&s.t_s),
-        velocity: ensemble(&s.velocity_mm_s, &s.ff_offset, &edges),
-        torque: ensemble(&torque, &s.ff_offset, &edges),
-        position_error: ensemble(&s.position_error_um, &s.ff_offset, &edges),
+        velocity: ensemble(&s.velocity_mm_s, &s.ff_offset, edges),
+        torque: ensemble(&torque, &s.ff_offset, edges),
+        position_error: ensemble(&s.position_error_um, &s.ff_offset, edges),
     }
 }
 
@@ -260,8 +263,8 @@ pub fn torque_psd(s: &ChannelSeries) -> Option<Psd> {
 /// Locates feedforward edges in `s` and fits the velocity, torque and position-error
 /// ensembles, plus the torque PSD peak.
 pub fn probe_metrics(s: &ChannelSeries) -> ProbeMetrics {
-    let e = probe_ensembles(s);
     let edges = locate_edges(&s.ff_offset);
+    let e = ensembles_at(s, &edges);
     let responses = edge_responses(&s.velocity_mm_s, &s.ff_offset, &edges);
     ProbeMetrics {
         damping: edge_damping(&responses, e.dt_s),
