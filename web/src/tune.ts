@@ -195,8 +195,11 @@ export function headlineMetric(run: Run, type: RunType): Headline {
       }
       return { label: "velocity zeta", value: fit?.zeta ?? null, unit: "" };
     }
-    case "standstill":
-      return { label: "worst torque sd", value: m?.standstill?.worst_torque_sd ?? null, unit: "raw" };
+    case "standstill": {
+      const rate = m?.standstill?.worst_large_transitions_per_s;
+      const metric = { label: "worst torque sd", value: m?.standstill?.worst_torque_sd ?? null, unit: "raw" };
+      return typeof rate === "number" ? { ...metric, note: `large steps ${formatNumber(rate, 1)}/s` } : metric;
+    }
   }
 }
 

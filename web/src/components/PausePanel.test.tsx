@@ -103,8 +103,16 @@ const series = {
 } as unknown as Series;
 
 const standstill = (sds: (number | null)[]) => ({
-  rests: sds.map((torque_sd, index) => ({ index, samples: 100, torque_sd, position_pp_um: 1 })),
+  rests: sds.map((torque_sd, index) => ({
+    index,
+    samples: 100,
+    torque_sd,
+    position_pp_um: 1,
+    transitions_per_s: null,
+    large_transitions_per_s: null,
+  })),
   worst_torque_sd: Math.max(...sds.filter((x): x is number => x !== null)),
+  worst_large_transitions_per_s: null,
 });
 
 beforeEach(() => {

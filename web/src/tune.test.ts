@@ -156,9 +156,14 @@ describe("headlineMetric", () => {
 
   test("standstill: worst torque sd", () => {
     const r = run({ Standstill: { rests: 8, dwell_s: 3 } }, {
-      standstill: { rests: [], worst_torque_sd: 41.5 },
+      standstill: { rests: [], worst_torque_sd: 41.5, worst_large_transitions_per_s: null },
     });
     expect(headlineMetric(r, "standstill")).toMatchObject({ value: 41.5 });
+    const withRate = run({ Standstill: { rests: 8, dwell_s: 3 } }, {
+      standstill: { rests: [], worst_torque_sd: 41.5, worst_large_transitions_per_s: 12.34 },
+    });
+    expect(headlineMetric(withRate, "standstill")).toMatchObject({ value: 41.5, note: "large steps 12.3/s" });
+    expect(headlineMetric(r, "standstill").note).toBeUndefined();
   });
 
   test("no metrics gives no value", () => {

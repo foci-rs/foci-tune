@@ -11,6 +11,7 @@ import {
   recommendedGain,
   driftCheckRunning,
   rungView,
+  gatesBody,
   stepSummary,
 } from "./guided";
 import { expectedProbeEdges, PROBE_MIN_EDGES } from "./tune";
@@ -486,4 +487,30 @@ describe("a paused step", () => {
     t.steps[0].standstill_gate_off = 5;
     expect(rungView(t, 0)[0].verdict).toContain("Standstill gate off");
   });
+});
+
+describe("gatesBody", () => {
+  test("posts no factor while the gate is off and the factor while on", () => {
+    const form = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
+    expect(gatesBody(form)).toEqual({ damping_floor: 0.02, marginal: 0.025, standstill_factor: null });
+    expect(gatesBody({ ...form, standstill_gate: true })).toEqual({
+      damping_floor: 0.02,
+      marginal: 0.025,
+      standstill_factor: 2,
+    });
+  });
+});
+
+test("a setup without a standstill factor labels every rung gate-off once", () => {
+  const off = tune("AwaitingChoice", [step({ standstill_gate_off: 123 })]);
+  off.setup.gates.standstill_factor = null;
+  for (const row of rungView(off, 0)) expect(row.verdict.match(/\(Standstill gate off\)/g)).toHaveLength(1);
+
+  const setupOnly = tune("AwaitingChoice", [step()]);
+  setupOnly.setup.gates.standstill_factor = null;
+  for (const row of rungView(setupOnly, 0)) expect(row.verdict.match(/\(Standstill gate off\)/g)).toHaveLength(1);
+
+  const on = tune("AwaitingChoice", [step({ standstill_gate_off: null })]);
+  on.setup.gates.standstill_factor = 2;
+  for (const row of rungView(on, 0)) expect(row.verdict).not.toContain("Standstill gate off");
 });

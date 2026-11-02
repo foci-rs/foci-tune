@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiRequestError, postTune, type Pattern, type PrinterView, type StepperView, type Tune, type TuneSetup } from "@/api";
-import { defaultProbeSpeed } from "@/guided";
+import { defaultProbeSpeed, gatesBody, type GatesForm } from "@/guided";
 import {
   bedLimits,
   browserStorage,
@@ -26,7 +26,7 @@ const HINT_CLASS = {
   warning: "rounded border border-red-500/60 px-2 py-1 text-xs text-red-300",
 } as const;
 
-const DEFAULT_GATES = { damping_floor: 0.02, marginal: 0.025, standstill_factor: 2 };
+const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
 const DEFAULT_SPEEDS = [50, 195, 400];
 
 function errorText(e: unknown): string {
@@ -143,7 +143,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
       probe,
       tracking_strokes: trackingStrokes,
       standstill,
-      gates,
+      gates: gatesBody(gates),
       include_marginal: includeMarginal,
     };
     setBusy(true);
@@ -161,10 +161,12 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   const trackingSetup = asSetup({ speeds_mm_s: speeds.ok ? speeds.values : [], strokes: trackingStrokes }, "tracking");
   const standstillSetup = asSetup(standstill, "standstill");
 
-  const gateField = (label: string, key: keyof typeof gates, step: number) => (
+  const gateField = (label: string, key: "damping_floor" | "marginal" | "standstill_factor", step: number) => (
     <label className="flex flex-col text-xs text-muted-foreground">
       {label}
-      <NumberField label={label} value={gates[key]} step={step} disabled={busy} onValue={(v) => setGates((g) => ({ ...g, [key]: v }))} />
+      <NumberField label={label} value={gates[key]} step={step}
+        disabled={busy || (key === "standstill_factor" && !gates.standstill_gate)}
+        onValue={(v) => setGates((g) => ({ ...g, [key]: v }))} />
     </label>
   );
 
@@ -237,6 +239,15 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
           <div className="flex flex-wrap items-end gap-3">
             {gateField("Damping floor", "damping_floor", 0.01)}
             {gateField("Marginal below", "marginal", 0.01)}
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={gates.standstill_gate}
+                disabled={busy}
+                onChange={(e) => setGates((g) => ({ ...g, standstill_gate: e.target.checked }))}
+              />
+              Standstill gate
+            </label>
             {gateField("Standstill factor", "standstill_factor", 0.5)}
             <label className="flex items-center gap-2 text-sm">
               <input

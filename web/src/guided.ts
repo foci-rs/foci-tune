@@ -5,6 +5,7 @@ import type {
   InadmissibleReason,
   RungNote,
   Tune,
+  TuneGates,
   TuneAxis,
   TuneStep,
   TuneState,
@@ -160,6 +161,21 @@ function notAssessedText(index: number, pause: [number, Pause] | null, halt: [nu
   return "Not assessed";
 }
 
+export interface GatesForm {
+  damping_floor: number;
+  marginal: number;
+  standstill_gate: boolean;
+  standstill_factor: number;
+}
+
+export function gatesBody(form: GatesForm): TuneGates {
+  return {
+    damping_floor: form.damping_floor,
+    marginal: form.marginal,
+    standstill_factor: form.standstill_gate ? form.standstill_factor : null,
+  };
+}
+
 export function rungView(tune: Tune, step: number): RungView[] {
   const s = tune.steps[step];
   const assessment = usableAssessment(s);
@@ -187,7 +203,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
     else text = "Pending";
 
-    if (s.standstill_gate_off !== null) text = `${text} (Standstill gate off)`;
+    if (s.standstill_gate_off !== null || tune.setup.gates.standstill_factor === null) text = `${text} (Standstill gate off)`;
 
     let recommended: RecommendationKind | null = null;
     if (choice !== undefined && "Measured" in choice && choice.Measured.rung === index) recommended = "measured";

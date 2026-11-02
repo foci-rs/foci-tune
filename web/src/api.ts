@@ -274,11 +274,14 @@ export interface RestRecord {
   samples: number;
   torque_sd: number | null;
   position_pp_um: number | null;
+  transitions_per_s: number | null;
+  large_transitions_per_s: number | null;
 }
 
 export interface StandstillRecord {
   rests: RestRecord[];
   worst_torque_sd: number | null;
+  worst_large_transitions_per_s: number | null;
 }
 
 export interface ChannelMetrics {
@@ -413,7 +416,7 @@ export interface TuneGains {
 export interface TuneGates {
   damping_floor: number;
   marginal: number;
-  standstill_factor: number;
+  standstill_factor: number | null;
 }
 
 export interface TuneSetup {

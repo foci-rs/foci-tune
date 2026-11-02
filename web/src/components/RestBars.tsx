@@ -5,6 +5,11 @@ import type { OverlayRun } from "./TracePanels";
 const HEIGHT = 160;
 const BAR = 10;
 const GAP = 2;
+const REST_ROWS = [
+  { label: "torque sd", key: "torque_sd" },
+  { label: "transitions /s", key: "transitions_per_s" },
+  { label: "large steps /s", key: "large_transitions_per_s" },
+] as const;
 
 /** Torque standard deviation per rest, one bar per checked run in each rest group. */
 export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
@@ -42,6 +47,7 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
         <thead className="text-muted-foreground">
           <tr>
             <th className="pr-3 text-left font-medium">Run</th>
+            <th className="pr-3 text-left font-medium">Metric</th>
             {Array.from({ length: rests }, (_, k) => (
               <th key={k} className="pr-3 text-right font-medium">
                 {k + 1}
@@ -50,19 +56,26 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
           </tr>
         </thead>
         <tbody className="font-mono">
-          {runs.map((r) => (
-            <tr key={r.id}>
-              <td className="pr-3">
-                <span aria-hidden="true" className="mr-1 inline-block size-2 rounded-sm" style={{ background: r.color }} />
-                {r.label}
-              </td>
-              {Array.from({ length: rests }, (_, k) => (
-                <td key={k} className="pr-3 text-right">
-                  {formatNumber(r.value[k]?.torque_sd ?? null, 1)}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {runs.flatMap((r) =>
+            REST_ROWS.map((row, i) => (
+              <tr key={`${r.id}-${row.label}`}>
+                {i === 0 && (
+                  <td className="pr-3" rowSpan={REST_ROWS.length}>
+                    <span aria-hidden="true" className="mr-1 inline-block size-2 rounded-sm" style={{ background: r.color }} />
+                    {r.label}
+                  </td>
+                )}
+                <th scope="row" className="pr-3 text-left font-normal text-muted-foreground">
+                  {row.label}
+                </th>
+                {Array.from({ length: rests }, (_, k) => (
+                  <td key={k} className="pr-3 text-right">
+                    {formatNumber(r.value[k]?.[row.key] ?? null, 1)}
+                  </td>
+                ))}
+              </tr>
+            )),
+          )}
         </tbody>
       </table>
     </div>

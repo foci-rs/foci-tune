@@ -19,7 +19,7 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
       probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
       tracking_strokes: 2,
       standstill: { rests: 3, dwell_s: 2 },
-      gates: { damping_floor: 0.05, marginal: 0.08, standstill_factor: 2 },
+      gates: { damping_floor: 0.05, marginal: 0.08, standstill_factor: null },
       include_marginal: false,
     },
     snapshot: [gains, filters],
