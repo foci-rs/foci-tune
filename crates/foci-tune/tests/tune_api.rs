@@ -189,21 +189,21 @@ async fn gates_that_would_disable_a_check_are_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tune_without_a_standstill_factor_stores_none_and_one_with_it_keeps_it() {
-    let rig = rig().await;
-    let (app, _) = app(&rig);
+    let rig1 = self::rig().await;
+    let (app1, _) = self::app(&rig1);
 
-    let reply = post(&app, "/api/tunes", setup_body(&[50.0])).await;
+    let reply = post(&app1, "/api/tunes", setup_body(&[50.0])).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
     assert_eq!(
         reply.json()["setup"]["gates"]["standstill_factor"],
         Value::Null
     );
 
-    let rig = rig().await;
-    let (app, _) = app(&rig);
+    let rig2 = self::rig().await;
+    let (app2, _) = self::app(&rig2);
     let mut body = setup_body(&[50.0]);
     body["gates"]["standstill_factor"] = json!(2.0);
-    let reply = post(&app, "/api/tunes", body).await;
+    let reply = post(&app2, "/api/tunes", body).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
     assert_eq!(reply.json()["setup"]["gates"]["standstill_factor"], 2.0);
 }
