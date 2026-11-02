@@ -38,7 +38,7 @@ export function fallbackPattern(limits: Limits): Pattern {
 
 export const DEFAULT_PARAMETERS: { [K in RunType]: Extract<RunSetup, { type: K }>["parameters"] } = {
   tracking: { speeds_mm_s: [50, 195, 400], strokes: 8 },
-  probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
+  probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 9 },
   standstill: { rests: 8, dwell_s: 3 },
 };
 

@@ -6,6 +6,7 @@ import {
   assignColors,
   buildLadderRequest,
   clampPoint,
+  DEFAULT_PARAMETERS,
   defaultLadderValues,
   headlineMetric,
   highlightChanges,
@@ -614,6 +615,18 @@ describe("probe edge hint", () => {
     expect(h.tone).toBe("ok");
     expect(h.text).toContain("Expected about 49 edges");
     expect(h.text).toContain("at least 20");
+  });
+
+  test("the default probe parameters on a 100 mm diagonal need no caution", () => {
+    const h = probeEdgeHint({
+      pattern: diag(100),
+      kinematics: "corexy",
+      speedMmS: DEFAULT_PARAMETERS.probe.speed_mm_s,
+      segmentsBetweenToggles: DEFAULT_PARAMETERS.probe.segments_between_toggles,
+      strokes: DEFAULT_PARAMETERS.probe.strokes,
+      maxVelocity: 500,
+    })!;
+    expect(h.tone).toBe("ok");
   });
 
   test("between 20 and 39 is a caution naming the strokes that reach 40", () => {
