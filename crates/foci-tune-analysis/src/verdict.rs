@@ -145,11 +145,9 @@ pub struct LadderAssessment {
     pub runner_up: Option<usize>,
     /// Ascending indices of the rungs statistically tied with the best, the best included; empty
     /// when no rung is score-eligible.
-    #[serde(default)]
     pub tie: Vec<usize>,
     /// Relative spread (sample sd over median) of the p99 per speed, pooled by RMS over the
     /// score-eligible rungs; `None` per speed with fewer than two repeats or no eligible rung.
-    #[serde(default)]
     pub spreads: Vec<Option<f64>>,
 }
 
