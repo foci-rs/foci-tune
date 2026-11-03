@@ -63,6 +63,23 @@ foci-tune --moonraker-url http://127.0.0.1:7125 --listen 0.0.0.0:7130
 foci-tune --check
 ```
 
+### UI development
+
+The UI hot-reloads under Vite without rebuilding the Rust binary. Start the backend once against a
+simulated printer, then the dev server, which proxies `/api` (including the event socket) to it:
+
+```sh
+cargo run -p foci-tune -- --fake        # debug build only; moves nothing
+cd web && npm run dev
+```
+
+`FOCI_TUNE_API` points the proxy elsewhere, for example at a real service. Buttons in the dev UI then
+act on that printer, so use it for read-only screens.
+
+```sh
+FOCI_TUNE_API=http://printer.local:7130 npm run dev
+```
+
 ## Install
 
 The service drives printer motion. The UI requires the operator to start every run, and Kill is
