@@ -27,7 +27,6 @@ export function Header() {
   return (
     <>
       <header className="sticky top-0 z-50 flex h-(--header-height) items-center gap-x-6 border-b bg-background px-4 text-sm">
-        <span className="font-medium tracking-wide">foci-tune</span>
         <span className={cn("font-mono", klippyClass)}>Klipper {klippy}</span>
         {!connected && <span className="text-amber-400">Event stream disconnected</span>}
         <div className="ml-auto flex items-center gap-3">
