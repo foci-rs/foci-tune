@@ -215,8 +215,15 @@ fn a_tune_record_without_the_pause_fields_loads_with_defaults() {
         rung.as_object_mut().unwrap().remove("waived");
         rung.as_object_mut().unwrap().remove("superseded");
     }
-    step["assessment"] =
-        serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"]});
+    step["assessment"] = serde_json::json!({
+        "verdicts": [],
+        "medians": [],
+        "halt": [1, "DampingUnassessable"],
+        "best": null,
+        "runner_up": null,
+        "tie": [],
+        "spreads": [],
+    });
 
     let tune: Tune = serde_json::from_value(v).unwrap();
 
