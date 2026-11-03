@@ -526,7 +526,12 @@ export interface Recommended {
   extend: TuneExtension | null;
 }
 
-export type DriftVerdict = "Steady" | "Drifted" | "Unassessed";
+/**
+ * Whether the seed-rung rerun matches the first run at one speed. `Drifted`: it moved by more than
+ * twice the speed's relative spread. `Unassessed`: the first value, the rerun or the spread is
+ * absent. `Steady`: neither.
+ */
+export type DriftVerdict ="Steady" | "Drifted" | "Unassessed";
 
 export interface TuneDrift {
   metric: string;
