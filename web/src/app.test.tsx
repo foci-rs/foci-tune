@@ -92,6 +92,23 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(killButton.compareDocumentPosition(homeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
+test("the kill button stays an icon: a tooltip explains the double click and the first click inverts it", async () => {
+  respond(printerView());
+  await mount();
+  const button = await screen.findByRole("button", { name: "Kill" });
+  expect(button).toHaveAttribute("aria-pressed", "false");
+  fireEvent.focus(button);
+  const tip = await screen.findByRole("tooltip");
+  expect(tip).toHaveTextContent("Emergency stop");
+  expect(tip).toHaveTextContent("twice");
+
+  fireEvent.click(button);
+
+  const armed = screen.getByRole("button", { name: "Press again to kill" });
+  expect(armed).toHaveAttribute("aria-pressed", "true");
+  expect(armed).toHaveTextContent("");
+});
+
 test("kill needs a second click and posts once", async () => {
   respond(printerView(), () => new Response(JSON.stringify({ run: null, state: "killed" })));
   await mount();

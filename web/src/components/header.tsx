@@ -2,7 +2,7 @@ import { mdiCarBrakeAlert, mdiHome } from "@mdi/js";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ApiRequestError, postHome, type PrinterView } from "@/api";
-import { useConfirmClick } from "@/confirm";
+import { CONFIRM_WINDOW_MS, useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -170,21 +170,29 @@ export function Header() {
             {killStatus === "killed" && !killUnconfirmed && (
               <span className="font-mono text-red-400">Stop confirmed</span>
             )}
-            <button
-              type="button"
-              aria-label={killLabel}
-              title="Emergency stop"
-              onClick={onKill}
-              className={cn(
-                "flex h-9 items-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors focus-visible:outline-2",
-                idle ? "text-red-400 hover:bg-accent" : "border-red-500 bg-red-600 text-white hover:bg-red-500",
-              )}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
-                <path d={mdiCarBrakeAlert} />
-              </svg>
-              {!idle && <span>{killLabel}</span>}
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={killLabel}
+                  aria-pressed={!idle}
+                  onClick={onKill}
+                  className={cn(
+                    "flex h-9 items-center rounded-md border px-2 transition-colors focus-visible:outline-2",
+                    idle ? "text-red-400 hover:bg-accent" : "border-red-500 bg-red-600 text-white hover:bg-red-500",
+                  )}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
+                    <path d={mdiCarBrakeAlert} />
+                  </svg>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" align="end">
+                {idle
+                  ? "Emergency stop. Click twice to confirm."
+                  : `Click again within ${CONFIRM_WINDOW_MS / 1000} seconds to stop.`}
+              </TooltipContent>
+            </Tooltip>
             <button
               type="button"
               aria-label={homing ? "Homing" : "Home"}
