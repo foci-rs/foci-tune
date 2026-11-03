@@ -1,10 +1,12 @@
 import { mdiCarBrakeAlert, mdiHome } from "@mdi/js";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ApiRequestError, postHome, type PrinterView } from "@/api";
 import { useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { Dot } from "./ui";
 
 export function homedTone(axes: string): "full" | "partial" | "none" {
@@ -133,64 +135,81 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-50 flex h-(--header-height) items-center gap-x-6 border-b bg-background px-4 text-sm">
-        <ul aria-label="Connections" className="flex items-center gap-x-4">
-          <StatusItem
-            label="Moonraker"
-            tone={tones.moonraker}
-            state={printer?.moonraker.connected ? "connected" : "not connected"}
-            details={details.moonraker}
-          />
-          <StatusItem label="Klipper" tone={tones.klipper} state={klippy} details={details.klipper} />
-          <StatusItem
-            label="FOCI"
-            tone={tones.foci}
-            state={`${boards.filter((b) => b.open).length} of ${boards.length} boards open`}
-            details={details.foci}
-          />
-          <StatusItem
-            label="Tracing"
-            tone={tones.tracing}
-            state={`${boards.filter((b) => b.open && b.trace_mode === "streaming").length} of ${boards.length} boards streaming`}
-            details={details.tracing}
-          />
-        </ul>
-        {!connected && <span className="text-amber-400">Event stream disconnected</span>}
-        <div className="ml-auto flex items-center gap-3">
-          {homeError !== null && <span className="text-amber-400">{homeError}</span>}
-          {killStatus === "killed" && !killUnconfirmed && (
-            <span className="font-mono text-red-400">Stop confirmed</span>
-          )}
-          <button
-            type="button"
-            aria-label={killLabel}
-            title="Emergency stop"
-            onClick={onKill}
-            className={cn(
-              "flex h-9 items-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors focus-visible:outline-2",
-              idle ? "text-red-400 hover:bg-accent" : "border-red-500 bg-red-600 text-white hover:bg-red-500",
+      <header className="sticky top-0 z-50 flex h-(--header-height) items-center border-b bg-background text-sm">
+        <div className="flex h-full w-(--sidebar-width) shrink-0 items-center border-r p-2">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton size="lg" asChild>
+                <Link to="/printer">
+                  <img src="/foci-icon.svg" alt="" className="size-8 rounded-lg" />
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">FOCI</span>
+                    <span className="truncate text-xs text-muted-foreground">Motion Tuning</span>
+                  </div>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </div>
+        <div className="flex flex-1 items-center gap-x-6 px-4">
+          <ul aria-label="Connections" className="flex items-center gap-x-4">
+            <StatusItem
+              label="Moonraker"
+              tone={tones.moonraker}
+              state={printer?.moonraker.connected ? "connected" : "not connected"}
+              details={details.moonraker}
+            />
+            <StatusItem label="Klipper" tone={tones.klipper} state={klippy} details={details.klipper} />
+            <StatusItem
+              label="FOCI"
+              tone={tones.foci}
+              state={`${boards.filter((b) => b.open).length} of ${boards.length} boards open`}
+              details={details.foci}
+            />
+            <StatusItem
+              label="Tracing"
+              tone={tones.tracing}
+              state={`${boards.filter((b) => b.open && b.trace_mode === "streaming").length} of ${boards.length} boards streaming`}
+              details={details.tracing}
+            />
+          </ul>
+          {!connected && <span className="text-amber-400">Event stream disconnected</span>}
+          <div className="ml-auto flex items-center gap-3">
+            {homeError !== null && <span className="text-amber-400">{homeError}</span>}
+            {killStatus === "killed" && !killUnconfirmed && (
+              <span className="font-mono text-red-400">Stop confirmed</span>
             )}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
-              <path d={mdiCarBrakeAlert} />
-            </svg>
-            {!idle && <span>{killLabel}</span>}
-          </button>
-          <button
-            type="button"
-            aria-label={homing ? "Homing" : "Home"}
-            title={`Home all axes (homed: ${homedAxes === "" ? "none" : homedAxes})`}
-            disabled={homing || klippy !== "ready"}
-            onClick={home}
-            className={cn(
-              "flex h-9 items-center rounded-md border px-2 transition-colors hover:bg-accent focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50",
-              homedClass,
-            )}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
-              <path d={mdiHome} />
-            </svg>
-          </button>
+            <button
+              type="button"
+              aria-label={killLabel}
+              title="Emergency stop"
+              onClick={onKill}
+              className={cn(
+                "flex h-9 items-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors focus-visible:outline-2",
+                idle ? "text-red-400 hover:bg-accent" : "border-red-500 bg-red-600 text-white hover:bg-red-500",
+              )}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
+                <path d={mdiCarBrakeAlert} />
+              </svg>
+              {!idle && <span>{killLabel}</span>}
+            </button>
+            <button
+              type="button"
+              aria-label={homing ? "Homing" : "Home"}
+              title={`Home all axes (homed: ${homedAxes === "" ? "none" : homedAxes})`}
+              disabled={homing || klippy !== "ready"}
+              onClick={home}
+              className={cn(
+                "flex h-9 items-center rounded-md border px-2 transition-colors hover:bg-accent focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50",
+                homedClass,
+              )}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
+                <path d={mdiHome} />
+              </svg>
+            </button>
+          </div>
         </div>
       </header>
       {killUnconfirmed && (

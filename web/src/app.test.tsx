@@ -73,9 +73,10 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(await within(header).findByText("Klipper ready")).toBeInTheDocument();
   expect(within(header).getByRole("button", { name: "Kill" })).toBeInTheDocument();
   expect(header).not.toHaveTextContent("Homed");
-  expect(screen.getByRole("link", { name: /FOCI/ })).toHaveAttribute("href", "/printer");
+  expect(within(header).getByRole("link", { name: /FOCI/ })).toHaveAttribute("href", "/printer");
 
   const nav = screen.getByRole("navigation", { name: "Pages" });
+  expect(within(nav).queryByRole("link", { name: /FOCI/ })).toBeNull();
   expect(within(nav).getByRole("link", { name: "Printer" })).toBeInTheDocument();
   expect(within(nav).getByRole("link", { name: "Tune" })).toBeInTheDocument();
   expect(within(nav).getByRole("link", { name: "Sessions" })).toBeInTheDocument();

@@ -7,7 +7,6 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -25,21 +24,6 @@ export function AppSidebar() {
       collapsible="none"
       className="sticky top-(--header-height) h-[calc(100svh-var(--header-height))] shrink-0 border-r"
     >
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <Link to="/printer">
-                <img src="/foci-icon.svg" alt="" className="size-8 rounded-lg" />
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">FOCI</span>
-                  <span className="truncate text-xs text-muted-foreground">Motion Tuning</span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
           <nav aria-label="Pages">
