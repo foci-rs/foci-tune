@@ -72,6 +72,12 @@ pub struct RungVerdict {
     pub score: Option<f64>,
     /// Index into the speed vector of the speed that sets `score`; `Some` iff `score` is.
     pub deciding_speed: Option<usize>,
+    /// Score minus the best rung's score, in um; `Some` iff `score` is, and `Some(0.0)` for the
+    /// best rung.
+    pub gap: Option<f64>,
+    /// Two-sigma tie tolerance of the comparison against the best rung, in um; `None` for the
+    /// best rung and when the spreads are unknown.
+    pub tolerance: Option<f64>,
 }
 
 /// Why assessment of the ladder stopped.
@@ -137,6 +143,50 @@ pub struct LadderAssessment {
     pub best: Option<usize>,
     /// Index of the score-eligible rung with the second-lowest score; ties go to the lower index.
     pub runner_up: Option<usize>,
+    /// Ascending indices of the rungs statistically tied with the best, the best included; empty
+    /// when no rung is score-eligible.
+    #[serde(default)]
+    pub tie: Vec<usize>,
+    /// Relative spread (sample sd over median) of the p99 per speed, pooled by RMS over the
+    /// score-eligible rungs; `None` per speed with fewer than two repeats or no eligible rung.
+    #[serde(default)]
+    pub spreads: Vec<Option<f64>>,
+}
+
+/// Two-sigma tolerance of the difference between two single measurements.
+///
+/// `s_b` and `s_r` are relative spreads and `score_b` and `score_r` the scores they apply to.
+pub fn pair_tolerance(s_b: f64, score_b: f64, s_r: f64, score_r: f64) -> f64 {
+    2.0 * (s_b * score_b).hypot(s_r * score_r)
+}
+
+fn relative_spreads(
+    rungs: &[Vec<RepeatResult>],
+    repeats: usize,
+    eligible: &[usize],
+    n_speeds: usize,
+) -> Vec<Option<f64>> {
+    if repeats < 2 || eligible.is_empty() {
+        return vec![None; n_speeds];
+    }
+    (0..n_speeds)
+        .map(|s| {
+            let sum_sq: f64 = eligible
+                .iter()
+                .map(|&i| {
+                    let values: Vec<f64> = rungs[i][..repeats]
+                        .iter()
+                        .filter_map(|r| r.p99_by_speed.get(s).copied().flatten())
+                        .collect();
+                    let mean = values.iter().sum::<f64>() / values.len() as f64;
+                    let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                        / (values.len() - 1) as f64;
+                    (var.sqrt() / median(&values)).powi(2)
+                })
+                .sum();
+            Some((sum_sq / eligible.len() as f64).sqrt())
+        })
+        .collect()
 }
 
 fn all_some(values: impl Iterator<Item = Option<f64>>) -> Option<Vec<f64>> {
@@ -333,6 +383,31 @@ pub fn assess_ladder_at(
     let best = ranked.first().map(|r| r.1);
     let runner_up = ranked.get(1).map(|r| r.1);
 
+    let spreads = relative_spreads(rungs, repeats, &eligible, n_speeds);
+    let mut tie = Vec::new();
+    if let Some(b) = best {
+        let score_b = ranked[0].0;
+        let dec_b = verdicts[b].deciding_speed;
+        for &(score_r, r) in &ranked {
+            if r == b {
+                verdicts[r].gap = Some(0.0);
+                tie.push(r);
+                continue;
+            }
+            let gap = score_r - score_b;
+            let spread_at = |d: Option<usize>| d.and_then(|d| spreads.get(d).copied().flatten());
+            let tolerance = spread_at(dec_b)
+                .zip(spread_at(verdicts[r].deciding_speed))
+                .map(|(sb, sr)| pair_tolerance(sb, score_b, sr, score_r));
+            verdicts[r].gap = Some(gap);
+            verdicts[r].tolerance = tolerance;
+            if tolerance.is_some_and(|t| gap <= t) {
+                tie.push(r);
+            }
+        }
+        tie.sort_unstable();
+    }
+
     LadderAssessment {
         verdicts,
         medians,
@@ -340,5 +415,7 @@ pub fn assess_ladder_at(
         pause,
         best,
         runner_up,
+        tie,
+        spreads,
     }
 }

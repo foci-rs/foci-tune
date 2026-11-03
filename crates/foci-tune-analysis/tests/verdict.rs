@@ -1,7 +1,7 @@
 use foci_tune_analysis::ladder::RungOutcome;
 use foci_tune_analysis::verdict::{
     Gates, Halt, InadmissibleReason, LadderAssessment, Pause, RepeatResult, RungVerdict,
-    UnscoredReason, Waivers, assess_ladder, assess_ladder_at, assess_ladder_with,
+    UnscoredReason, Waivers, assess_ladder, assess_ladder_at, assess_ladder_with, pair_tolerance,
 };
 
 fn gated() -> Gates {
@@ -437,7 +437,7 @@ fn the_old_entry_point_folds_a_pause_into_a_halt() {
 
 #[test]
 fn an_assessment_without_a_pause_field_deserialises() {
-    let v = serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"], "best": null, "runner_up": null});
+    let v = serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"], "best": null, "runner_up": null, "tie": [], "spreads": []});
     let a: LadderAssessment = serde_json::from_value(v).unwrap();
     assert_eq!(a.halt, Some((1, Halt::DampingUnassessable)));
     assert_eq!(a.pause, None);
@@ -533,4 +533,191 @@ fn gates_without_a_standstill_factor_deserialise_as_off() {
     with_value["standstill_factor"] = serde_json::json!(2.0);
     let g: Gates = serde_json::from_value(with_value).unwrap();
     assert_eq!(g.standstill_factor, Some(2.0));
+}
+
+fn spread_rung(p99_fast: f64, e: f64) -> Vec<RepeatResult> {
+    [-e, 0.0, e]
+        .iter()
+        .map(|o| rep(0.2, &[Some(40.0), Some(p99_fast * (1.0 + o))], Some(1.0)))
+        .collect()
+}
+
+#[test]
+fn pair_tolerance_is_two_sigma_of_the_difference() {
+    let t = pair_tolerance(0.02, 100.0, 0.01, 200.0);
+    assert!((t - 2.0 * (2.0f64.powi(2) + 2.0f64.powi(2)).sqrt()).abs() < 1e-12);
+}
+
+#[test]
+fn a_gap_inside_the_pair_tolerance_is_a_tie() {
+    let a = assess_ladder(
+        &[spread_rung(100.0, 0.01), spread_rung(101.0, 0.01)],
+        3,
+        &Gates::default(),
+        false,
+    );
+    assert!((a.spreads[1].unwrap() - 0.01).abs() < 1e-12);
+    assert_eq!(a.verdicts[0].gap, Some(0.0));
+    assert_eq!(a.verdicts[0].tolerance, None);
+    assert!((a.verdicts[1].gap.unwrap() - 1.0).abs() < 1e-9);
+    assert!((a.verdicts[1].tolerance.unwrap() - 2.0 * 1.0f64.hypot(1.01)).abs() < 1e-9);
+    assert_eq!(a.tie, vec![0, 1]);
+}
+
+#[test]
+fn a_gap_outside_the_pair_tolerance_is_not_a_tie() {
+    let a = assess_ladder(
+        &[spread_rung(100.0, 0.01), spread_rung(110.0, 0.01)],
+        3,
+        &Gates::default(),
+        false,
+    );
+    assert!((a.verdicts[1].tolerance.unwrap() - 2.0 * 1.0f64.hypot(1.1)).abs() < 1e-9);
+    assert_eq!(a.tie, vec![0]);
+    assert_eq!(a.runner_up, Some(1));
+}
+
+fn two_speed_rung(p0: f64, e0: f64, p1: f64, e1: f64) -> Vec<RepeatResult> {
+    [-1.0, 0.0, 1.0]
+        .iter()
+        .map(|k| {
+            rep(
+                0.2,
+                &[Some(p0 * (1.0 + k * e0)), Some(p1 * (1.0 + k * e1))],
+                Some(1.0),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn noise_at_a_speed_that_decides_neither_rung_leaves_the_tie_alone() {
+    let quiet = vec![
+        two_speed_rung(40.0, 0.0, 100.0, 0.01),
+        two_speed_rung(40.0, 0.0, 104.0, 0.01),
+    ];
+    let noisy = vec![
+        two_speed_rung(40.0, 0.5, 100.0, 0.01),
+        two_speed_rung(40.0, 0.5, 104.0, 0.01),
+    ];
+    let a = assess_ladder(&quiet, 3, &Gates::default(), false);
+    let b = assess_ladder(&noisy, 3, &Gates::default(), false);
+    assert_eq!(b.verdicts[1].deciding_speed, Some(1));
+    assert_eq!(a.verdicts[1].tolerance, b.verdicts[1].tolerance);
+    assert_eq!(a.tie, b.tie);
+    assert!(b.spreads[0].unwrap() > a.spreads[0].unwrap());
+}
+
+#[test]
+fn noise_at_a_deciding_speed_widens_the_tolerance() {
+    let a = assess_ladder(
+        &[spread_rung(100.0, 0.01), spread_rung(104.0, 0.01)],
+        3,
+        &Gates::default(),
+        false,
+    );
+    let b = assess_ladder(
+        &[spread_rung(100.0, 0.03), spread_rung(104.0, 0.03)],
+        3,
+        &Gates::default(),
+        false,
+    );
+    assert!(b.verdicts[1].tolerance.unwrap() > a.verdicts[1].tolerance.unwrap());
+    assert_eq!(a.tie, vec![0]);
+    assert_eq!(b.tie, vec![0, 1]);
+}
+
+#[test]
+fn rungs_decided_by_different_speeds_use_each_speeds_spread() {
+    let r0 = spread_rung(100.0, 0.03);
+    let r1: Vec<RepeatResult> = (0..3)
+        .map(|_| rep(0.2, &[Some(103.0), Some(50.0)], Some(1.0)))
+        .collect();
+    let a = assess_ladder(&[r0, r1], 3, &Gates::default(), false);
+    let s1 = a.spreads[1].unwrap();
+    let expected = pair_tolerance(s1, 100.0, a.spreads[0].unwrap(), 103.0);
+    assert!((a.verdicts[1].tolerance.unwrap() - expected).abs() < 1e-12);
+}
+
+#[test]
+fn a_tie_set_of_three_is_ascending_and_starts_at_the_best() {
+    let a = assess_ladder(
+        &[
+            spread_rung(100.5, 0.02),
+            spread_rung(100.0, 0.02),
+            spread_rung(101.0, 0.02),
+        ],
+        3,
+        &Gates::default(),
+        false,
+    );
+    assert_eq!(a.best, Some(1));
+    assert_eq!(a.tie, vec![0, 1, 2]);
+}
+
+#[test]
+fn one_repeat_has_no_spread_no_tolerance_and_no_tie() {
+    let rungs = vec![
+        rung(0.2, [40.0, 100.0], 1.0, 1),
+        rung(0.2, [40.0, 100.1], 1.0, 1),
+    ];
+    let a = assess_ladder(&rungs, 1, &Gates::default(), false);
+    assert_eq!(a.spreads, vec![None, None]);
+    assert_eq!(a.tie, vec![0]);
+    assert!((a.verdicts[1].gap.unwrap() - 0.1).abs() < 1e-9);
+    assert_eq!(a.verdicts[1].tolerance, None);
+    assert_eq!(a.runner_up, Some(1));
+}
+
+#[test]
+fn identical_repeats_give_zero_spread_and_tie_only_on_equal_scores() {
+    let a = assess_ladder(
+        &[
+            rung(0.2, [40.0, 100.0], 1.0, 3),
+            rung(0.2, [40.0, 100.0], 1.0, 3),
+        ],
+        3,
+        &Gates::default(),
+        false,
+    );
+    assert_eq!(a.spreads[1], Some(0.0));
+    assert_eq!(a.tie, vec![0, 1]);
+    let b = assess_ladder(
+        &[
+            rung(0.2, [40.0, 100.0], 1.0, 3),
+            rung(0.2, [40.0, 100.001], 1.0, 3),
+        ],
+        3,
+        &Gates::default(),
+        false,
+    );
+    assert_eq!(b.tie, vec![0]);
+}
+
+#[test]
+fn no_eligible_rung_gives_no_spread_no_best_and_an_empty_tie_set() {
+    let rungs = vec![
+        rung(0.06, [40.0, 100.0], 1.0, 3),
+        rung(0.07, [40.0, 101.0], 1.0, 3),
+    ];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.best, None);
+    assert_eq!(a.runner_up, None);
+    assert_eq!(a.tie, Vec::<usize>::new());
+    assert_eq!(a.spreads, vec![None, None]);
+}
+
+#[test]
+fn ineligible_rungs_enter_neither_the_spread_nor_the_tie_set() {
+    let marginal: Vec<RepeatResult> = [-30.0, 0.0, 30.0]
+        .iter()
+        .map(|o| rep(0.06, &[Some(40.0), Some(60.0 + o)], Some(1.0)))
+        .collect();
+    let rungs = vec![spread_rung(100.0, 0.01), marginal, spread_rung(101.0, 0.01)];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.verdicts[1].score, None);
+    assert_eq!(a.tie, vec![0, 2]);
+    let b = assess_ladder(&rungs, 3, &Gates::default(), true);
+    assert_eq!(b.best, Some(1));
+    assert!(b.spreads[1].unwrap() > a.spreads[1].unwrap());
 }

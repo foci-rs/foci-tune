@@ -23,6 +23,8 @@ fn assessment(scores: &[Option<f64>], halt: Option<(usize, Halt)>) -> LadderAsse
         pause: None,
         best,
         runner_up: None,
+        tie: Vec::new(),
+        spreads: Vec::new(),
     }
 }
 
