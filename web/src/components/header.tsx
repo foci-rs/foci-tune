@@ -1,7 +1,14 @@
+import { mdiCarBrakeAlert, mdiHome } from "@mdi/js";
+import { useEffect, useState } from "react";
+import { ApiRequestError, postHome } from "@/api";
 import { useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
 import { cn } from "@/lib/utils";
-import { Button } from "./ui";
+
+export function homedTone(axes: string): "full" | "partial" | "none" {
+  if (axes === "") return "none";
+  return ["x", "y", "z"].every((a) => axes.includes(a)) ? "full" : "partial";
+}
 
 export function Header() {
   const { printer, connected, killStatus, killUnconfirmed, killError, kill } = useFeed();
@@ -23,6 +30,28 @@ export function Header() {
         : confirm.armed
           ? "Press again to kill"
           : "Kill";
+  const idle = killLabel === "Kill";
+  const homedAxes = printer?.moonraker.homed_axes ?? "";
+  const homedClass = {
+    full: "text-emerald-400",
+    partial: "text-amber-400",
+    none: "",
+  }[homedTone(homedAxes)];
+
+  const [homing, setHoming] = useState(false);
+  const [homeError, setHomeError] = useState<string | null>(null);
+  useEffect(() => setHomeError(null), [klippy]);
+  const home = () => {
+    setHoming(true);
+    setHomeError(null);
+    postHome().then(
+      () => setHoming(false),
+      (e: unknown) => {
+        setHoming(false);
+        setHomeError(e instanceof ApiRequestError ? e.message : "request failed");
+      },
+    );
+  };
 
   return (
     <>
@@ -30,12 +59,40 @@ export function Header() {
         <span className={cn("font-mono", klippyClass)}>Klipper {klippy}</span>
         {!connected && <span className="text-amber-400">Event stream disconnected</span>}
         <div className="ml-auto flex items-center gap-3">
+          {homeError !== null && <span className="text-amber-400">{homeError}</span>}
           {killStatus === "killed" && !killUnconfirmed && (
             <span className="font-mono text-red-400">Stop confirmed</span>
           )}
-          <Button tone="danger" onClick={onKill} className="min-w-40">
-            {killLabel}
-          </Button>
+          <button
+            type="button"
+            aria-label={killLabel}
+            title="Emergency stop"
+            onClick={onKill}
+            className={cn(
+              "flex h-9 items-center gap-2 rounded-md border px-2 text-sm font-medium transition-colors focus-visible:outline-2",
+              idle ? "text-red-400 hover:bg-accent" : "border-red-500 bg-red-600 text-white hover:bg-red-500",
+            )}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
+              <path d={mdiCarBrakeAlert} />
+            </svg>
+            {!idle && <span>{killLabel}</span>}
+          </button>
+          <button
+            type="button"
+            aria-label={homing ? "Homing" : "Home"}
+            title={`Home all axes (homed: ${homedAxes === "" ? "none" : homedAxes})`}
+            disabled={homing || klippy !== "ready"}
+            onClick={home}
+            className={cn(
+              "flex h-9 items-center rounded-md border px-2 transition-colors hover:bg-accent focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50",
+              homedClass,
+            )}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
+              <path d={mdiHome} />
+            </svg>
+          </button>
         </div>
       </header>
       {killUnconfirmed && (

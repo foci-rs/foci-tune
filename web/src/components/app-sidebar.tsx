@@ -1,7 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ActivityIcon, HistoryIcon, PrinterIcon, type LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
-import { ApiRequestError, postHome, type PrinterView } from "@/api";
+import type { PrinterView } from "@/api";
 import { useFeed } from "@/feed";
 import { formatBytes } from "@/units";
 import {
@@ -14,7 +13,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { Button, Dot } from "./ui";
+import { Dot } from "./ui";
 
 export function traceTone(printer: PrinterView | null): "ok" | "warn" | "off" {
   if (printer === null || printer.boards.length === 0) return "off";
@@ -75,23 +74,6 @@ export function AppSidebar() {
 
 function PrinterStatus() {
   const { printer } = useFeed();
-  const klippy = printer?.moonraker.klippy ?? "disconnected";
-
-  const [homing, setHoming] = useState(false);
-  const [homeError, setHomeError] = useState<string | null>(null);
-  useEffect(() => setHomeError(null), [klippy]);
-  const home = () => {
-    setHoming(true);
-    setHomeError(null);
-    postHome().then(
-      () => setHoming(false),
-      (e: unknown) => {
-        setHoming(false);
-        setHomeError(e instanceof ApiRequestError ? e.message : "request failed");
-      },
-    );
-  };
-
   return (
     <section aria-label="Printer status" className="space-y-2 p-2 text-sm">
       <ul className="space-y-1">
@@ -112,10 +94,6 @@ function PrinterStatus() {
           Free {printer?.free_bytes != null ? formatBytes(printer.free_bytes) : "unknown"}
         </li>
       </ul>
-      <Button disabled={homing || klippy !== "ready"} onClick={home}>
-        {homing ? "Homing" : "Home"}
-      </Button>
-      {homeError !== null && <p className="text-amber-400">{homeError}</p>}
     </section>
   );
 }

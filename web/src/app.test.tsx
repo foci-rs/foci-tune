@@ -2,6 +2,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView } from "./api";
+import { homedTone } from "./components/header";
 import { createTestRouter } from "./router";
 
 class StubSocket {
@@ -84,7 +85,10 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(status).toHaveTextContent("Trace");
   expect(status).toHaveTextContent("Homed xy");
   expect(status).toHaveTextContent("Free 3 GB");
-  expect(within(status).getByRole("button", { name: "Home" })).toBeInTheDocument();
+  expect(within(status).queryByRole("button", { name: "Home" })).toBeNull();
+  const killButton = within(header).getByRole("button", { name: "Kill" });
+  const homeButton = within(header).getByRole("button", { name: "Home" });
+  expect(killButton.compareDocumentPosition(homeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 test("kill needs a second click and posts once", async () => {
@@ -201,4 +205,23 @@ test("the confirmed stop clears when a new run starts", async () => {
   await killOnce();
   act(() => StubSocket.last!.deliver({ type: "run_state", session: "s", run: "r", state: "preparing" }));
   expect(screen.queryByText("Stop confirmed")).toBeNull();
+});
+
+test("homed tone is full only with x, y and z, partial with any axis", () => {
+  expect(homedTone("xyz")).toBe("full");
+  expect(homedTone("zyx")).toBe("full");
+  expect(homedTone("xy")).toBe("partial");
+  expect(homedTone("")).toBe("none");
+});
+
+test("the home button names the homed axes in its tooltip", async () => {
+  respond(printerView({ homed_axes: "xy" }));
+  await mount();
+  expect(await screen.findByRole("button", { name: "Home" })).toHaveAttribute("title", "Home all axes (homed: xy)");
+});
+
+test("the home button says nothing is homed", async () => {
+  respond(printerView({ homed_axes: "" }));
+  await mount();
+  expect(await screen.findByRole("button", { name: "Home" })).toHaveAttribute("title", "Home all axes (homed: none)");
 });
