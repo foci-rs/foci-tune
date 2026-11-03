@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
 import { ActivityIcon, HistoryIcon, PrinterIcon, type LucideIcon } from "lucide-react";
-import type { PrinterView } from "@/api";
 import { useFeed } from "@/feed";
 import { formatBytes } from "@/units";
 import {
@@ -13,12 +12,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { Dot } from "./ui";
-
-export function traceTone(printer: PrinterView | null): "ok" | "warn" | "off" {
-  if (printer === null || printer.boards.length === 0) return "off";
-  return printer.boards.every((b) => b.open) ? "ok" : "warn";
-}
 
 const pages: { to: "/printer" | "/tune" | "/sessions"; label: string; icon: LucideIcon }[] = [
   { to: "/printer", label: "Printer", icon: PrinterIcon },
@@ -77,16 +70,6 @@ function PrinterStatus() {
   return (
     <section aria-label="Printer status" className="space-y-2 p-2 text-sm">
       <ul className="space-y-1">
-        <li className="flex items-center gap-2">
-          <Dot tone={printer?.moonraker.connected ? "ok" : "off"} />
-          Moonraker
-          <span className="sr-only">{printer?.moonraker.connected ? "connected" : "not connected"}</span>
-        </li>
-        <li className="flex items-center gap-2">
-          <Dot tone={traceTone(printer)} />
-          Trace
-          <span className="sr-only">{traceTone(printer) === "ok" ? "open" : "not open"}</span>
-        </li>
         <li className="font-mono text-muted-foreground">
           Homed {printer && printer.moonraker.homed_axes !== "" ? printer.moonraker.homed_axes : "none"}
         </li>

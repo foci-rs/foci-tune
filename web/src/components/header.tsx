@@ -1,24 +1,102 @@
 import { mdiCarBrakeAlert, mdiHome } from "@mdi/js";
 import { useEffect, useState } from "react";
-import { ApiRequestError, postHome } from "@/api";
+import { ApiRequestError, postHome, type PrinterView } from "@/api";
 import { useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Dot } from "./ui";
 
 export function homedTone(axes: string): "full" | "partial" | "none" {
   if (axes === "") return "none";
   return ["x", "y", "z"].every((a) => axes.includes(a)) ? "full" : "partial";
 }
 
+type Tone = "ok" | "warn" | "error" | "off";
+
+export function connectionStatuses(printer: PrinterView | null): {
+  moonraker: Tone;
+  klipper: Tone;
+  foci: Tone;
+  tracing: Tone;
+} {
+  const boards = printer?.boards ?? [];
+  const klippy = printer?.moonraker.klippy ?? "disconnected";
+  const all = (n: number) => (n === 0 ? "off" : n === boards.length ? "ok" : "warn");
+  return {
+    moonraker: printer?.moonraker.connected ? "ok" : "off",
+    klipper:
+      klippy === "ready"
+        ? "ok"
+        : klippy === "startup"
+          ? "warn"
+          : klippy === "shutdown" || klippy === "error"
+            ? "error"
+            : "off",
+    foci: boards.length === 0 ? "off" : all(boards.filter((b) => b.open).length),
+    tracing: boards.length === 0 ? "off" : all(boards.filter((b) => b.open && b.trace_mode === "streaming").length),
+  };
+}
+
+function titleCase(name: string): string {
+  return name
+    .split(/[_\s-]+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+export function connectionDetails(
+  printer: PrinterView | null,
+): Record<"moonraker" | "klipper" | "foci" | "tracing", string[]> {
+  const boards = printer?.boards ?? [];
+  const name = (b: PrinterView["boards"][number]) => {
+    const mcu = printer?.steppers.find((s) => s.serial === b.serial)?.mcu;
+    return mcu === undefined ? b.serial : titleCase(mcu);
+  };
+  const none = ["No boards found"];
+  return {
+    moonraker: [printer?.moonraker.connected ? "Connected to Moonraker" : "Not connected to Moonraker"],
+    klipper: printer
+      ? [
+          `Klippy: ${printer.moonraker.klippy}`,
+          `Print state: ${printer.moonraker.print_state}`,
+          `Idle state: ${printer.moonraker.idle_state}`,
+        ]
+      : ["Klippy: disconnected"],
+    foci: boards.length === 0 ? none : boards.map((b) => `${name(b)}: ${b.open ? "open" : "closed"}`),
+    tracing: boards.length === 0 ? none : boards.map((b) => `${name(b)}: ${b.trace_mode}`),
+  };
+}
+
+function StatusItem({ label, state, tone, details }: { label: string; state: string; tone: Tone; details: string[] }) {
+  return (
+    <li>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div tabIndex={0} className="flex items-center gap-2">
+            <Dot tone={tone} />
+            <span aria-hidden="true">{label}</span>
+            <span className="sr-only">
+              {label} {state}
+            </span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start">
+          {details.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </TooltipContent>
+      </Tooltip>
+    </li>
+  );
+}
+
 export function Header() {
   const { printer, connected, killStatus, killUnconfirmed, killError, kill } = useFeed();
   const klippy = printer?.moonraker.klippy ?? "disconnected";
-  const klippyClass =
-    klippy === "ready"
-      ? "text-emerald-400"
-      : klippy === "shutdown" || klippy === "error"
-        ? "text-red-400"
-        : "text-muted-foreground";
+  const tones = connectionStatuses(printer);
+  const boards = printer?.boards ?? [];
+  const details = connectionDetails(printer);
 
   const confirm = useConfirmClick(kill);
   const onKill = killUnconfirmed ? kill : confirm.click;
@@ -56,7 +134,27 @@ export function Header() {
   return (
     <>
       <header className="sticky top-0 z-50 flex h-(--header-height) items-center gap-x-6 border-b bg-background px-4 text-sm">
-        <span className={cn("font-mono", klippyClass)}>Klipper {klippy}</span>
+        <ul aria-label="Connections" className="flex items-center gap-x-4">
+          <StatusItem
+            label="Moonraker"
+            tone={tones.moonraker}
+            state={printer?.moonraker.connected ? "connected" : "not connected"}
+            details={details.moonraker}
+          />
+          <StatusItem label="Klipper" tone={tones.klipper} state={klippy} details={details.klipper} />
+          <StatusItem
+            label="FOCI"
+            tone={tones.foci}
+            state={`${boards.filter((b) => b.open).length} of ${boards.length} boards open`}
+            details={details.foci}
+          />
+          <StatusItem
+            label="Tracing"
+            tone={tones.tracing}
+            state={`${boards.filter((b) => b.open && b.trace_mode === "streaming").length} of ${boards.length} boards streaming`}
+            details={details.tracing}
+          />
+        </ul>
         {!connected && <span className="text-amber-400">Event stream disconnected</span>}
         <div className="ml-auto flex items-center gap-3">
           {homeError !== null && <span className="text-amber-400">{homeError}</span>}

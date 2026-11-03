@@ -20,4 +20,12 @@ if (typeof window.matchMedia !== "function") {
     }) as MediaQueryList;
 }
 
+if (typeof window.ResizeObserver !== "function") {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 afterEach(resetWorkbench);

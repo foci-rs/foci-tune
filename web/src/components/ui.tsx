@@ -22,8 +22,15 @@ export function Field({ label, children, sub }: { label: string; children: React
   );
 }
 
-export function Dot({ tone }: { tone: "ok" | "warn" | "off" }) {
-  const color = tone === "ok" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-muted-foreground/50";
+export function Dot({ tone }: { tone: "ok" | "warn" | "error" | "off" }) {
+  const color =
+    tone === "ok"
+      ? "bg-emerald-400"
+      : tone === "warn"
+        ? "bg-amber-400"
+        : tone === "error"
+          ? "bg-red-400"
+          : "bg-muted-foreground/50";
   return <span aria-hidden="true" className={cn("inline-block size-2 rounded-full", color)} />;
 }
 

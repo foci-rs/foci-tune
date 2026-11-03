@@ -1,8 +1,8 @@
 import { RouterProvider } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { PrinterView } from "./api";
-import { homedTone } from "./components/header";
+import type { BoardView, PrinterView, StepperView } from "./api";
+import { connectionDetails, connectionStatuses, homedTone } from "./components/header";
 import { createTestRouter } from "./router";
 
 class StubSocket {
@@ -72,7 +72,6 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(await within(header).findByText("Klipper ready")).toBeInTheDocument();
   expect(within(header).getByRole("button", { name: "Kill" })).toBeInTheDocument();
   expect(header).not.toHaveTextContent("Homed");
-  expect(header).not.toHaveTextContent("FOCI");
   expect(screen.getByRole("link", { name: /FOCI/ })).toHaveAttribute("href", "/printer");
 
   const nav = screen.getByRole("navigation", { name: "Pages" });
@@ -81,8 +80,7 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(within(nav).getByRole("link", { name: "Sessions" })).toBeInTheDocument();
 
   const status = screen.getByRole("region", { name: "Printer status" });
-  expect(status).toHaveTextContent("Moonraker");
-  expect(status).toHaveTextContent("Trace");
+  expect(status).not.toHaveTextContent("Moonraker");
   expect(status).toHaveTextContent("Homed xy");
   expect(status).toHaveTextContent("Free 3 GB");
   expect(within(status).queryByRole("button", { name: "Home" })).toBeNull();
@@ -224,4 +222,81 @@ test("the home button says nothing is homed", async () => {
   respond(printerView({ homed_axes: "" }));
   await mount();
   expect(await screen.findByRole("button", { name: "Home" })).toHaveAttribute("title", "Home all axes (homed: none)");
+});
+
+const board = (over: Partial<BoardView> = {}): BoardView =>
+  ({
+    serial: "b",
+    open: true,
+    trace_mode: "streaming",
+    channels: [],
+    critical_hz_measured: 50000,
+    ...over,
+  }) as BoardView;
+
+test("the top bar lists moonraker, klipper, foci and tracing in that order", async () => {
+  respond(printerView());
+  await mount();
+  const items = within(screen.getByRole("list", { name: "Connections" })).getAllByRole("listitem");
+  expect(items.map((li) => li.querySelector("[aria-hidden=true]:not(:empty)")?.textContent)).toEqual([
+    "Moonraker",
+    "Klipper",
+    "FOCI",
+    "Tracing",
+  ]);
+});
+
+test("connection statuses follow moonraker, klippy, board and trace state", () => {
+  const base = printerView();
+  expect(connectionStatuses(null)).toMatchObject({
+    moonraker: "off",
+    klipper: "off",
+    foci: "off",
+    tracing: "off",
+  });
+  expect(connectionStatuses(base)).toMatchObject({ moonraker: "ok", klipper: "ok", foci: "off" });
+  expect(connectionStatuses(printerView({ klippy: "startup" })).klipper).toBe("warn");
+  expect(connectionStatuses(printerView({ klippy: "shutdown" })).klipper).toBe("error");
+  const withBoards = (boards: BoardView[]) => ({ ...base, boards });
+  expect(connectionStatuses(withBoards([board(), board()]))).toMatchObject({
+    foci: "ok",
+    tracing: "ok",
+  });
+  expect(connectionStatuses(withBoards([board(), board({ open: false })])).foci).toBe("warn");
+  expect(connectionStatuses(withBoards([board({ trace_mode: "dormant" })])).tracing).toBe("off");
+  expect(connectionStatuses(withBoards([board(), board({ trace_mode: "dormant" })])).tracing).toBe("warn");
+});
+
+test("connection details list each board's state and why a board is unusable", () => {
+  const stepper = (mcu: string, serial: string) => ({ mcu, serial }) as StepperView;
+  const view = {
+    ...printerView(),
+    steppers: [stepper("ouroboros", "AAA"), stepper("tool_head", "AAA")],
+    boards: [
+      board({ serial: "AAA", product: "Ouroboros", firmware_id: "fw-1", critical_hz_measured: 49987 }),
+      board({
+        serial: "BBB",
+        open: false,
+        unusable_reason: "protocol mismatch",
+        trace_mode: "dormant",
+        undecodable_frames: 3,
+      }),
+    ],
+  };
+  const d = connectionDetails(view);
+  expect(d.foci[0]).toBe("Ouroboros: open");
+  expect(d.tracing[0]).toBe("Ouroboros: streaming");
+  expect(d.foci.join("\n")).not.toContain("AAA");
+  expect(d.foci[1]).toBe("BBB: closed");
+  expect(d.tracing[1]).toBe("BBB: dormant");
+  expect(connectionDetails(printerView()).foci).toEqual(["No boards found"]);
+  expect(connectionDetails(null).moonraker).toEqual(["Not connected to Moonraker"]);
+});
+
+test("focusing a status item shows its details", async () => {
+  respond({ ...printerView(), boards: [board({ serial: "AAA" })] });
+  await mount();
+  const label = await screen.findByText("FOCI", { selector: "[aria-hidden=true]" });
+  fireEvent.focus(label.closest("[data-slot=tooltip-trigger]")!);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("AAA");
 });
