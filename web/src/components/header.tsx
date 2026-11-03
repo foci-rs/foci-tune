@@ -7,6 +7,7 @@ import { useFeed } from "@/feed";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
+import { mcuName, traceLabel } from "@/mcu";
 import { Dot } from "./ui";
 
 export function homedTone(axes: string): "full" | "partial" | "none" {
@@ -40,21 +41,11 @@ export function connectionStatuses(printer: PrinterView | null): {
   };
 }
 
-function titleCase(name: string): string {
-  return name
-    .split(/[_\s-]+/)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
 export function connectionDetails(
   printer: PrinterView | null,
 ): Record<"moonraker" | "klipper" | "foci" | "tracing", string[]> {
   const boards = printer?.boards ?? [];
-  const name = (b: PrinterView["boards"][number]) => {
-    const mcu = printer?.steppers.find((s) => s.serial === b.serial)?.mcu;
-    return mcu === undefined ? b.serial : titleCase(mcu);
-  };
+  const name = (b: PrinterView["boards"][number]) => mcuName(printer, b);
   const none = ["No boards found"];
   return {
     moonraker: [printer?.moonraker.connected ? "Connected to Moonraker" : "Not connected to Moonraker"],
@@ -66,7 +57,7 @@ export function connectionDetails(
         ]
       : ["Klippy: disconnected"],
     foci: boards.length === 0 ? none : boards.map((b) => `${name(b)}: ${b.open ? "open" : "closed"}`),
-    tracing: boards.length === 0 ? none : boards.map((b) => `${name(b)}: ${b.trace_mode}`),
+    tracing: boards.length === 0 ? none : boards.map((b) => `${name(b)}: ${traceLabel(b.trace_mode)}`),
   };
 }
 

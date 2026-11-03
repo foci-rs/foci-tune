@@ -1,5 +1,6 @@
 import { createRoute } from "@tanstack/react-router";
-import { FirmwareRestart, ControlStateCard, StepperTable, TraceModeCard } from "@/components/printer-cards";
+import { FirmwareRestart, ControlStateCard, StepperTable } from "@/components/printer-cards";
+import { McuCard } from "@/components/McuCard";
 import { PreconditionList } from "@/components/preconditions";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
@@ -33,15 +34,20 @@ function PrinterPage() {
         </p>
       )}
       {shutDown && <FirmwareRestart />}
+      <div
+        className="grid gap-4"
+        style={{ gridTemplateColumns: `repeat(${Math.max(printer.boards.length, 1)}, minmax(0, 1fr))` }}
+      >
+        {printer.boards.map((board) => (
+          <McuCard key={board.serial} printer={printer} board={board} />
+        ))}
+      </div>
       <Card label="Steppers">
         <StepperTable steppers={printer.steppers} />
       </Card>
       <Card label="Preconditions">
         <PreconditionList items={printer.preconditions} />
       </Card>
-      {printer.boards.map((board) => (
-        <TraceModeCard key={board.serial} printer={printer} board={board} />
-      ))}
       <div className="grid gap-4 lg:grid-cols-2">
         {printer.boards.flatMap((board) =>
           board.channels.map((channel) => (

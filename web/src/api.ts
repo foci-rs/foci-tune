@@ -85,6 +85,8 @@ export interface BoardView {
   critical_hz_measured: number;
   firmware_id: string | null;
   product: string | null;
+  mcu_version: string | null;
+  mcu_build: string | null;
   boot_changes: number;
   undecodable_frames: number;
   channels: ChannelView[];
@@ -611,7 +613,6 @@ export interface TuneStepPlan {
 
 export type TuneChoiceBody = "recommended" | { rung: number } | { value: number };
 
-export type TraceModeCommand = "dormant" | "critical" | "diagnostic";
 export type KillState = "killed" | "kill_unconfirmed";
 
 export interface KillResponse {
@@ -693,9 +694,6 @@ async function request<T>(method: "GET" | "POST", path: string, body?: unknown, 
 }
 
 export const getPrinter = () => request<PrinterView>("GET", "/api/printer");
-
-export const postTraceMode = (board: string, mode: TraceModeCommand) =>
-  request<{ board: string; mode: TraceModeCommand }>("POST", "/api/trace-mode", { board, mode });
 
 export const postKill = () => request<KillResponse>("POST", "/api/kill", undefined, KILL_TIMEOUT_MS);
 

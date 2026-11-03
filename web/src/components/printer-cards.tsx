@@ -2,14 +2,11 @@ import { useState } from "react";
 import {
   ApiRequestError,
   postFirmwareRestart,
-  postTraceMode,
   type BoardView,
   type ChannelView,
   type PrinterView,
   type StepperView,
-  type TraceModeCommand,
 } from "@/api";
-import { cn } from "@/lib/utils";
 import { cornerHz, formatHz, pGain, quantumUm } from "@/units";
 import { Button, Card, Field } from "./ui";
 
@@ -137,69 +134,6 @@ export function ControlStateCard({
           code {c.applied_request}
         </Field>
       </dl>
-    </Card>
-  );
-}
-
-const MODES: TraceModeCommand[] = ["dormant", "critical", "diagnostic"];
-
-export function traceModeBlocked(printer: PrinterView, board: BoardView): string | null {
-  if (!board.open) return "The trace interface is not open.";
-  if (board.unusable_reason !== null) return board.unusable_reason;
-  if (printer.moonraker.klippy !== "ready") return `Klipper is ${printer.moonraker.klippy}.`;
-  if (printer.engine.unconfirmed_kill !== null) {
-    return "The last emergency stop is unconfirmed.";
-  }
-  if (printer.engine.current !== null || printer.engine.queue.length > 0) {
-    return "A run is in flight or queued.";
-  }
-  return null;
-}
-
-export function TraceModeCard({ printer, board }: { printer: PrinterView; board: BoardView }) {
-  const [pending, setPending] = useState<TraceModeCommand | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const blocked = traceModeBlocked(printer, board);
-
-  const choose = (mode: TraceModeCommand) => {
-    setPending(mode);
-    setError(null);
-    postTraceMode(board.serial, mode).then(
-      () => setPending(null),
-      (e: unknown) => {
-        setPending(null);
-        setError(e instanceof ApiRequestError ? e.message : "request failed");
-      },
-    );
-  };
-
-  return (
-    <Card label={`Trace mode ${board.serial}`}>
-      <dl className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Field label="Current">{board.trace_mode}</Field>
-        <Field label="Critical cadence">{board.critical_hz_measured.toFixed(0)} Hz</Field>
-        <Field label="Protocol">{dash(board.protocol_version, String)}</Field>
-        <Field label="Firmware">{board.firmware_id ?? "-"}</Field>
-      </dl>
-      <div role="group" aria-label={`Trace mode for ${board.serial}`} className="flex gap-2">
-        {MODES.map((mode) => (
-          <Button
-            key={mode}
-            aria-pressed={board.trace_mode === mode}
-            disabled={blocked !== null || pending !== null}
-            onClick={() => choose(mode)}
-            className={cn(board.trace_mode === mode && "border-emerald-500")}
-          >
-            {mode}
-          </Button>
-        ))}
-      </div>
-      {blocked !== null && <p className="mt-2 text-sm text-muted-foreground">{blocked}</p>}
-      {error !== null && (
-        <p role="alert" className="mt-2 text-sm text-amber-400">
-          {error}
-        </p>
-      )}
     </Card>
   );
 }

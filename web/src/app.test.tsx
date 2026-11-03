@@ -288,10 +288,10 @@ test("connection details list each board's state and why a board is unusable", (
   };
   const d = connectionDetails(view);
   expect(d.foci[0]).toBe("Ouroboros: open");
-  expect(d.tracing[0]).toBe("Ouroboros: streaming");
+  expect(d.tracing[0]).toBe("Ouroboros: Streaming");
   expect(d.foci.join("\n")).not.toContain("AAA");
   expect(d.foci[1]).toBe("BBB: closed");
-  expect(d.tracing[1]).toBe("BBB: dormant");
+  expect(d.tracing[1]).toBe("BBB: Off");
   expect(connectionDetails(printerView()).foci).toEqual(["No boards found"]);
   expect(connectionDetails(null).moonraker).toEqual(["Not connected to Moonraker"]);
 });
