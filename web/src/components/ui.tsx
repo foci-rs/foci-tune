@@ -1,10 +1,23 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export function Card({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+export function Card({
+  label,
+  action,
+  children,
+  className,
+}: {
+  label: string;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
   return (
     <section aria-label={label} className={cn("rounded-xl border bg-card p-4 text-card-foreground", className)}>
-      <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</h2>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</h2>
+        {action}
+      </div>
       {children}
     </section>
   );

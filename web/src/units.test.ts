@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { cornerHz, diffGains, formatBytes, formatUm, pGain, quantumUm } from "./units";
+import { cornerHz, diffGains, formatAmps, formatBytes, voltageLimitPercent, formatUm, pGain, quantumUm } from "./units";
 
 describe("units", () => {
   test("cornerHz converts the raw integrator gain at the PWM rate", () => {
@@ -37,5 +37,15 @@ describe("units", () => {
 
   test("diffGains is empty without a previous row", () => {
     expect(diffGains(null, { velocity_p: 1 })).toEqual([]);
+  });
+
+  test("formatAmps converts milliamps to amps", () => {
+    expect(formatAmps(2500)).toBe("2.50 A");
+    expect(formatAmps(800)).toBe("0.80 A");
+  });
+
+  test("voltageLimitPercent is the share of the 15-bit full scale", () => {
+    expect(voltageLimitPercent(0x5a81)).toBe("70.7 %");
+    expect(voltageLimitPercent(32767)).toBe("100.0 %");
   });
 });

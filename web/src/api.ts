@@ -29,6 +29,7 @@ export interface StepperView {
   serial: string;
   kinematics: string;
   motor_rotation_distance_mm: number;
+  homing_current_a: number | null;
   axis: string;
   position_min: number;
   position_max: number;

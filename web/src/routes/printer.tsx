@@ -1,5 +1,6 @@
 import { createRoute } from "@tanstack/react-router";
-import { FirmwareRestart, ControlStateCard, StepperTable } from "@/components/printer-cards";
+import { FirmwareRestart } from "@/components/printer-cards";
+import { StepperCard } from "@/components/StepperCard";
 import { McuCard } from "@/components/McuCard";
 import { PreconditionList } from "@/components/preconditions";
 import { Card } from "@/components/ui";
@@ -42,24 +43,24 @@ function PrinterPage() {
           <McuCard key={board.serial} printer={printer} board={board} />
         ))}
       </div>
-      <Card label="Steppers">
-        <StepperTable steppers={printer.steppers} />
-      </Card>
       <Card label="Preconditions">
         <PreconditionList items={printer.preconditions} />
       </Card>
-      <div className="grid gap-4 lg:grid-cols-2">
-        {printer.boards.flatMap((board) =>
-          board.channels.map((channel) => (
-            <ControlStateCard
-              key={`${board.serial}-${channel.channel}`}
-              board={board}
-              channel={channel}
-              stepper={printer.steppers.find((s) => s.serial === board.serial && s.channel === channel.channel)}
+      {printer.steppers.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No FOCI steppers found.</p>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {printer.steppers.map((stepper) => (
+            <StepperCard
+              key={stepper.name}
+              stepper={stepper}
+              channel={printer.boards
+                .find((b) => b.serial === stepper.serial)
+                ?.channels.find((c) => c.channel === stepper.channel)}
             />
-          )),
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </main>
   );
 }

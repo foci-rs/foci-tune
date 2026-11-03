@@ -27,6 +27,14 @@ export function formatHz(hz: number | null, digits = 1): string {
   return hz === null ? "unknown" : `${hz.toFixed(digits)} Hz`;
 }
 
+export function formatAmps(milliamps: number): string {
+  return `${(milliamps / 1000).toFixed(2)} A`;
+}
+
+export function voltageLimitPercent(raw: number): string {
+  return `${((raw / 32767) * 100).toFixed(1)} %`;
+}
+
 export function formatBytes(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;
