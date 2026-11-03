@@ -73,6 +73,7 @@ function PrinterStatus() {
         <li className="font-mono text-muted-foreground">
           Disk Free {printer?.free_bytes != null ? formatBytes(printer.free_bytes) : "unknown"}
         </li>
+        <li className="font-mono text-muted-foreground">Version {printer?.version ?? "unknown"}</li>
       </ul>
     </section>
   );

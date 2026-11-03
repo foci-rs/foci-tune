@@ -145,6 +145,7 @@ export interface PrinterView {
   boards: BoardView[];
   preconditions: PreconditionView[];
   free_bytes: number | null;
+  version: string;
   engine: EngineView;
 }
 

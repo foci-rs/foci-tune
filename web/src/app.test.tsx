@@ -37,6 +37,7 @@ function printerView(over: Partial<PrinterView["moonraker"]> = {}, unconfirmed: 
     boards: [],
     preconditions: [],
     free_bytes: 3 * 1024 ** 3,
+    version: "0.1.0",
     engine: { current: null, queue: [], unconfirmed_kill: unconfirmed },
   };
 }
@@ -83,6 +84,7 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(status).not.toHaveTextContent("Moonraker");
   expect(status).not.toHaveTextContent("Homed");
   expect(status).toHaveTextContent("Disk Free 3 GB");
+  expect(status).toHaveTextContent("Version 0.1.0");
   expect(within(status).queryByRole("button", { name: "Home" })).toBeNull();
   const killButton = within(header).getByRole("button", { name: "Kill" });
   const homeButton = within(header).getByRole("button", { name: "Home" });
