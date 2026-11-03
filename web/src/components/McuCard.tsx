@@ -5,6 +5,7 @@ import { Card, Field } from "./ui";
 export function McuCard({ printer, board }: { printer: PrinterView; board: BoardView }) {
   const streaming = board.trace_mode === "streaming";
   const channels = board.channels.length;
+  const pwmHz = board.channels[0]?.control.pwm_hz;
   return (
     <Card label={`${mcuName(printer, board)} (${channels} ${channels === 1 ? "Channel" : "Channels"})`}>
       {!board.open && <p className="mb-3 text-sm text-amber-400">Closed</p>}
@@ -18,6 +19,7 @@ export function McuCard({ printer, board }: { printer: PrinterView; board: Board
         </Field>
         <Field label="Trace">{traceLabel(board.trace_mode)}</Field>
         <Field label="Sampling frequency">{streaming ? `${board.critical_hz_measured.toFixed(0)} Hz` : "-"}</Field>
+        <Field label="PWM frequency">{pwmHz === undefined ? "-" : `${pwmHz} Hz`}</Field>
       </dl>
       {board.unusable_reason !== null && <p className="mt-3 text-sm text-amber-400">{board.unusable_reason}</p>}
     </Card>

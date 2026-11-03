@@ -16,7 +16,10 @@ const board = (over: Partial<BoardView> = {}): BoardView =>
     product: "Ouroboros",
     mcu_version: "v0.4.1-30-g4f2b042b",
     mcu_build: "fw=68e16122",
-    channels: [{ channel: 0 }, { channel: 1 }],
+    channels: [
+      { channel: 0, control: { pwm_hz: 50_000 } },
+      { channel: 1, control: { pwm_hz: 50_000 } },
+    ],
     ...over,
   }) as BoardView;
 
@@ -32,6 +35,7 @@ test("the card shows the board's identity, firmware, trace state, cadence and ch
   expect(card).not.toHaveTextContent("Protocol");
   expect(card).toHaveTextContent("TraceStreaming");
   expect(card).toHaveTextContent("Sampling frequency49987 Hz");
+  expect(card).toHaveTextContent("PWM frequency50000 Hz");
   expect(card).not.toHaveTextContent("Open");
 });
 
@@ -46,7 +50,9 @@ test("a board that is not streaming shows no cadence, and a closed board says so
 });
 
 test("a single channel is not pluralised", () => {
-  render(<McuCard printer={printer()} board={board({ channels: [{ channel: 0 }] as never })} />);
+  render(
+    <McuCard printer={printer()} board={board({ channels: [{ channel: 0, control: { pwm_hz: 50_000 } }] as never })} />,
+  );
   expect(screen.getByRole("region", { name: "0029002A (1 Channel)" })).toBeInTheDocument();
 });
 
