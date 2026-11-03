@@ -426,7 +426,8 @@ function RungTable({ rows, speeds, axis }: { rows: RungView[]; speeds: number[];
             <th className="pr-3">Gain</th>
             <th className="pr-3">Raw</th>
             <th className="pr-3">Verdict</th>
-            <th className="pr-3">Score</th>
+            <th className="pr-3">Score (p99 um)</th>
+            <th className="pr-3">Behind by</th>
             <th className="pr-3">Zeta</th>
             {speeds.map((s) => (
               <th key={s} className="pr-3">
@@ -445,7 +446,19 @@ function RungTable({ rows, speeds, axis }: { rows: RungView[]; speeds: number[];
                 {r.verdict}
                 {r.recommended !== null && <span className="ml-2 text-xs">({r.recommended})</span>}
               </td>
-              <td className="pr-3">{fmt(r.score)}</td>
+              <td className="pr-3">
+                {fmt(r.score)}
+                {r.decidingSpeed !== null && <span className="ml-1 text-xs"> @ {speeds[r.decidingSpeed]} mm/s</span>}
+              </td>
+              <td className="pr-3">
+                {r.best
+                  ? "best"
+                  : r.gap === null
+                    ? ""
+                    : r.tolerance === null
+                      ? `${fmt(r.gap, 1)} um`
+                      : `${fmt(r.gap, 1)} um ± ${fmt(r.tolerance, 1)} um`}
+              </td>
               <td className="pr-3">{fmt(r.zeta)}</td>
               {speeds.map((s, i) => (
                 <td key={s} className="pr-3">
@@ -515,11 +528,6 @@ function StepCard({
           Drift check running: the seed rung is repeated once more, so the machine is still moving.
         </p>
       )}
-      {tune.state === "Running" && rows.some((r) => r.score !== null) && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Scores compare each rung with the best rung so far and can change as later rungs finish.
-        </p>
-      )}
       {summary.notes.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
           {summary.notes.map((n) => (
@@ -540,6 +548,12 @@ function StepCard({
           {rec.kind === "none" && "No rung scored, so there is no recommendation"}
         </p>
       )}
+      {summary.comparison !== null && <p className="mt-1 text-sm">{summary.comparison}</p>}
+      {summary.driftLines.map((line) => (
+        <p key={line} className="mt-1 text-xs text-muted-foreground">
+          {line}
+        </p>
+      ))}
       {step.drift.length > 0 && (
         <p className="mt-1 text-xs text-muted-foreground">
           Drift of the seed rung:{" "}

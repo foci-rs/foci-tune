@@ -531,7 +531,7 @@ export interface Recommended {
  * twice the speed's relative spread. `Unassessed`: the first value, the rerun or the spread is
  * absent. `Steady`: neither.
  */
-export type DriftVerdict ="Steady" | "Drifted" | "Unassessed";
+export type DriftVerdict = "Steady" | "Drifted" | "Unassessed";
 
 export interface TuneDrift {
   metric: string;
