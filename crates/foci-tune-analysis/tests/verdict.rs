@@ -27,7 +27,6 @@ fn rung(zeta: f64, p99: [f64; 2], sd: f64, n: usize) -> Vec<RepeatResult> {
 
 #[test]
 fn score_is_the_rungs_largest_median_p99() {
-    // Rung 0 is lowest at the fast speed, rung 1 lowest at the slow speed.
     let rungs = vec![
         rung(0.2, [60.0, 66.0], 1.0, 3),
         rung(0.2, [36.0, 80.0], 1.0, 3),
@@ -82,7 +81,6 @@ fn equal_lowest_scores_make_the_lower_gain_best() {
 
 #[test]
 fn equal_second_lowest_scores_make_the_lower_gain_the_runner_up() {
-    // Rungs 1 and 2 share the score 70; rung 1 is decided by the slow speed, rung 2 by the fast.
     let rungs = vec![
         rung(0.2, [40.0, 60.0], 1.0, 3),
         rung(0.2, [70.0, 50.0], 1.0, 3),
