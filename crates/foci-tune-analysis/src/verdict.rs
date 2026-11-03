@@ -417,3 +417,28 @@ pub fn assess_ladder_at(
         spreads,
     }
 }
+
+/// Whether the seed rung's score moved between the first run and the rerun.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DriftVerdict {
+    /// The change is within twice the speed's relative spread.
+    Steady,
+    /// The change exceeds twice the speed's relative spread.
+    Drifted,
+    /// A score or the spread is missing, or the first score is not positive.
+    Unassessed,
+}
+
+/// Compares the seed rung's first and rerun scores against twice the relative `spread`.
+pub fn drift_verdict(first: Option<f64>, rerun: Option<f64>, spread: Option<f64>) -> DriftVerdict {
+    match (first, rerun, spread) {
+        (Some(first), Some(rerun), Some(spread)) if first > 0.0 => {
+            if (rerun - first).abs() / first > 2.0 * spread {
+                DriftVerdict::Drifted
+            } else {
+                DriftVerdict::Steady
+            }
+        }
+        _ => DriftVerdict::Unassessed,
+    }
+}

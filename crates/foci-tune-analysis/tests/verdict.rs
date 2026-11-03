@@ -1,7 +1,8 @@
 use foci_tune_analysis::ladder::RungOutcome;
 use foci_tune_analysis::verdict::{
-    Gates, Halt, InadmissibleReason, LadderAssessment, Pause, RepeatResult, RungVerdict,
-    UnscoredReason, Waivers, assess_ladder, assess_ladder_at, assess_ladder_with, pair_tolerance,
+    DriftVerdict, Gates, Halt, InadmissibleReason, LadderAssessment, Pause, RepeatResult,
+    RungVerdict, UnscoredReason, Waivers, assess_ladder, assess_ladder_at, assess_ladder_with,
+    drift_verdict, pair_tolerance,
 };
 
 fn gated() -> Gates {
@@ -720,4 +721,44 @@ fn ineligible_rungs_enter_neither_the_spread_nor_the_tie_set() {
     let b = assess_ladder(&rungs, 3, &Gates::default(), true);
     assert_eq!(b.best, Some(1));
     assert!(b.spreads[1].unwrap() > a.spreads[1].unwrap());
+}
+
+#[test]
+fn drift_is_judged_against_twice_the_speeds_spread() {
+    assert_eq!(
+        drift_verdict(Some(100.0), Some(103.0), Some(0.02)),
+        DriftVerdict::Steady
+    );
+    assert_eq!(
+        drift_verdict(Some(100.0), Some(104.0), Some(0.02)),
+        DriftVerdict::Steady
+    );
+    assert_eq!(
+        drift_verdict(Some(100.0), Some(104.1), Some(0.02)),
+        DriftVerdict::Drifted
+    );
+    assert_eq!(
+        drift_verdict(Some(100.0), Some(95.9), Some(0.02)),
+        DriftVerdict::Drifted
+    );
+    assert_eq!(
+        drift_verdict(Some(100.0), Some(100.0), Some(0.0)),
+        DriftVerdict::Steady
+    );
+}
+
+#[test]
+fn drift_without_data_is_unassessed_not_steady() {
+    assert_eq!(
+        drift_verdict(None, Some(100.0), Some(0.02)),
+        DriftVerdict::Unassessed
+    );
+    assert_eq!(
+        drift_verdict(Some(100.0), None, Some(0.02)),
+        DriftVerdict::Unassessed
+    );
+    assert_eq!(
+        drift_verdict(Some(100.0), Some(100.0), None),
+        DriftVerdict::Unassessed
+    );
 }
