@@ -52,20 +52,13 @@ const SAME_GAIN: f64 = 1e-9;
 
 /// Recommends a gain from the scored rungs.
 ///
-/// `shown` holds the rung gains in ascending order, aligned with `assessment.verdicts`. The
-/// best scored rung is refined by a quadratic fit in `ln(gain)` through it and its two
-/// scored neighbours; the result is clamped to their span, so it never extrapolates.
+/// `shown` holds the rung gains in ascending order, aligned with `assessment.verdicts`. A tie
+/// recommends the lowest gain of the tie set as measured. Otherwise the best rung is refined by
+/// a quadratic fit in `ln(gain)` through it and its two neighbours, only when all three share
+/// one deciding speed; the result is clamped to their span, so it never extrapolates.
 pub fn recommend(assessment: &LadderAssessment, shown: &[f64]) -> Recommended {
     let scores: Vec<Option<f64>> = assessment.verdicts.iter().map(|v| v.score).collect();
-    let best = scores
-        .iter()
-        .enumerate()
-        .filter_map(|(i, s)| s.map(|s| (i, s)))
-        .fold(None::<(usize, f64)>, |acc, (i, s)| match acc {
-            Some((_, bs)) if bs <= s => acc,
-            _ => Some((i, s)),
-        })
-        .map(|(i, _)| i);
+    let best = assessment.best;
 
     let Some(best) = best else {
         return Recommended {
@@ -82,16 +75,27 @@ pub fn recommend(assessment: &LadderAssessment, shown: &[f64]) -> Recommended {
         None
     };
 
-    Recommended {
-        choice: refine(&scores, shown, best),
-        extend,
-    }
+    let choice = match assessment.tie.first() {
+        Some(&lowest) if assessment.tie.len() > 1 => Recommendation::Measured { rung: lowest },
+        _ => refine(assessment, &scores, shown, best),
+    };
+    Recommended { choice, extend }
 }
 
-fn refine(scores: &[Option<f64>], shown: &[f64], best: usize) -> Recommendation {
+fn refine(
+    assessment: &LadderAssessment,
+    scores: &[Option<f64>],
+    shown: &[f64],
+    best: usize,
+) -> Recommendation {
     let measured = Recommendation::Measured { rung: best };
     if best == 0 || best + 1 >= shown.len() {
         return measured;
+    }
+    let speed = |i: usize| assessment.verdicts[i].deciding_speed;
+    match (speed(best - 1), speed(best), speed(best + 1)) {
+        (Some(a), Some(b), Some(c)) if a == b && b == c => {}
+        _ => return measured,
     }
     let (Some(s0), Some(s1), Some(s2)) = (scores[best - 1], scores[best], scores[best + 1]) else {
         return measured;
