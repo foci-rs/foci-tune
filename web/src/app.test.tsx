@@ -81,7 +81,7 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
 
   const status = screen.getByRole("region", { name: "Printer status" });
   expect(status).not.toHaveTextContent("Moonraker");
-  expect(status).toHaveTextContent("Homed xy");
+  expect(status).not.toHaveTextContent("Homed");
   expect(status).toHaveTextContent("Free 3 GB");
   expect(within(status).queryByRole("button", { name: "Home" })).toBeNull();
   const killButton = within(header).getByRole("button", { name: "Kill" });

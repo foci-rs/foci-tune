@@ -71,9 +71,6 @@ function PrinterStatus() {
     <section aria-label="Printer status" className="space-y-2 p-2 text-sm">
       <ul className="space-y-1">
         <li className="font-mono text-muted-foreground">
-          Homed {printer && printer.moonraker.homed_axes !== "" ? printer.moonraker.homed_axes : "none"}
-        </li>
-        <li className="font-mono text-muted-foreground">
           Free {printer?.free_bytes != null ? formatBytes(printer.free_bytes) : "unknown"}
         </li>
       </ul>
