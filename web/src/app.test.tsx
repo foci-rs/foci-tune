@@ -64,15 +64,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("header shows klipper state, homed axes, free space and nav", async () => {
+test("top bar shows klipper state and kill; the sidebar holds nav and printer status", async () => {
   respond(printerView());
   await mount();
   const header = screen.getByRole("banner");
   expect(await within(header).findByText("Klipper ready")).toBeInTheDocument();
-  expect(header).toHaveTextContent("Homed xy");
-  expect(header).toHaveTextContent("Free 3 GB");
-  expect(within(header).getByRole("link", { name: "Tune" })).toBeInTheDocument();
-  expect(within(header).getByRole("link", { name: "Sessions" })).toBeInTheDocument();
+  expect(within(header).getByRole("button", { name: "Kill" })).toBeInTheDocument();
+  expect(header).not.toHaveTextContent("Homed");
+
+  const nav = screen.getByRole("navigation", { name: "Pages" });
+  expect(within(nav).getByRole("link", { name: "Printer" })).toBeInTheDocument();
+  expect(within(nav).getByRole("link", { name: "Tune" })).toBeInTheDocument();
+  expect(within(nav).getByRole("link", { name: "Sessions" })).toBeInTheDocument();
+
+  const status = screen.getByRole("region", { name: "Printer status" });
+  expect(status).toHaveTextContent("Moonraker");
+  expect(status).toHaveTextContent("Trace");
+  expect(status).toHaveTextContent("Homed xy");
+  expect(status).toHaveTextContent("Free 3 GB");
+  expect(within(status).getByRole("button", { name: "Home" })).toBeInTheDocument();
 });
 
 test("kill needs a second click and posts once", async () => {

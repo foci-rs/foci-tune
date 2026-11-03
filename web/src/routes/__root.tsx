@@ -1,5 +1,7 @@
 import { createRootRoute, Outlet, redirect } from "@tanstack/react-router";
+import { AppSidebar } from "@/components/app-sidebar";
 import { Header } from "@/components/header";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import { FeedProvider } from "@/feed";
 
 export const Route = createRootRoute({
@@ -12,10 +14,15 @@ export const Route = createRootRoute({
 function RootLayout() {
   return (
     <FeedProvider>
-      <div className="min-h-screen">
+      <SidebarProvider className="min-h-screen flex-col [--header-height:--spacing(14)]">
         <Header />
-        <Outlet />
-      </div>
+        <div className="flex flex-1">
+          <AppSidebar />
+          <div className="min-w-0 flex-1">
+            <Outlet />
+          </div>
+        </div>
+      </SidebarProvider>
     </FeedProvider>
   );
 }

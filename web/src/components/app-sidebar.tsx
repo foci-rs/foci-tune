@@ -1,0 +1,105 @@
+import { Link } from "@tanstack/react-router";
+import { ActivityIcon, HistoryIcon, PrinterIcon, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ApiRequestError, postHome, type PrinterView } from "@/api";
+import { useFeed } from "@/feed";
+import { formatBytes } from "@/units";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar";
+import { Button, Dot } from "./ui";
+
+export function traceTone(printer: PrinterView | null): "ok" | "warn" | "off" {
+  if (printer === null || printer.boards.length === 0) return "off";
+  return printer.boards.every((b) => b.open) ? "ok" : "warn";
+}
+
+const pages: { to: "/printer" | "/tune" | "/sessions"; label: string; icon: LucideIcon }[] = [
+  { to: "/printer", label: "Printer", icon: PrinterIcon },
+  { to: "/tune", label: "Tune", icon: ActivityIcon },
+  { to: "/sessions", label: "Sessions", icon: HistoryIcon },
+];
+
+export function AppSidebar() {
+  return (
+    <Sidebar
+      collapsible="none"
+      className="sticky top-(--header-height) h-[calc(100svh-var(--header-height))] shrink-0 border-r"
+    >
+      <SidebarContent>
+        <SidebarGroup>
+          <nav aria-label="Pages">
+            <SidebarMenu>
+              {pages.map(({ to, label, icon: Icon }) => (
+                <SidebarMenuItem key={to}>
+                  <SidebarMenuButton asChild>
+                    <Link to={to} activeProps={{ "data-active": true }}>
+                      <Icon />
+                      <span>{label}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </nav>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter>
+        <PrinterStatus />
+      </SidebarFooter>
+    </Sidebar>
+  );
+}
+
+function PrinterStatus() {
+  const { printer } = useFeed();
+  const klippy = printer?.moonraker.klippy ?? "disconnected";
+
+  const [homing, setHoming] = useState(false);
+  const [homeError, setHomeError] = useState<string | null>(null);
+  useEffect(() => setHomeError(null), [klippy]);
+  const home = () => {
+    setHoming(true);
+    setHomeError(null);
+    postHome().then(
+      () => setHoming(false),
+      (e: unknown) => {
+        setHoming(false);
+        setHomeError(e instanceof ApiRequestError ? e.message : "request failed");
+      },
+    );
+  };
+
+  return (
+    <section aria-label="Printer status" className="space-y-2 p-2 text-sm">
+      <ul className="space-y-1">
+        <li className="flex items-center gap-2">
+          <Dot tone={printer?.moonraker.connected ? "ok" : "off"} />
+          Moonraker
+          <span className="sr-only">{printer?.moonraker.connected ? "connected" : "not connected"}</span>
+        </li>
+        <li className="flex items-center gap-2">
+          <Dot tone={traceTone(printer)} />
+          Trace
+          <span className="sr-only">{traceTone(printer) === "ok" ? "open" : "not open"}</span>
+        </li>
+        <li className="font-mono text-muted-foreground">
+          Homed {printer && printer.moonraker.homed_axes !== "" ? printer.moonraker.homed_axes : "none"}
+        </li>
+        <li className="font-mono text-muted-foreground">
+          Free {printer?.free_bytes != null ? formatBytes(printer.free_bytes) : "unknown"}
+        </li>
+      </ul>
+      <Button disabled={homing || klippy !== "ready"} onClick={home}>
+        {homing ? "Homing" : "Home"}
+      </Button>
+      {homeError !== null && <p className="text-amber-400">{homeError}</p>}
+    </section>
+  );
+}

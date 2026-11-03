@@ -1,22 +1,10 @@
-import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { ApiRequestError, postHome, type PrinterView } from "@/api";
 import { useConfirmClick } from "@/confirm";
 import { useFeed } from "@/feed";
-import { formatBytes } from "@/units";
 import { cn } from "@/lib/utils";
-import { Button, Dot } from "./ui";
-
-export function traceTone(printer: PrinterView | null): "ok" | "warn" | "off" {
-  if (printer === null || printer.boards.length === 0) return "off";
-  return printer.boards.every((b) => b.open) ? "ok" : "warn";
-}
-
-const navClass = "rounded-full px-3 py-1 text-sm text-muted-foreground hover:text-foreground";
+import { Button } from "./ui";
 
 export function Header() {
-  const feed = useFeed();
-  const { printer, connected, killStatus, killUnconfirmed, killError, kill } = feed;
+  const { printer, connected, killStatus, killUnconfirmed, killError, kill } = useFeed();
   const klippy = printer?.moonraker.klippy ?? "disconnected";
   const klippyClass =
     klippy === "ready"
@@ -24,21 +12,6 @@ export function Header() {
       : klippy === "shutdown" || klippy === "error"
         ? "text-red-400"
         : "text-muted-foreground";
-
-  const [homing, setHoming] = useState(false);
-  const [homeError, setHomeError] = useState<string | null>(null);
-  useEffect(() => setHomeError(null), [klippy]);
-  const home = () => {
-    setHoming(true);
-    setHomeError(null);
-    postHome().then(
-      () => setHoming(false),
-      (e: unknown) => {
-        setHoming(false);
-        setHomeError(e instanceof ApiRequestError ? e.message : "request failed");
-      },
-    );
-  };
 
   const confirm = useConfirmClick(kill);
   const onKill = killUnconfirmed ? kill : confirm.click;
@@ -53,45 +26,10 @@ export function Header() {
 
   return (
     <>
-      <header className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b px-4 py-3 text-sm">
+      <header className="sticky top-0 z-50 flex h-(--header-height) items-center gap-x-6 border-b bg-background px-4 text-sm">
         <span className="font-medium tracking-wide">foci-tune</span>
-        <nav aria-label="Pages" className="flex gap-1">
-          <Link to="/printer" className={navClass} activeProps={{ className: "bg-accent text-foreground" }}>
-            Printer
-          </Link>
-          <Link to="/tune" className={navClass} activeProps={{ className: "bg-accent text-foreground" }}>
-            Tune
-          </Link>
-          <Link to="/sessions" className={navClass} activeProps={{ className: "bg-accent text-foreground" }}>
-            Sessions
-          </Link>
-        </nav>
-        <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <li className="flex items-center gap-2">
-            <Dot tone={printer?.moonraker.connected ? "ok" : "off"} />
-            Moonraker
-            <span className="sr-only">{printer?.moonraker.connected ? "connected" : "not connected"}</span>
-          </li>
-          <li className="flex items-center gap-2">
-            <Dot tone={traceTone(printer)} />
-            Trace
-            <span className="sr-only">{traceTone(printer) === "ok" ? "open" : "not open"}</span>
-          </li>
-          <li className={cn("font-mono", klippyClass)}>Klipper {klippy}</li>
-          <li className="font-mono text-muted-foreground">
-            Homed {printer && printer.moonraker.homed_axes !== "" ? printer.moonraker.homed_axes : "none"}
-          </li>
-          <li className="flex items-center gap-2">
-            <Button disabled={homing || klippy !== "ready"} onClick={home}>
-              {homing ? "Homing" : "Home"}
-            </Button>
-            {homeError !== null && <span className="text-amber-400">{homeError}</span>}
-          </li>
-          <li className="font-mono text-muted-foreground">
-            Free {printer?.free_bytes != null ? formatBytes(printer.free_bytes) : "unknown"}
-          </li>
-          {!connected && <li className="text-amber-400">Event stream disconnected</li>}
-        </ul>
+        <span className={cn("font-mono", klippyClass)}>Klipper {klippy}</span>
+        {!connected && <span className="text-amber-400">Event stream disconnected</span>}
         <div className="ml-auto flex items-center gap-3">
           {killStatus === "killed" && !killUnconfirmed && (
             <span className="font-mono text-red-400">Stop confirmed</span>
