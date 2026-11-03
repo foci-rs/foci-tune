@@ -190,6 +190,7 @@ async fn printer_lists_the_stepper_table_boards_and_preconditions() {
     assert_eq!(ch0["control"]["velocity_p"], 841);
     assert_eq!(ch0["control"]["pwm_hz"], 50_000);
     assert!(p["free_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(p["version"], env!("CARGO_PKG_VERSION"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

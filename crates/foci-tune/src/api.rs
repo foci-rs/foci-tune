@@ -396,6 +396,8 @@ pub struct PrinterView {
     pub preconditions: Vec<PreconditionView>,
     /// Free bytes on the data directory.
     pub free_bytes: Option<u64>,
+    /// Version of the running foci-tune service.
+    pub version: &'static str,
     /// Engine state.
     pub engine: EngineView,
 }
@@ -744,6 +746,7 @@ impl<M: MoonrakerApi + 'static> Api<M> {
             boards: self.boards(),
             preconditions,
             free_bytes,
+            version: env!("CARGO_PKG_VERSION"),
             engine: EngineView {
                 current: status.current.map(|(session, run, state)| CurrentRunView {
                     session,
