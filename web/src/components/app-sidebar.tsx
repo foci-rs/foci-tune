@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { ActivityIcon, HistoryIcon, PrinterIcon, type LucideIcon } from "lucide-react";
+import {
+  FolderClockIcon,
+  PrinterIcon,
+  SlidersHorizontalIcon,
+  SlidersVerticalIcon,
+  WandSparklesIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { useFeed } from "@/feed";
 import { formatBytes } from "@/units";
 import {
@@ -10,12 +17,20 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 
 const pages: { to: "/printer" | "/tune" | "/sessions"; label: string; icon: LucideIcon }[] = [
   { to: "/printer", label: "Printer", icon: PrinterIcon },
-  { to: "/tune", label: "Tune", icon: ActivityIcon },
-  { to: "/sessions", label: "Sessions", icon: HistoryIcon },
+  { to: "/tune", label: "Tune", icon: SlidersHorizontalIcon },
+  { to: "/sessions", label: "Sessions", icon: FolderClockIcon },
+];
+
+const tuneModes: { to: "/tune/manual" | "/tune/guided"; label: string; icon: LucideIcon }[] = [
+  { to: "/tune/manual", label: "Manual", icon: SlidersVerticalIcon },
+  { to: "/tune/guided", label: "Guided", icon: WandSparklesIcon },
 ];
 
 export function AppSidebar() {
@@ -36,6 +51,20 @@ export function AppSidebar() {
                       <span>{label}</span>
                     </Link>
                   </SidebarMenuButton>
+                  {to === "/tune" && (
+                    <SidebarMenuSub aria-label="Tune modes">
+                      {tuneModes.map((mode) => (
+                        <SidebarMenuSubItem key={mode.to}>
+                          <SidebarMenuSubButton asChild>
+                            <Link to={mode.to} activeProps={{ "data-active": true }}>
+                              <mode.icon />
+                              <span>{mode.label}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>

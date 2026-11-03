@@ -109,6 +109,25 @@ test("the kill button stays an icon: a tooltip explains the double click and the
   expect(armed).toHaveTextContent("");
 });
 
+test("Manual and Guided are sub-items of Tune in the sidebar", async () => {
+  respond(printerView());
+  await mount();
+  const nav = screen.getByRole("navigation", { name: "Pages" });
+  expect(within(nav).getByRole("link", { name: "Tune" })).toHaveAttribute("href", "/tune");
+  const sub = within(nav).getByRole("list", { name: "Tune modes" });
+  expect(within(sub).getByRole("link", { name: "Manual" })).toHaveAttribute("href", "/tune/manual");
+  expect(within(sub).getByRole("link", { name: "Guided" })).toHaveAttribute("href", "/tune/guided");
+});
+
+test("the Tune page opens on the manual workbench", async () => {
+  respond(printerView());
+  const router = createTestRouter("/tune");
+  render(<RouterProvider router={router} />);
+  await screen.findByRole("banner");
+  await vi.waitFor(() => expect(router.state.location.pathname).toBe("/tune/manual"));
+  expect(screen.queryByRole("radiogroup", { name: "Tune mode" })).toBeNull();
+});
+
 test("kill needs a second click and posts once", async () => {
   respond(printerView(), () => new Response(JSON.stringify({ run: null, state: "killed" })));
   await mount();

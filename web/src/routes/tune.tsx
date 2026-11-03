@@ -1,4 +1,4 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, Outlet, redirect } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiRequestError,
@@ -74,7 +74,24 @@ import { Route as rootRoute } from "./__root";
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tune",
+  beforeLoad: ({ location }) => {
+    if (location.pathname === "/tune" || location.pathname === "/tune/") {
+      throw redirect({ to: "/tune/manual" });
+    }
+  },
   component: TunePage,
+});
+
+export const ManualRoute = createRoute({
+  getParentRoute: () => Route,
+  path: "manual",
+  component: ManualTune,
+});
+
+export const GuidedRoute = createRoute({
+  getParentRoute: () => Route,
+  path: "guided",
+  component: GuidedTunePage,
 });
 
 const RUN_TYPES: { type: RunType; label: string }[] = [
@@ -90,11 +107,6 @@ const DEFAULT_LADDER: LadderInput = {
   floor: 0.05,
   marginal: 0.08,
 };
-
-const MODES: { mode: "manual" | "guided"; label: string }[] = [
-  { mode: "manual", label: "Manual" },
-  { mode: "guided", label: "Guided" },
-];
 
 const AWAIT_PICKUP_MS = 10_000;
 
@@ -171,7 +183,6 @@ function useSessionView(id: SessionId | null, onGone: () => void) {
 
 function TunePage() {
   const { printer, loadError } = useFeed();
-  const [mode, setMode] = useState<"manual" | "guided">("manual");
   if (printer === null) {
     return (
       <main className="mx-auto max-w-6xl px-4 py-6">
@@ -190,27 +201,19 @@ function TunePage() {
   }
   return (
     <main className="mx-auto max-w-7xl space-y-4 px-4 py-6">
-      <div role="radiogroup" aria-label="Tune mode" className="flex gap-1">
-        {MODES.map((m) => (
-          <button
-            key={m.mode}
-            type="button"
-            role="radio"
-            aria-checked={mode === m.mode}
-            onClick={() => setMode(m.mode)}
-            className={
-              mode === m.mode
-                ? "rounded-full border border-emerald-500 px-3 py-1 text-sm text-emerald-300"
-                : "rounded-full border px-3 py-1 text-sm text-muted-foreground"
-            }
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
-      {mode === "guided" ? <GuidedTune printer={printer} /> : <Workbench printer={printer} />}
+      <Outlet />
     </main>
   );
+}
+
+function ManualTune() {
+  const { printer } = useFeed();
+  return printer === null ? null : <Workbench printer={printer} />;
+}
+
+function GuidedTunePage() {
+  const { printer } = useFeed();
+  return printer === null ? null : <GuidedTune printer={printer} />;
 }
 
 function Workbench({ printer }: { printer: PrinterView }) {

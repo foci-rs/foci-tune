@@ -3,9 +3,14 @@ import { Route as rootRoute } from "@/routes/__root";
 import { Route as printerRoute } from "@/routes/printer";
 import { Route as sessionRoute } from "@/routes/sessions.$id";
 import { Route as sessionsRoute } from "@/routes/sessions";
-import { Route as tuneRoute } from "@/routes/tune";
+import { GuidedRoute, ManualRoute, Route as tuneRoute } from "@/routes/tune";
 
-const routeTree = rootRoute.addChildren([printerRoute, tuneRoute, sessionsRoute, sessionRoute]);
+const routeTree = rootRoute.addChildren([
+  printerRoute,
+  tuneRoute.addChildren([ManualRoute, GuidedRoute]),
+  sessionsRoute,
+  sessionRoute,
+]);
 
 export function createAppRouter(history?: RouterHistory) {
   return createRouter({ routeTree, history });
