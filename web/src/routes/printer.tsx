@@ -2,8 +2,6 @@ import { createRoute } from "@tanstack/react-router";
 import { FirmwareRestart } from "@/components/printer-cards";
 import { StepperCard } from "@/components/StepperCard";
 import { McuCard } from "@/components/McuCard";
-import { PreconditionList } from "@/components/preconditions";
-import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { Route as rootRoute } from "./__root";
 
@@ -43,9 +41,6 @@ function PrinterPage() {
           <McuCard key={board.serial} printer={printer} board={board} />
         ))}
       </div>
-      <Card label="Preconditions">
-        <PreconditionList items={printer.preconditions} />
-      </Card>
       {printer.steppers.length === 0 ? (
         <p className="text-sm text-muted-foreground">No FOCI steppers found.</p>
       ) : (
