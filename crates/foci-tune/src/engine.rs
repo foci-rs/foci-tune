@@ -2508,6 +2508,7 @@ mod tests {
             position_max: 300.0,
             encoder_ppr: 1000,
             electrical_model_present: true,
+            homing_current_a: None,
             config_gains: ConfigGains::default(),
             unusable: None,
         }

@@ -53,6 +53,17 @@ fn usb_serial_is_the_last_token_without_the_if_suffix() {
 }
 
 #[test]
+fn homing_current_comes_from_the_foci_section_in_amps() {
+    let mut settings = corexy_settings();
+    settings["foci stepper_x"]["homing_current"] = json!(0.4);
+
+    let steppers = derive_steppers(&settings, &serials(&[OUROBOROS_SERIAL]));
+
+    assert_eq!(steppers[0].homing_current_a, Some(0.4));
+    assert_eq!(steppers[1].homing_current_a, None);
+}
+
+#[test]
 fn corexy_table_lists_the_two_foci_channels() {
     let steppers = derive_steppers(&corexy_settings(), &serials(&[OUROBOROS_SERIAL]));
 

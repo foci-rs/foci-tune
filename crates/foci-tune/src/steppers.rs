@@ -53,6 +53,8 @@ pub struct Stepper {
     pub encoder_ppr: u32,
     /// Whether `identified_r_count_milli` is present.
     pub electrical_model_present: bool,
+    /// `homing_current` of the foci section in amps, when set.
+    pub homing_current_a: Option<f64>,
     /// Gains and filters as configured.
     pub config_gains: ConfigGains,
     /// Why the channel cannot be used, when it cannot.
@@ -218,6 +220,7 @@ fn derive_one(
         position_max: position_max.unwrap_or(0.0),
         encoder_ppr: encoder_ppr.unwrap_or(0),
         electrical_model_present: foci.get("identified_r_count_milli").is_some(),
+        homing_current_a: number(&foci["homing_current"]),
         config_gains: gains_of(foci),
         unusable,
     })
