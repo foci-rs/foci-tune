@@ -1,4 +1,4 @@
-//! Per-rung gate verdicts and the worst-speed score.
+//! Per-rung gate verdicts and the absolute score.
 
 use serde::{Deserialize, Serialize};
 
@@ -67,8 +67,11 @@ pub struct RungVerdict {
     pub marginal: bool,
     /// Missing data that keeps the rung from being scored.
     pub unscored: Option<UnscoredReason>,
-    /// Worst-speed ratio; `Some` only for score-eligible rungs. Lower is better.
+    /// Largest median p99 over the speeds, in um; `Some` only for score-eligible rungs. Lower is
+    /// better.
     pub score: Option<f64>,
+    /// Index into the speed vector of the speed that sets `score`; `Some` iff `score` is.
+    pub deciding_speed: Option<usize>,
 }
 
 /// Why assessment of the ladder stopped.
@@ -130,6 +133,10 @@ pub struct LadderAssessment {
     /// Index of the rung where assessment paused for an operator decision and the reason.
     #[serde(default)]
     pub pause: Option<(usize, Pause)>,
+    /// Index of the score-eligible rung with the lowest score; ties go to the lower index.
+    pub best: Option<usize>,
+    /// Index of the score-eligible rung with the second-lowest score; ties go to the lower index.
+    pub runner_up: Option<usize>,
 }
 
 fn all_some(values: impl Iterator<Item = Option<f64>>) -> Option<Vec<f64>> {
@@ -195,12 +202,27 @@ pub fn assess_ladder(
 /// below the floor, and pauses at the first rung whose damping is unassessable (unless waived) or
 /// whose standstill baseline (rung 0) is unusable; later rungs keep default verdicts. A waived
 /// rung is unscored but still contributes its standstill result. A rung's score is the largest
-/// ratio, over speeds, of its median p99 to the lowest median p99 of that speed among
-/// score-eligible rungs. The standstill baseline and gate apply only when the gates carry a
+/// median p99 over its speeds. The standstill baseline and gate apply only when the gates carry a
 /// `standstill_factor` and the waivers leave the gate on.
 pub fn assess_ladder_with(
     rungs: &[Vec<RepeatResult>],
     repeats: usize,
+    gates: &Gates,
+    include_marginal: bool,
+    waivers: &Waivers,
+) -> LadderAssessment {
+    assess_ladder_at(rungs, repeats, &[], gates, include_marginal, waivers)
+}
+
+/// As [`assess_ladder_with`], with the speed of each p99 index in `speeds_mm_s`.
+///
+/// When several speeds share a rung's largest median p99, the rung's `deciding_speed` is the
+/// fastest of them. An index with no entry in `speeds_mm_s` ranks by its position, so with an
+/// empty slice the largest index wins.
+pub fn assess_ladder_at(
+    rungs: &[Vec<RepeatResult>],
+    repeats: usize,
+    speeds_mm_s: &[f64],
     gates: &Gates,
     include_marginal: bool,
     waivers: &Waivers,
@@ -282,28 +304,41 @@ pub fn assess_ladder_with(
                 && medians[i].zeta.is_some()
         })
         .collect();
-    let floors: Vec<f64> = (0..n_speeds)
-        .map(|s| {
-            eligible
-                .iter()
-                .filter_map(|&i| medians[i].p99_by_speed[s])
-                .fold(f64::INFINITY, f64::min)
-        })
-        .collect();
     for &i in &eligible {
-        let worst = medians[i]
+        let largest = medians[i]
             .p99_by_speed
             .iter()
-            .zip(&floors)
-            .filter_map(|(p, f)| p.map(|p| p / f))
+            .flatten()
+            .copied()
             .fold(f64::NEG_INFINITY, f64::max);
-        verdicts[i].score = Some(worst);
+        let deciding = medians[i]
+            .p99_by_speed
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| **p == Some(largest))
+            .map(|(s, _)| s)
+            .max_by(|&x, &y| match (speeds_mm_s.get(x), speeds_mm_s.get(y)) {
+                (Some(sx), Some(sy)) => sx.total_cmp(sy),
+                _ => x.cmp(&y),
+            });
+        verdicts[i].score = Some(largest);
+        verdicts[i].deciding_speed = deciding;
     }
+
+    let mut ranked: Vec<(f64, usize)> = eligible
+        .iter()
+        .filter_map(|&i| verdicts[i].score.map(|s| (s, i)))
+        .collect();
+    ranked.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let best = ranked.first().map(|r| r.1);
+    let runner_up = ranked.get(1).map(|r| r.1);
 
     LadderAssessment {
         verdicts,
         medians,
         halt,
         pause,
+        best,
+        runner_up,
     }
 }

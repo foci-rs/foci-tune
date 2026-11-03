@@ -1,7 +1,7 @@
 use foci_tune_analysis::ladder::RungOutcome;
 use foci_tune_analysis::verdict::{
     Gates, Halt, InadmissibleReason, LadderAssessment, Pause, RepeatResult, RungVerdict,
-    UnscoredReason, Waivers, assess_ladder, assess_ladder_with,
+    UnscoredReason, Waivers, assess_ladder, assess_ladder_at, assess_ladder_with,
 };
 
 fn gated() -> Gates {
@@ -26,34 +26,95 @@ fn rung(zeta: f64, p99: [f64; 2], sd: f64, n: usize) -> Vec<RepeatResult> {
 }
 
 #[test]
-fn score_is_worst_speed_ratio() {
+fn score_is_the_rungs_largest_median_p99() {
+    // Rung 0 is lowest at the fast speed, rung 1 lowest at the slow speed.
     let rungs = vec![
-        rung(0.2, [85.0, 100.0], 1.0, 3),
-        rung(0.2, [70.0, 145.0], 1.0, 3),
-        rung(0.2, [80.0, 110.0], 1.0, 3),
+        rung(0.2, [60.0, 66.0], 1.0, 3),
+        rung(0.2, [36.0, 80.0], 1.0, 3),
     ];
-
     let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.verdicts[0].score, Some(66.0));
+    assert_eq!(a.verdicts[1].score, Some(80.0));
+    assert_eq!(a.verdicts[0].deciding_speed, Some(1));
+    assert_eq!(a.verdicts[1].deciding_speed, Some(1));
+    assert_eq!(a.best, Some(0));
+    assert_eq!(a.runner_up, Some(1));
+}
 
-    let scores: Vec<f64> = a.verdicts.iter().map(|v| v.score.unwrap()).collect();
-    assert!((scores[0] - 85.0 / 70.0).abs() < 1e-12);
-    assert!((scores[1] - 1.45).abs() < 1e-12);
-    assert!((scores[2] - 80.0 / 70.0).abs() < 1e-12);
-    let best = scores
-        .iter()
-        .enumerate()
-        .min_by(|x, y| x.1.total_cmp(y.1))
-        .unwrap()
-        .0;
-    assert_eq!(best, 2);
-    let mean_ratio = |i: usize| -> f64 {
-        let p = [[85.0, 100.0], [70.0, 145.0], [80.0, 110.0]][i];
-        (p[0] / 70.0 + p[1] / 100.0) / 2.0
-    };
-    let mean_best = (0..3)
-        .min_by(|x, y| mean_ratio(*x).total_cmp(&mean_ratio(*y)))
-        .unwrap();
-    assert_ne!(best, mean_best);
+#[test]
+fn a_rung_that_hunts_at_the_slow_speed_loses_despite_winning_the_fast_one() {
+    let rungs = vec![
+        rung(0.2, [43.0, 66.0], 1.0, 3),
+        rung(0.2, [90.0, 55.0], 1.0, 3),
+    ];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.verdicts[1].score, Some(90.0));
+    assert_eq!(a.verdicts[1].deciding_speed, Some(0));
+    assert_eq!(a.best, Some(0));
+}
+
+#[test]
+fn equal_largest_medians_record_the_faster_speed() {
+    let rungs = vec![rung(0.2, [70.0, 70.0], 1.0, 3)];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.verdicts[0].deciding_speed, Some(1));
+    let unsorted = assess_ladder_at(
+        &rungs,
+        3,
+        &[400.0, 50.0],
+        &Gates::default(),
+        false,
+        &Waivers::default(),
+    );
+    assert_eq!(unsorted.verdicts[0].deciding_speed, Some(0));
+}
+
+#[test]
+fn equal_lowest_scores_make_the_lower_gain_best() {
+    let rungs = vec![
+        rung(0.2, [50.0, 70.0], 1.0, 3),
+        rung(0.2, [60.0, 70.0], 1.0, 3),
+    ];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.best, Some(0));
+    assert_eq!(a.runner_up, Some(1));
+}
+
+#[test]
+fn equal_second_lowest_scores_make_the_lower_gain_the_runner_up() {
+    // Rungs 1 and 2 share the score 70; rung 1 is decided by the slow speed, rung 2 by the fast.
+    let rungs = vec![
+        rung(0.2, [40.0, 60.0], 1.0, 3),
+        rung(0.2, [70.0, 50.0], 1.0, 3),
+        rung(0.2, [40.0, 70.0], 1.0, 3),
+    ];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.best, Some(0));
+    assert_eq!(a.runner_up, Some(1));
+    assert_eq!(a.verdicts[1].deciding_speed, Some(0));
+    assert_eq!(a.verdicts[2].deciding_speed, Some(1));
+}
+
+#[test]
+fn a_score_does_not_change_when_a_later_rung_finishes() {
+    let two = vec![
+        rung(0.2, [60.0, 66.0], 1.0, 3),
+        rung(0.2, [36.0, 80.0], 1.0, 3),
+    ];
+    let mut three = two.clone();
+    three.push(rung(0.2, [30.0, 50.0], 1.0, 3));
+    let a = assess_ladder(&two, 3, &Gates::default(), false);
+    let b = assess_ladder(&three, 3, &Gates::default(), false);
+    assert_eq!(a.verdicts[0].score, b.verdicts[0].score);
+    assert_eq!(b.best, Some(2));
+}
+
+#[test]
+fn one_speed_is_decided_by_index_zero() {
+    let rungs = vec![vec![rep(0.2, &[Some(40.0)], Some(1.0)); 3]];
+    let a = assess_ladder(&rungs, 3, &Gates::default(), false);
+    assert_eq!(a.verdicts[0].deciding_speed, Some(0));
+    assert_eq!(a.runner_up, None);
 }
 
 #[test]
@@ -68,7 +129,7 @@ fn median_uses_exactly_requested_repeats() {
     assert_eq!(a.verdicts[1], Default::default());
     assert_eq!(a.medians[1].zeta, None);
     assert!(a.halt.is_none());
-    assert_eq!(a.verdicts[0].score, Some(1.0));
+    assert_eq!(a.verdicts[0].score, Some(80.0));
 }
 
 #[test]
@@ -111,12 +172,12 @@ fn marginal_excluded_by_default() {
     let excluded = assess_ladder(&rungs, 3, &Gates::default(), false);
     assert!(excluded.verdicts[1].marginal);
     assert_eq!(excluded.verdicts[1].score, None);
-    assert_eq!(excluded.verdicts[0].score, Some(1.0));
+    assert_eq!(excluded.verdicts[0].score, Some(80.0));
 
     let included = assess_ladder(&rungs, 3, &Gates::default(), true);
     assert!(included.verdicts[1].marginal);
-    assert_eq!(included.verdicts[1].score, Some(1.0));
-    assert_eq!(included.verdicts[0].score, Some(2.0));
+    assert_eq!(included.verdicts[1].score, Some(40.0));
+    assert_eq!(included.verdicts[0].score, Some(80.0));
 }
 
 #[test]
@@ -157,7 +218,7 @@ fn missing_tracking_repeat_makes_rung_unscored() {
         Some(UnscoredReason::TrackingMissing)
     );
     assert_eq!(a.verdicts[1].score, None);
-    assert_eq!(a.verdicts[0].score, Some(1.0));
+    assert_eq!(a.verdicts[0].score, Some(80.0));
 }
 
 #[test]
@@ -226,7 +287,7 @@ fn non_positive_or_non_finite_p99_is_missing_tracking() {
         a.verdicts[2].unscored,
         Some(UnscoredReason::TrackingMissing)
     );
-    assert_eq!(a.verdicts[0].score, Some(1.0));
+    assert_eq!(a.verdicts[0].score, Some(80.0));
 }
 
 #[test]
@@ -378,7 +439,7 @@ fn the_old_entry_point_folds_a_pause_into_a_halt() {
 
 #[test]
 fn an_assessment_without_a_pause_field_deserialises() {
-    let v = serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"]});
+    let v = serde_json::json!({"verdicts": [], "medians": [], "halt": [1, "DampingUnassessable"], "best": null, "runner_up": null});
     let a: LadderAssessment = serde_json::from_value(v).unwrap();
     assert_eq!(a.halt, Some((1, Halt::DampingUnassessable)));
     assert_eq!(a.pause, None);

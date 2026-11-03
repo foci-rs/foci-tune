@@ -4,6 +4,12 @@ use foci_tune_analysis::recommend::{
 use foci_tune_analysis::verdict::{Halt, LadderAssessment, RungMedians, RungVerdict};
 
 fn assessment(scores: &[Option<f64>], halt: Option<(usize, Halt)>) -> LadderAssessment {
+    let best = scores
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| s.map(|s| (i, s)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i);
     LadderAssessment {
         verdicts: scores
             .iter()
@@ -15,6 +21,8 @@ fn assessment(scores: &[Option<f64>], halt: Option<(usize, Halt)>) -> LadderAsse
         medians: scores.iter().map(|_| RungMedians::default()).collect(),
         halt,
         pause: None,
+        best,
+        runner_up: None,
     }
 }
 
