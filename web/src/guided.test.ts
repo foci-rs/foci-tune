@@ -626,8 +626,8 @@ describe("comparison fields", () => {
     expect(text).toMatch(/rungs 1, 2 and 3/);
     expect(text).toMatch(/2\.5/);
     expect(text).toMatch(/3\.3/);
-    expect(text).not.toMatch(/1\.0 um/);
-    expect(text).not.toMatch(/3\.0 um/);
+    expect(text).not.toMatch(/1\.0 μm/);
+    expect(text).not.toMatch(/3\.0 μm/);
   });
 
   test("the comparison line names the runner-up when there is no tie", () => {
@@ -659,7 +659,7 @@ describe("comparison fields", () => {
     expect(text).toMatch(/rung 3/);
     expect(text).toMatch(/0\.1/);
     expect(text).toMatch(/one repeat/i);
-    expect(text).not.toMatch(/0\.1 um[^.]*\d\.\d um/);
+    expect(text).not.toMatch(/0\.1 μm[^.]*\d\.\d μm/);
   });
 
   test("a single eligible rung says nothing was compared", () => {

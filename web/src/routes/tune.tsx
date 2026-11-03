@@ -720,7 +720,7 @@ export function SessionResults({ view }: { view: SessionView }) {
     .filter((m) => m.unassessable)
     .map((m) => m.value);
   const headlineLabel =
-    type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (um)" : "Worst torque sd";
+    type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (μm)" : "Worst torque sd";
 
   const overlay = useMemo(
     () =>

@@ -154,7 +154,7 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
   };
 }
 
-const um = (value: number): string => `${value.toFixed(1)} um`;
+const um = (value: number): string => `${value.toFixed(1)} μm`;
 
 function rungList(indices: number[]): string {
   const shown = indices.map((i) => i + 1);

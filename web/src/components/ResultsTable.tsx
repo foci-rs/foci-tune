@@ -75,7 +75,7 @@ function Details({ run, type }: { run: Run; type: RunType }) {
     );
   }
   const worstPp = Math.max(...(m.standstill?.rests ?? []).map((r) => r.position_pp_um ?? Number.NaN));
-  return <span>max pos pp {formatNumber(Number.isFinite(worstPp) ? worstPp : null, 1)} um</span>;
+  return <span>max pos pp {formatNumber(Number.isFinite(worstPp) ? worstPp : null, 1)} μm</span>;
 }
 
 function StateCell({ entry }: { entry: RunEntry }) {

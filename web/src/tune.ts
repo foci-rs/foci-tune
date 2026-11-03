@@ -184,7 +184,7 @@ export function headlineMetric(run: Run, type: RunType): Headline {
       return {
         label: top === undefined ? "p99" : `p99 at ${top.speed_mm_s} mm/s`,
         value: top?.p99_um ?? null,
-        unit: "um",
+        unit: "μm",
       };
     }
     case "probe": {

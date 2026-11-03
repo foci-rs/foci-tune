@@ -244,9 +244,9 @@ test("the score column is in micrometres and each scored row shows its deciding 
   };
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("table");
-  expect(screen.getByRole("columnheader", { name: /score.*um/i })).toBeInTheDocument();
+  expect(screen.getByRole("columnheader", { name: /score.*μm/i })).toBeInTheDocument();
   expect(screen.getAllByText(/@ 100 mm\/s/)).not.toHaveLength(0);
-  expect(screen.getAllByText(/5\.1 um.*3\.1 um/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/5\.1 μm.*3\.1 μm/).length).toBeGreaterThan(0);
   expect(screen.getByText(/^best$/i)).toBeInTheDocument();
 });
 

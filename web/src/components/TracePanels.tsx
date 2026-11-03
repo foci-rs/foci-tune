@@ -14,7 +14,7 @@ export interface OverlayRun<T> {
 type Signal = "position_error_um" | "velocity_mm_s" | "torque";
 
 export const TRACE_SIGNALS: { key: Signal; label: string }[] = [
-  { key: "position_error_um", label: "Position error (um)" },
+  { key: "position_error_um", label: "Position error (μm)" },
   { key: "velocity_mm_s", label: "Velocity (mm/s)" },
   { key: "torque", label: "Torque (raw)" },
 ];

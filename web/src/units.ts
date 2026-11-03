@@ -16,7 +16,7 @@ export function pGain(raw: number): string {
 
 export function formatUm(um: number): string {
   const rounded = Math.round(um);
-  return `${rounded === 0 ? 0 : rounded} um`;
+  return `${rounded === 0 ? 0 : rounded} μm`;
 }
 
 export function quantumUm(quantumUnits: number, rotationDistanceMm: number): number {

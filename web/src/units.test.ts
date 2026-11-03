@@ -16,8 +16,8 @@ describe("units", () => {
   });
 
   test("formatUm rounds to whole micrometres", () => {
-    expect(formatUm(123.456)).toBe("123 um");
-    expect(formatUm(-0.4)).toBe("0 um");
+    expect(formatUm(123.456)).toBe("123 μm");
+    expect(formatUm(-0.4)).toBe("0 μm");
   });
 
   test("quantumUm scales position units by the motor rotation distance", () => {

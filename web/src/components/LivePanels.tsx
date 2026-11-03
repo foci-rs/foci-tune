@@ -39,7 +39,7 @@ export function LivePanels({ stepper, runRegime }: { stepper: StepperView; runRe
   const panels = useMemo(() => {
     const t = trace?.t_s ?? [];
     return [
-      { label: "Live position error (um)", data: [t, trace?.position_error_um ?? []] as uPlot.AlignedData },
+      { label: "Live position error (μm)", data: [t, trace?.position_error_um ?? []] as uPlot.AlignedData },
       { label: "Live velocity (mm/s)", data: [t, trace?.velocity_mm_s ?? []] as uPlot.AlignedData },
       { label: "Live torque (raw)", data: [t, trace?.torque ?? []] as uPlot.AlignedData },
     ];

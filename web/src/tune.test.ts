@@ -138,7 +138,7 @@ describe("headlineMetric", () => {
         tracking: [rec(400, 33), rec(50, 12)],
       },
     );
-    expect(headlineMetric(r, "tracking")).toMatchObject({ value: 33, unit: "um" });
+    expect(headlineMetric(r, "tracking")).toMatchObject({ value: 33, unit: "μm" });
   });
 
   test("probe: velocity zeta, or no value with the fit's reason", () => {

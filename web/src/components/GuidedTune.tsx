@@ -444,7 +444,7 @@ function RungTable({ rows, speeds, axis }: { rows: RungView[]; speeds: number[];
             <th className="pr-3">Gain</th>
             <th className="pr-3">Raw</th>
             <th className="pr-3">Verdict</th>
-            <th className="pr-3">Score (p99 um)</th>
+            <th className="pr-3">Score (p99 μm)</th>
             <th className="pr-3">Behind by</th>
             <th className="pr-3">Zeta</th>
             {speeds.map((s) => (
@@ -480,8 +480,8 @@ function RungTable({ rows, speeds, axis }: { rows: RungView[]; speeds: number[];
                   : r.gap === null
                     ? ""
                     : r.tolerance === null
-                      ? `${fmt(r.gap, 1)} um`
-                      : `${fmt(r.gap, 1)} um ± ${fmt(r.tolerance, 1)} um`}
+                      ? `${fmt(r.gap, 1)} μm`
+                      : `${fmt(r.gap, 1)} μm ± ${fmt(r.tolerance, 1)} μm`}
               </td>
               <td className="pr-3">{fmt(r.zeta)}</td>
               {speeds.map((s, i) => (
