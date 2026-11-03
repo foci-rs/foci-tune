@@ -194,6 +194,23 @@ async fn printer_lists_the_stepper_table_boards_and_preconditions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn printer_reports_each_boards_firmware_version_from_klipper() {
+    let rig = rig().await;
+    rig.fake.set_status(json!({
+        "mcu boarda": {"mcu_version": "v0.4.1-30-g4f2b042b", "mcu_build_versions": "fw=68e16122"},
+    }));
+    let app = app(&rig);
+
+    let p = get(&app, "/api/printer").await.json();
+
+    let a = find(&p["boards"], "serial", SERIAL_A);
+    assert_eq!(a["mcu_version"], "v0.4.1-30-g4f2b042b");
+    assert_eq!(a["mcu_build"], "fw=68e16122");
+    let b = find(&p["boards"], "serial", SERIAL_B);
+    assert!(b["mcu_version"].is_null(), "{b}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn printer_names_the_failing_precondition_per_stepper() {
     let rig = rig_with(Options {
         homed: "y",

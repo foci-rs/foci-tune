@@ -46,6 +46,30 @@ async fn config_root_and_settings_come_from_http() {
 }
 
 #[tokio::test]
+async fn mcu_versions_come_from_the_mcu_objects() {
+    let fake = FakeMoonraker::start().await;
+    fake.set_status(json!({
+        "mcu": {"mcu_version": "v0.13.0-688-gb7c0329f", "mcu_build_versions": "gcc: 14"},
+        "mcu ouroboros": {"mcu_version": "v0.4.1-30-g4f2b042b", "mcu_build_versions": "fw=68e16122"},
+    }));
+    let client = MoonrakerClient::connect(client_config(fake.url()));
+
+    let versions = client
+        .mcu_versions(&[
+            "mcu".to_owned(),
+            "ouroboros".to_owned(),
+            "absent".to_owned(),
+        ])
+        .await
+        .unwrap();
+
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions["mcu"].version, "v0.13.0-688-gb7c0329f");
+    assert_eq!(versions["ouroboros"].version, "v0.4.1-30-g4f2b042b");
+    assert_eq!(versions["ouroboros"].build, "fw=68e16122");
+}
+
+#[tokio::test]
 async fn script_returns_err_with_the_moonraker_message_on_a_bang_response() {
     let fake = FakeMoonraker::start().await;
     fake.fail_scripts_with("!! Unknown command: \"FOCI_NOPE\"");

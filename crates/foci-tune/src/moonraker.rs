@@ -1,5 +1,6 @@
 //! Moonraker client: HTTP for requests, a WebSocket for subscriptions and events.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -110,6 +111,15 @@ impl PrinterState {
     }
 }
 
+/// Firmware version strings Klipper reports for one MCU.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McuVersion {
+    /// `mcu_version`, for example `v0.4.1-30-g4f2b042b`.
+    pub version: String,
+    /// `mcu_build_versions`, the firmware's build component list.
+    pub build: String,
+}
+
 /// Connection settings for [`MoonrakerClient`].
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -141,6 +151,15 @@ pub trait MoonrakerApi: Send + Sync {
     fn config_root(&self) -> impl Future<Output = Result<PathBuf>> + Send;
     /// The `configfile.settings` object.
     fn settings(&self) -> impl Future<Output = Result<Value>> + Send;
+    /// Firmware versions of the named MCUs, keyed by Klipper MCU name (`mcu` for the main one).
+    /// An MCU Klipper does not report is left out.
+    fn mcu_versions(
+        &self,
+        names: &[String],
+    ) -> impl Future<Output = Result<BTreeMap<String, McuVersion>>> + Send {
+        let _ = names;
+        async { Ok(BTreeMap::new()) }
+    }
     /// Run G-code; an error carries Moonraker's message.
     fn script(&self, gcode: &str) -> impl Future<Output = Result<()>> + Send;
     /// Trigger an emergency stop.
@@ -264,6 +283,37 @@ impl MoonrakerApi for MoonrakerClient {
         Ok(settings)
     }
 
+    async fn mcu_versions(&self, names: &[String]) -> Result<BTreeMap<String, McuVersion>> {
+        let objects: Vec<(String, &str)> = names
+            .iter()
+            .map(|name| (mcu_object(name), "mcu_version,mcu_build_versions"))
+            .collect();
+        if objects.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let reply = Self::result(
+            self.request(reqwest::Method::GET, "/printer/objects/query")
+                .query(&objects)
+                .timeout(REQUEST_TIMEOUT),
+        )
+        .await?;
+        Ok(names
+            .iter()
+            .filter_map(|name| {
+                let status = &reply["status"][mcu_object(name)];
+                let version = status["mcu_version"].as_str()?;
+                let build = status["mcu_build_versions"].as_str().unwrap_or_default();
+                Some((
+                    name.clone(),
+                    McuVersion {
+                        version: version.to_owned(),
+                        build: build.to_owned(),
+                    },
+                ))
+            })
+            .collect())
+    }
+
     async fn script(&self, gcode: &str) -> Result<()> {
         let reply = Self::result(
             self.request(reqwest::Method::POST, "/printer/gcode/script")
@@ -333,6 +383,14 @@ fn websocket_request(
             .insert("X-Api-Key", HeaderValue::from_str(key).ok()?);
     }
     Some(request)
+}
+
+fn mcu_object(name: &str) -> String {
+    if name == "mcu" {
+        "mcu".to_owned()
+    } else {
+        format!("mcu {name}")
+    }
 }
 
 fn subscribe_message(id: u64) -> Message {

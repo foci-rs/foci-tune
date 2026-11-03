@@ -5,6 +5,7 @@
 //! `{"error": "<reason meant for display>"}`, with `"field"` naming the offending request
 //! field on a 400.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -38,7 +39,7 @@ use crate::model::{
     ControlSnapshot, FORMAT_VERSION, Filters, Gains, LadderDef, Run, RunId, RunRequest, RunState,
     Session, SessionId,
 };
-use crate::moonraker::{KlippyState, MoonrakerApi};
+use crate::moonraker::{KlippyState, McuVersion, MoonrakerApi};
 use crate::pattern::{Pattern, PatternError, propose_pattern};
 use crate::steppers::{BedLimits, Stepper};
 use crate::stimulus::{RunKind, StimulusError, compose};
@@ -339,6 +340,10 @@ pub struct BoardView {
     pub firmware_id: Option<String>,
     /// Product string from the metadata frame.
     pub product: Option<String>,
+    /// Firmware version Klipper reports for the MCU this board belongs to.
+    pub mcu_version: Option<String>,
+    /// Firmware build components Klipper reports for that MCU.
+    pub mcu_build: Option<String>,
     /// Boot identifier changes seen.
     pub boot_changes: u64,
     /// Frames that could not be decoded.
@@ -691,6 +696,7 @@ impl<M: MoonrakerApi + 'static> Api<M> {
             Ok(s) => (s, None),
             Err(e) => (Vec::new(), Some(e.to_string())),
         };
+        let versions = self.engine.mcu_versions(&steppers).await;
         let limits = BedLimits::from_steppers(&steppers);
         let mut preconditions = Vec::new();
         for s in &steppers {
@@ -701,6 +707,7 @@ impl<M: MoonrakerApi + 'static> Api<M> {
                 failing: failing.iter().map(ToString::to_string).collect(),
             });
         }
+        let boards = self.boards(&steppers, &versions);
         let steppers = steppers
             .into_iter()
             .map(|stepper| {
@@ -743,7 +750,7 @@ impl<M: MoonrakerApi + 'static> Api<M> {
             },
             steppers,
             settings_error,
-            boards: self.boards(),
+            boards,
             preconditions,
             free_bytes,
             version: env!("CARGO_PKG_VERSION"),
@@ -759,12 +766,20 @@ impl<M: MoonrakerApi + 'static> Api<M> {
         }
     }
 
-    fn boards(&self) -> Vec<BoardView> {
+    fn boards(
+        &self,
+        steppers: &[Stepper],
+        versions: &BTreeMap<String, McuVersion>,
+    ) -> Vec<BoardView> {
         let live = lock(&self.live);
         let mut boards: Vec<BoardView> = live
             .boards
             .iter()
             .map(|(serial, b)| {
+                let version = steppers
+                    .iter()
+                    .find(|s| &s.serial == serial)
+                    .and_then(|s| versions.get(&s.mcu));
                 let mut channels: Vec<ChannelView> = b
                     .channels
                     .iter()
@@ -787,6 +802,8 @@ impl<M: MoonrakerApi + 'static> Api<M> {
                     critical_hz_measured: b.critical_hz_measured,
                     firmware_id: b.metadata.as_ref().map(|m| m.firmware_id.clone()),
                     product: b.metadata.as_ref().map(|m| m.product.clone()),
+                    mcu_version: version.map(|v| v.version.clone()),
+                    mcu_build: version.map(|v| v.build.clone()),
                     boot_changes: b.boot_changes,
                     undecodable_frames: b.undecodable_frames,
                     channels,

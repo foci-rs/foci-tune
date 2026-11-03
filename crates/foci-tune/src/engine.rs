@@ -5,7 +5,7 @@
 //! A ladder is a queue of runs in interleaved order with a damping stop rule. Kill posts
 //! Klipper's emergency stop; abort drains the queue after the current run.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::Path;
 #[cfg(test)]
@@ -35,7 +35,7 @@ use crate::model::{
     CaptureInfo, ChannelBaseline, ControlSnapshot, FORMAT_VERSION, Filters, Gains, LadderDef,
     ProbeRecord, Run, RunId, RunRegime, RunRequest, RunState, Session, SessionId, StepTime,
 };
-use crate::moonraker::{KlippyState, MoonrakerApi, PrinterState};
+use crate::moonraker::{KlippyState, McuVersion, MoonrakerApi, PrinterState};
 use crate::run_analysis::{AnalysisInput, analyze, decode_capture, stimulus_window};
 use crate::steppers::{BedLimits, Stepper, derive_steppers};
 use crate::stimulus::{RunKind, compose, feedforward_reset_line};
@@ -749,6 +749,7 @@ impl Persister {
 #[derive(Default)]
 struct SettingsCache {
     value: Option<Arc<Value>>,
+    mcu_versions: Option<Arc<BTreeMap<String, McuVersion>>>,
     generation: u64,
 }
 
@@ -1005,6 +1006,15 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
     pub async fn steppers(&self) -> Result<Vec<Stepper>, Precondition> {
         let settings = self.shared.settings().await?;
         Ok(derive_steppers(&settings, &self.shared.open_serials()))
+    }
+
+    /// Firmware versions Klipper reports for the MCUs `steppers` use, keyed by MCU name. Read
+    /// once per Klipper start; empty when Klipper does not answer.
+    pub async fn mcu_versions(&self, steppers: &[Stepper]) -> Arc<BTreeMap<String, McuVersion>> {
+        let mut names: Vec<String> = steppers.iter().map(|s| s.mcu.clone()).collect();
+        names.sort();
+        names.dedup();
+        self.shared.mcu_versions(&names).await
     }
 
     /// The run in flight, the queue and any unconfirmed kill.
@@ -1543,7 +1553,26 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     fn invalidate_settings(&self) {
         let mut cache = lock(&self.settings);
         cache.value = None;
+        cache.mcu_versions = None;
         cache.generation += 1;
+    }
+
+    async fn mcu_versions(&self, names: &[String]) -> Arc<BTreeMap<String, McuVersion>> {
+        let generation = {
+            let cache = lock(&self.settings);
+            if let Some(versions) = &cache.mcu_versions {
+                return versions.clone();
+            }
+            cache.generation
+        };
+        let versions = Arc::new(self.moonraker.mcu_versions(names).await.unwrap_or_default());
+        if !versions.is_empty() {
+            let mut cache = lock(&self.settings);
+            if cache.generation == generation {
+                cache.mcu_versions = Some(versions.clone());
+            }
+        }
+        versions
     }
 
     async fn settings(&self) -> Result<Arc<Value>, Precondition> {
