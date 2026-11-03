@@ -12,7 +12,8 @@ use foci_tune_analysis::ladder::{LadderAxis, LadderValue, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation, Recommended, recommend};
 use foci_tune_analysis::rungs::{RungNote, Rungs, SeedRefused, rung_values, seed_from};
 use foci_tune_analysis::verdict::{
-    Gates, Halt, LadderAssessment, Pause, RepeatResult, Waivers, assess_ladder_with,
+    DriftVerdict, Gates, Halt, LadderAssessment, Pause, RepeatResult, Waivers, assess_ladder_at,
+    drift_verdict,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -178,6 +179,9 @@ pub struct DriftRecord {
     pub first: Option<f64>,
     /// Value of the re-run.
     pub rerun: Option<f64>,
+    /// Whether the change exceeds twice the speed's repeat spread; `Some` for the `p99` metrics
+    /// once the step concludes, `None` for the others.
+    pub verdict: Option<DriftVerdict>,
 }
 
 /// One axis of the tune: its ladder, progress and chosen value.
@@ -591,9 +595,10 @@ fn waivers(step: &TuneStep) -> Waivers {
 fn assess(step: &TuneStep, setup: &TuneSetup) -> LadderAssessment {
     let results: Vec<Vec<RepeatResult>> =
         step.rungs.iter().map(|r| r.repeat_values.clone()).collect();
-    assess_ladder_with(
+    assess_ladder_at(
         &results,
         step.repeats as usize,
+        &setup.speeds_mm_s,
         &setup.gates,
         setup.include_marginal,
         &waivers(step),
@@ -646,16 +651,19 @@ fn drift_records(
         metric: "zeta".to_owned(),
         first: medians.zeta,
         rerun: rerun_zeta,
+        verdict: None,
     }];
     out.extend(speeds.iter().enumerate().map(|(s, speed)| DriftRecord {
         metric: format!("p99 {speed} mm/s"),
         first: medians.p99_by_speed.get(s).copied().flatten(),
         rerun: rerun.p99_by_speed.get(s).copied().flatten(),
+        verdict: None,
     }));
     out.push(DriftRecord {
         metric: "worst torque sd".to_owned(),
         first: medians.worst_torque_sd,
         rerun: rerun.worst_torque_sd,
+        verdict: None,
     });
     out
 }
@@ -1974,6 +1982,15 @@ fn conclude(tune: &mut Tune, index: usize, failed: Option<String>) {
             }
         }
         let assessment = assess(step, &setup);
+        for (s, d) in step
+            .drift
+            .iter_mut()
+            .filter(|d| d.metric.starts_with("p99 "))
+            .enumerate()
+        {
+            let spread = assessment.spreads.get(s).copied().flatten();
+            d.verdict = Some(drift_verdict(d.first, d.rerun, spread));
+        }
         let shown: Vec<f64> = step.rungs.iter().map(|r| r.shown).collect();
         step.recommendation = failed.is_none().then(|| recommend(&assessment, &shown));
         step.assessment = Some(assessment);

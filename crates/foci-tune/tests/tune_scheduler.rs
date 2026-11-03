@@ -16,7 +16,7 @@ use foci_tune_analysis::ladder::{LadderAxis, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation};
 use foci_tune_analysis::rungs::{SeedRefused, rung_values};
 use foci_tune_analysis::verdict::{
-    Gates, Halt, InadmissibleReason, Pause, UnscoredReason, assess_ladder,
+    DriftVerdict, Gates, Halt, InadmissibleReason, Pause, UnscoredReason, Waivers, assess_ladder_at,
 };
 use rig::*;
 use serde_json::json;
@@ -515,11 +515,114 @@ async fn seed_rung_is_rerun_at_the_end_for_drift() {
             .iter()
             .all(|d| d.first.is_some() && d.rerun.is_some())
     );
+    let p99 = step
+        .drift
+        .iter()
+        .find(|d| d.metric == "p99 50 mm/s")
+        .unwrap();
+    assert_eq!(p99.verdict, Some(DriftVerdict::Unassessed));
+    assert!(
+        step.drift
+            .iter()
+            .filter(|d| !d.metric.starts_with("p99"))
+            .all(|d| d.verdict.is_none())
+    );
     let main: Vec<_> = step.rungs.iter().map(|r| r.repeat_values.clone()).collect();
     assert_eq!(
         step.assessment.as_ref().unwrap(),
-        &assess_ladder(&main, 1, &Gates::default(), false)
+        &assess_ladder_at(
+            &main,
+            1,
+            &[50.0],
+            &Gates::default(),
+            false,
+            &Waivers::default()
+        )
     );
+}
+
+fn three_lags(rig: &Rig) {
+    rig.a.sim(|s| {
+        s.lag_by_velocity_p.insert(668, 60);
+        s.lag_by_velocity_p.insert(841, 40);
+        s.lag_by_velocity_p.insert(1060, 50);
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_steady_seed_rerun_is_recorded_as_steady_with_the_tie_fields() {
+    let rig = rig().await;
+    three_lags(&rig);
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[120.0, 50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 2)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    for n in 1..=24 {
+        wait_stimuli(&rig, n).await;
+        gate.notify_one();
+    }
+    wait_stimuli(&rig, 25).await;
+    release(&rig, &gate);
+    let done = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &done.steps[0];
+    let a = step.assessment.as_ref().unwrap();
+    assert_eq!(a.best, Some(1));
+    assert_eq!(a.tie, vec![1]);
+    assert_eq!(a.spreads.len(), 2);
+    assert!(a.spreads.iter().all(|s| *s == Some(0.0)));
+    for v in a.verdicts.iter().filter(|v| v.score.is_some()) {
+        assert_eq!(v.deciding_speed, Some(0));
+    }
+    assert_eq!(a.verdicts[1].gap, Some(0.0));
+    assert_eq!(a.verdicts[1].tolerance, None);
+    let expected = a.medians[2].p99_by_speed[0].unwrap() - a.medians[1].p99_by_speed[0].unwrap();
+    assert!((a.verdicts[2].gap.unwrap() - expected).abs() < 1e-9);
+    assert_eq!(a.verdicts[2].tolerance, Some(0.0));
+    let p99: Vec<_> = step
+        .drift
+        .iter()
+        .filter(|d| d.metric.starts_with("p99"))
+        .collect();
+    assert_eq!(p99.len(), 2);
+    assert!(p99.iter().all(|d| d.verdict == Some(DriftVerdict::Steady)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_seed_rerun_with_a_changed_lag_is_recorded_as_drifted() {
+    let rig = rig().await;
+    three_lags(&rig);
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[120.0, 50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 2)).await.unwrap();
+    let gate = rig.hold_stimulus();
+    sched.confirm_step(&id).await.unwrap();
+    for n in 1..=24 {
+        wait_stimuli(&rig, n).await;
+        gate.notify_one();
+    }
+    wait_stimuli(&rig, 25).await;
+    rig.a.sim(|s| {
+        s.lag_by_velocity_p.insert(841, 90);
+    });
+    release(&rig, &gate);
+    let done = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &done.steps[0];
+    let p99: Vec<_> = step
+        .drift
+        .iter()
+        .filter(|d| d.metric.starts_with("p99"))
+        .collect();
+    assert_eq!(p99.len(), 2);
+    for d in p99 {
+        assert_eq!(d.verdict, Some(DriftVerdict::Drifted));
+        assert!(d.rerun.unwrap() > d.first.unwrap());
+    }
+    for d in step.drift.iter().filter(|d| !d.metric.starts_with("p99")) {
+        assert_eq!(d.verdict, None);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
