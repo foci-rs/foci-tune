@@ -5,6 +5,7 @@ import type {
   InadmissibleReason,
   RungNote,
   Tune,
+  TuneDrift,
   TuneGates,
   TuneAxis,
   TuneStep,
@@ -70,6 +71,10 @@ export interface RungView {
   worstTorqueSd: number | null;
   recommended: RecommendationKind | null;
   repeatsDone: number;
+  decidingSpeed: number | null;
+  gap: number | null;
+  tolerance: number | null;
+  best: boolean;
 }
 
 const UNSCORED_TEXT: Record<UnscoredReason, string> = {
@@ -105,6 +110,8 @@ export interface StepSummary {
   halt: string | null;
   pause: string | null;
   failed: string | null;
+  comparison: string | null;
+  driftLines: string[];
 }
 
 export function noteText(note: RungNote): string {
@@ -122,7 +129,8 @@ function usableAssessment(step: TuneStep): LadderAssessment | null {
 /** Notes, recommendation and halt of one step, as the operator reads them. */
 export function stepSummary(tune: Tune, step: number): StepSummary {
   const s = tune.steps[step];
-  const choice = usableAssessment(s) === null ? undefined : s.recommendation?.choice;
+  const assessment = usableAssessment(s);
+  const choice = assessment === null ? undefined : s.recommendation?.choice;
   let recommendation: RecommendationView | null = null;
   if (choice !== undefined) {
     if ("Measured" in choice) recommendation = { kind: "measured", rung: choice.Measured.rung };
@@ -134,18 +142,61 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
       };
     } else recommendation = { kind: "none" };
   }
-  const halt = usableAssessment(s)?.halt ?? null;
+  const halt = assessment?.halt ?? null;
   const pause: [number, Pause] | null =
-    s.paused !== null ? [s.paused.rung, s.paused.reason] : (usableAssessment(s)?.pause ?? null);
+    s.paused !== null ? [s.paused.rung, s.paused.reason] : (assessment?.pause ?? null);
   return {
     axis: s.axis,
     notes: s.notes.map(noteText),
     recommendation,
-    extend: usableAssessment(s) === null ? null : (s.recommendation?.extend ?? null),
+    extend: assessment === null ? null : (s.recommendation?.extend ?? null),
     halt: halt === null ? null : `Assessment stopped at rung ${halt[0] + 1}: ${haltText(halt[1])}`,
     pause: pause === null ? null : `Paused at rung ${pause[0] + 1}: ${pauseText(pause[1])}`,
     failed: s.failed,
+    comparison: assessment === null ? null : comparisonText(assessment, s.repeats),
+    driftLines: driftLines(s.drift),
   };
+}
+
+const um = (value: number): string => `${value.toFixed(1)} um`;
+
+function rungList(indices: number[]): string {
+  const shown = indices.map((i) => i + 1);
+  return shown.length < 2 ? `${shown[0]}` : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+}
+
+/** How the recommended rung was chosen over its closest competitor; null without a best rung. */
+export function comparisonText(a: LadderAssessment, repeats: number): string | null {
+  if (a.best === null) return null;
+  if (a.tie.length > 1) {
+    const widest = a.tie
+      .filter((i) => i !== a.best)
+      .map((i) => a.verdicts[i])
+      .reduce((max, v) => ((v.gap ?? 0) > (max.gap ?? 0) ? v : max));
+    const tolerance = widest.tolerance === null ? "" : ` within ${um(widest.tolerance)}`;
+    return `Tied: rungs ${rungList(a.tie)}, widest gap ${um(widest.gap ?? 0)}${tolerance}, so the lower gain was preferred.`;
+  }
+  if (a.runner_up === null) return "This is the only scored rung: there was nothing to compare.";
+  const runnerUp = a.verdicts[a.runner_up];
+  const name = `rung ${a.runner_up + 1}`;
+  if (repeats < 2) {
+    return `The runner-up, ${name}, is ${um(runnerUp.gap ?? 0)} behind; with one repeat ties cannot be detected.`;
+  }
+  const tolerance = runnerUp.tolerance === null ? "" : `, beyond the ${um(runnerUp.tolerance)} tolerance`;
+  return `The runner-up, ${name}, is ${um(runnerUp.gap ?? 0)} behind${tolerance}.`;
+}
+
+/** One line per speed whose re-run drifted or could not be assessed. */
+export function driftLines(drift: TuneDrift[]): string[] {
+  return drift.flatMap((d) => {
+    if (d.verdict === "Drifted") {
+      return [
+        `${d.metric}: ${d.first ?? "n/a"} to ${d.rerun ?? "n/a"}, drifted by more than the ladder's resolution at this speed; the pick may depend on run order`,
+      ];
+    }
+    if (d.verdict === "Unassessed") return [`${d.metric}: drift could not be assessed`];
+    return [];
+  });
 }
 
 /** One row per rung of a step: gain, verdict with its reason, scores and per-speed p99. */
@@ -226,6 +277,10 @@ export function rungView(tune: Tune, step: number): RungView[] {
       worstTorqueSd: medians?.worst_torque_sd ?? null,
       recommended,
       repeatsDone,
+      decidingSpeed: verdict?.deciding_speed ?? null,
+      gap: verdict?.gap ?? null,
+      tolerance: verdict?.tolerance ?? null,
+      best: assessment !== null && assessment.best === index,
     };
   });
 }

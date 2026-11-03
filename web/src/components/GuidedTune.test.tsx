@@ -147,9 +147,9 @@ test("choosing is offered once the step awaits a choice", async () => {
 
 test("the typed value follows the recommendation until the operator types", async () => {
   current = detail("AwaitingChoice");
-  const none = { inadmissible: null, marginal: false, unscored: null, score: 1 };
+  const none = { inadmissible: null, marginal: false, unscored: null, score: 1, deciding_speed: null, gap: null, tolerance: null };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
-  current.steps[0].assessment = { verdicts: [none, none, none], medians: [medians, medians, medians], halt: null };
+  current.steps[0].assessment = { verdicts: [none, none, none], medians: [medians, medians, medians], halt: null, best: null, runner_up: null, tie: [], spreads: [] };
   current.steps[0].recommendation = { choice: { Interpolated: { shown: 1100, between: [1, 2] } }, extend: null };
   render(<GuidedTune printer={printer} />);
   const field = await screen.findByRole("spinbutton", { name: "Value" });
@@ -158,11 +158,11 @@ test("the typed value follows the recommendation until the operator types", asyn
 
 test("a running step warns that scores can still change", async () => {
   current = detail("Running");
-  const scored = { inadmissible: null, marginal: false, unscored: null, score: 1 };
-  const open = { inadmissible: null, marginal: false, unscored: null, score: null };
+  const scored = { inadmissible: null, marginal: false, unscored: null, score: 1, deciding_speed: null, gap: null, tolerance: null };
+  const open = { inadmissible: null, marginal: false, unscored: null, score: null, deciding_speed: null, gap: null, tolerance: null };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
   current.steps[0].rungs[0].repeat_values = [{} as never, {} as never];
-  current.steps[0].assessment = { verdicts: [scored, open, open], medians: [medians, medians, medians], halt: null };
+  current.steps[0].assessment = { verdicts: [scored, open, open], medians: [medians, medians, medians], halt: null, best: null, runner_up: null, tie: [], spreads: [] };
   render(<GuidedTune printer={printer} />);
   expect(await screen.findByText(/can change as later rungs finish/i)).toBeInTheDocument();
 });

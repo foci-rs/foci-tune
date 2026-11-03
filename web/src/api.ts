@@ -487,6 +487,9 @@ export interface RungVerdict {
   marginal: boolean;
   unscored: UnscoredReason | null;
   score: number | null;
+  deciding_speed: number | null;
+  gap: number | null;
+  tolerance: number | null;
 }
 
 export interface RungMedians {
@@ -505,6 +508,10 @@ export interface LadderAssessment {
   medians: RungMedians[];
   halt: [number, Halt] | null;
   pause?: [number, Pause] | null;
+  best: number | null;
+  runner_up: number | null;
+  tie: number[];
+  spreads: (number | null)[];
 }
 
 export type Recommendation =
@@ -519,10 +526,13 @@ export interface Recommended {
   extend: TuneExtension | null;
 }
 
+export type DriftVerdict = "Steady" | "Drifted" | "Unassessed";
+
 export interface TuneDrift {
   metric: string;
   first: number | null;
   rerun: number | null;
+  verdict: DriftVerdict | null;
 }
 
 export interface TuneStep {

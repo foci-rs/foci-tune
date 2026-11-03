@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { Tune, TuneState, TuneStep } from "./api";
+import type { LadderAssessment, RungVerdict, Tune, TuneState, TuneStep } from "./api";
 import {
   announcementOf,
   availableActions,
@@ -11,6 +11,8 @@ import {
   recommendedGain,
   driftCheckRunning,
   rungView,
+  comparisonText,
+  driftLines,
   gatesBody,
   stepSummary,
 } from "./guided";
@@ -85,7 +87,15 @@ function tune(state: TuneState, steps: TuneStep[] = [step()]): Tune {
   };
 }
 
-const none = { inadmissible: null, marginal: false, unscored: null, score: null };
+const none: RungVerdict = {
+  inadmissible: null,
+  marginal: false,
+  unscored: null,
+  score: null,
+  deciding_speed: null,
+  gap: null,
+  tolerance: null,
+};
 const medians = (p99: (number | null)[]) => ({ zeta: 0.1, p99_by_speed: p99, worst_torque_sd: 1 });
 
 function assessed(overrides: Partial<TuneStep> = {}): TuneStep {
@@ -104,6 +114,10 @@ function assessed(overrides: Partial<TuneStep> = {}): TuneStep {
         medians([3, 6]),
       ],
       halt: null,
+      best: null,
+      runner_up: null,
+      tie: [],
+      spreads: [],
     },
     ...overrides,
   });
@@ -118,7 +132,7 @@ describe("driftCheckRunning", () => {
 
   test("is false before the re-run starts, once drift is recorded and after the step ends", () => {
     expect(driftCheckRunning(tune("Running", [step()]), 0)).toBe(false);
-    const recorded = drifting({ drift: [{ metric: "zeta", first: 0.1, rerun: 0.09 }] });
+    const recorded = drifting({ drift: [{ metric: "zeta", first: 0.1, rerun: 0.09, verdict: null }] });
     expect(driftCheckRunning(tune("Running", [recorded]), 0)).toBe(false);
     expect(driftCheckRunning(tune("AwaitingChoice", [drifting({ ended_unix_ms: 5 })]), 0)).toBe(false);
   });
@@ -146,6 +160,10 @@ describe("rungView", () => {
         verdicts: [{ ...none, score: 1 }, { ...none }, { ...none }, { ...none }],
         medians: [medians([3, 6]), medians([null, null]), medians([null, null]), medians([null, null])],
         halt: null,
+        best: null,
+        runner_up: null,
+        tie: [],
+        spreads: [],
       },
     });
     const rows = rungView(tune("Running", [s]), 0);
@@ -213,6 +231,10 @@ describe("rungView", () => {
         verdicts: [{ ...none, score: 1 }, { ...none, inadmissible: "DampingBelowFloor" }, { ...none }, { ...none }],
         medians: [medians([1]), medians([1]), medians([]), medians([])],
         halt: [1, { BelowFloor: { median: 0.03 } }],
+        best: null,
+        runner_up: null,
+        tie: [],
+        spreads: [],
       },
     });
     const rows = rungView(tune("AwaitingChoice", [s]), 0);
@@ -459,7 +481,7 @@ describe("a paused step", () => {
   test("summarises the pause with its rung and reason", () => {
     const t = tune("Paused");
     t.steps[0].paused = { rung: 1, reason: "DampingUnassessable", unix_ms: 1 };
-    t.steps[0].assessment = { verdicts: [], medians: [], halt: null, pause: [1, "DampingUnassessable"] };
+    t.steps[0].assessment = { verdicts: [], medians: [], halt: null, pause: [1, "DampingUnassessable"], best: null, runner_up: null, tie: [], spreads: [] };
     expect(stepSummary(t, 0).pause).toBe("Paused at rung 2: damping unassessable");
   });
   test("explains a waived rung and a paused rung", () => {
@@ -469,6 +491,10 @@ describe("a paused step", () => {
       verdicts: [none, { ...none, unscored: "DampingWaived", score: null }, none, none],
       medians: [medians([null]), medians([null]), medians([null]), medians([null])],
       halt: null,
+      best: null,
+      runner_up: null,
+      tie: [],
+      spreads: [],
       pause: [2, "StandstillBaselineUnassessable"],
     };
     const rows = rungView(t, 0);
@@ -477,7 +503,7 @@ describe("a paused step", () => {
   });
   test("a halt of DampingUnassessable from an old record still reads as a halt", () => {
     const t = tune("AwaitingChoice");
-    t.steps[0].assessment = { verdicts: [], medians: [], halt: [1, "DampingUnassessable"] };
+    t.steps[0].assessment = { verdicts: [], medians: [], halt: [1, "DampingUnassessable"], best: null, runner_up: null, tie: [], spreads: [] };
     t.steps[0].assessment.verdicts = [none, none, none, none];
     t.steps[0].assessment.medians = [medians([]), medians([]), medians([]), medians([])];
     expect(stepSummary(t, 0).halt).toContain("damping unassessable");
@@ -513,4 +539,130 @@ test("a setup without a standstill factor labels every rung gate-off once", () =
   const on = tune("AwaitingChoice", [step({ standstill_gate_off: null })]);
   on.setup.gates.standstill_factor = 2;
   for (const row of rungView(on, 0)) expect(row.verdict).not.toContain("Standstill gate off");
+});
+
+describe("comparison fields", () => {
+  const scored = (over: Partial<RungVerdict> = {}) => ({ ...none, score: 1, deciding_speed: 1, ...over });
+  const ladder = (over: Partial<LadderAssessment>): LadderAssessment => ({
+    verdicts: [none, none, none, none],
+    medians: [medians([]), medians([]), medians([]), medians([])],
+    halt: null,
+    best: null,
+    runner_up: null,
+    tie: [],
+    spreads: [],
+    ...over,
+  });
+  const withAssessment = (a: LadderAssessment) => tune("AwaitingChoice", [step({ assessment: a })]);
+
+  test("rows carry the deciding speed, gap and tolerance, and mark the best", () => {
+    const rows = rungView(
+      withAssessment(
+        ladder({
+          best: 0,
+          verdicts: [scored({ gap: 0 }), scored({ gap: 5.1, tolerance: 3.1 }), none, none],
+        }),
+      ),
+      0,
+    );
+    expect(rows[0]).toMatchObject({ best: true, decidingSpeed: 1 });
+    expect(rows[1]).toMatchObject({ best: false, gap: 5.1, tolerance: 3.1 });
+  });
+
+  test("rows beyond a halt carry no comparison fields", () => {
+    const rows = rungView(
+      withAssessment(ladder({ best: 0, halt: [1, "DampingUnassessable"], verdicts: [scored({ gap: 0 }), none, none, none] })),
+      0,
+    );
+    expect(rows[2]).toMatchObject({ decidingSpeed: null, gap: null, tolerance: null, best: false });
+  });
+
+  test("the comparison line names the tie, its gap and tolerance, and the lower gain", () => {
+    const text = comparisonText(
+      ladder({ best: 1, tie: [1, 2], verdicts: [none, scored({ gap: 0 }), scored({ gap: 2.0, tolerance: 3.1 }), none] }),
+      3,
+    );
+    expect(text).toMatch(/rungs 2 and 3/);
+    expect(text).toMatch(/2\.0/);
+    expect(text).toMatch(/3\.1/);
+    expect(text).toMatch(/lower gain/i);
+  });
+
+  test("a three-rung tie reports the largest gap in the set with that rung's tolerance", () => {
+    const text = comparisonText(
+      ladder({
+        best: 1,
+        tie: [0, 1, 2],
+        verdicts: [
+          scored({ gap: 2.5, tolerance: 3.3 }),
+          scored({ gap: 0 }),
+          scored({ gap: 1.0, tolerance: 3.0 }),
+          none,
+        ],
+      }),
+      3,
+    );
+    expect(text).toMatch(/rungs 1, 2 and 3/);
+    expect(text).toMatch(/2\.5/);
+    expect(text).toMatch(/3\.3/);
+    expect(text).not.toMatch(/1\.0 um/);
+    expect(text).not.toMatch(/3\.0 um/);
+  });
+
+  test("the comparison line names the runner-up when there is no tie", () => {
+    const text = comparisonText(
+      ladder({
+        best: 1,
+        tie: [1],
+        runner_up: 2,
+        verdicts: [none, scored({ gap: 0 }), scored({ gap: 5.1, tolerance: 3.1 }), none],
+      }),
+      3,
+    );
+    expect(text).toMatch(/rung 3/);
+    expect(text).toMatch(/5\.1/);
+    expect(text).toMatch(/3\.1/);
+    expect(text).not.toMatch(/tie/i);
+  });
+
+  test("one repeat names the runner-up without a tolerance and says ties are undetectable", () => {
+    const text = comparisonText(
+      ladder({
+        best: 1,
+        tie: [1],
+        runner_up: 2,
+        verdicts: [none, scored({ gap: 0 }), scored({ gap: 0.1, tolerance: null }), none],
+      }),
+      1,
+    );
+    expect(text).toMatch(/rung 3/);
+    expect(text).toMatch(/0\.1/);
+    expect(text).toMatch(/one repeat/i);
+    expect(text).not.toMatch(/0\.1 um[^.]*\d\.\d um/);
+  });
+
+  test("a single eligible rung says nothing was compared", () => {
+    const text = comparisonText(ladder({ best: 0, runner_up: null, tie: [0] }), 3);
+    expect(text).toMatch(/nothing to compare|only scored rung/i);
+  });
+
+  test("no best rung gives no comparison line", () => {
+    expect(comparisonText(ladder({ best: null }), 3)).toBeNull();
+  });
+});
+
+describe("driftLines", () => {
+  test("report drifted and unassessed speeds and skip steady ones", () => {
+    const lines = driftLines([
+      { metric: "p99 50 mm/s", first: 59.2, rerun: 58.0, verdict: "Steady" },
+      { metric: "p99 195 mm/s", first: 84.8, rerun: 80.6, verdict: "Drifted" },
+      { metric: "p99 400 mm/s", first: 84.8, rerun: null, verdict: "Unassessed" },
+      { metric: "zeta", first: 0.03, rerun: 0.03, verdict: null },
+    ]);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/195 mm\/s/);
+    expect(lines[0]).toMatch(/drift/i);
+    expect(lines[1]).toMatch(/400 mm\/s/);
+    expect(lines[1]).toMatch(/could not be assessed/i);
+  });
 });

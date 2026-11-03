@@ -181,6 +181,10 @@ test("shows this and the previous rung's median p99 per speed and worst torque s
   tune.steps[0].assessment = {
     verdicts: [],
     halt: null,
+    best: null,
+    runner_up: null,
+    tie: [],
+    spreads: [],
     medians: [
       { zeta: 0.1, p99_by_speed: [5.5, 6.25], worst_torque_sd: 9.125 },
       { zeta: 0.2, p99_by_speed: [3.125, 4.75], worst_torque_sd: 6.5 },
