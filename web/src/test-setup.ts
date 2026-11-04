@@ -28,4 +28,13 @@ if (typeof window.ResizeObserver !== "function") {
   };
 }
 
+if (typeof Element.prototype.hasPointerCapture !== "function") {
+  Element.prototype.hasPointerCapture = () => false;
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+}
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 afterEach(resetWorkbench);
