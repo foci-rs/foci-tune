@@ -68,3 +68,8 @@ test("the path starts on the default and offers a custom one", () => {
   render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
   expect(screen.getByRole("combobox", { name: "Path" })).toHaveTextContent("Default");
 });
+
+test("the test speeds start at 100, 200 and 400 mm/s", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  expect(screen.getByRole("textbox", { name: "Test speeds (mm/s)" })).toHaveValue("100, 200, 400");
+});

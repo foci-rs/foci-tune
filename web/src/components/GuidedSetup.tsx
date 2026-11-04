@@ -36,7 +36,6 @@ import { Card, NumberField } from "./ui";
 import { ActionBar, PatternCard, type PatternNote } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
-const DEFAULT_SPEEDS = [50, 195, 400];
 
 function errorText(e: unknown): string {
   if (e instanceof ApiRequestError) return e.field === null ? e.message : `${e.field}: ${e.message}`;
@@ -51,7 +50,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
     () => (printer.steppers.find((s) => s.unusable === null) ?? printer.steppers[0]).name,
   );
   const stepper: StepperView | undefined = printer.steppers.find((s) => s.name === stepperName);
-  const [speedsText, setSpeedsText] = useState(DEFAULT_SPEEDS.join(", "));
+  const [speedsText, setSpeedsText] = useState(DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "));
   const [typedPattern, setTypedPattern] = useState<Record<string, Pattern>>({});
   const [trackingStrokes, setTrackingStrokes] = useState<number>(DEFAULT_PARAMETERS.tracking.strokes);
   const [probe, setProbe] = useState(DEFAULT_PARAMETERS.probe);
