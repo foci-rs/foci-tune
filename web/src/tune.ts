@@ -220,6 +220,61 @@ export interface LadderInput {
 
 export type Built<T> = { ok: true; body: T } | { ok: false; error: string };
 
+export interface LadderFieldErrors {
+  values: string | null;
+  runs: string | null;
+  thresholds: string | null;
+}
+
+/** What is wrong with the sweep's inputs, in plain words, keyed by the input it belongs to. */
+export function ladderFieldErrors(input: LadderInput, pwmHz: number | null, probe: boolean): LadderFieldErrors {
+  const errors: LadderFieldErrors = { values: null, runs: null, thresholds: null };
+  const hz = input.axis === "velocity_i_corner_hz";
+  const parts = input.text
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p !== "");
+  const values: number[] = [];
+  if (parts.length === 0) {
+    errors.values = "Enter at least one value, separated by commas.";
+  } else {
+    for (const part of parts) {
+      const v = Number(part);
+      if (!Number.isFinite(v)) {
+        errors.values = `"${part}" is not a number.`;
+        break;
+      }
+      values.push(v);
+    }
+  }
+  if (errors.values === null && values.length > MAX_LADDER_VALUES) {
+    errors.values = `Use at most ${MAX_LADDER_VALUES} values.`;
+  }
+  if (errors.values === null && hz && (pwmHz === null || pwmHz <= 0)) {
+    errors.values = "The PWM frequency is unknown, so values in Hz cannot be converted.";
+  }
+  if (errors.values === null) {
+    for (const v of values) {
+      const raw = axisToRaw(input.axis, v, pwmHz ?? 0);
+      if (raw < 0 || raw > PID_GAIN_MAX_RAW) {
+        errors.values = hz
+          ? `${v} Hz is outside the allowed range: it converts to raw ${raw}, and the limit is ${PID_GAIN_MAX_RAW}.`
+          : `${v} is outside the allowed range of 0 to ${PID_GAIN_MAX_RAW} (raw).`;
+        break;
+      }
+    }
+  }
+  if (!Number.isInteger(input.repeats) || input.repeats < 1 || input.repeats > MAX_LADDER_REPEATS) {
+    errors.runs = `Runs per value must be a whole number from 1 to ${MAX_LADDER_REPEATS}.`;
+  } else if (values.length * input.repeats > MAX_LADDER_RUNS) {
+    errors.runs = `A sweep queues at most ${MAX_LADDER_RUNS} runs; this one would queue ${values.length * input.repeats}.`;
+  }
+  if (probe && (!Number.isFinite(input.floor) || !Number.isFinite(input.marginal))) {
+    errors.thresholds = "Stop below damping and Mark as marginal below must be numbers.";
+  }
+  return errors;
+}
+
 /** The ladder request, checked the way the engine checks it so a refusal shows before posting. */
 export function buildLadderRequest(base: RunBody, input: LadderInput, pwmHz: number | null): Built<LadderRequestBody> {
   const { session: _session, ...fixed } = base;

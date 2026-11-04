@@ -10,6 +10,7 @@ import {
   defaultLadderValues,
   headlineMetric,
   highlightChanges,
+  ladderFieldErrors,
   ladderMedians,
   ladderPlotData,
   patternProblem,
@@ -32,6 +33,7 @@ import {
   setupFromKind,
   type RunBody,
   type Setup,
+  type LadderInput,
 } from "./tune";
 
 const pattern = { start: [100, 100] as [number, number], end: [200, 200] as [number, number] };
@@ -765,5 +767,62 @@ describe("pattern mode", () => {
     expect(patternMode(undefined, proposal, null)).toBe("default");
     expect(patternMode(undefined, proposal, proposal)).toBe("default");
     expect(patternMode(undefined, proposal, other)).toBe("custom");
+  });
+});
+
+describe("ladderFieldErrors", () => {
+  const input = (over: Partial<LadderInput> = {}): LadderInput => ({
+    axis: "velocity_p",
+    text: "100, 120",
+    repeats: 2,
+    floor: 0.05,
+    marginal: 0.08,
+    ...over,
+  });
+  const none = { values: null, runs: null, thresholds: null };
+
+  test("a valid sweep has no errors", () => {
+    expect(ladderFieldErrors(input(), 50_000, true)).toEqual(none);
+  });
+
+  test("an empty or malformed value list is an error on the values input, in plain words", () => {
+    expect(ladderFieldErrors(input({ text: "  " }), 50_000, true).values).toBe(
+      "Enter at least one value, separated by commas.",
+    );
+    expect(ladderFieldErrors(input({ text: "100, abc" }), 50_000, true).values).toBe('"abc" is not a number.');
+  });
+
+  test("too many values, or a value outside the allowed range, belong to the values input", () => {
+    const many = Array.from({ length: 21 }, (_, i) => 100 + i).join(", ");
+    expect(ladderFieldErrors(input({ text: many }), 50_000, true).values).toBe("Use at most 20 values.");
+    expect(ladderFieldErrors(input({ text: "100, 70000" }), 50_000, true).values).toBe(
+      "70000 is outside the allowed range of 0 to 32767 (raw).",
+    );
+    expect(ladderFieldErrors(input({ axis: "velocity_i_corner_hz", text: "5" }), null, true).values).toBe(
+      "The PWM frequency is unknown, so values in Hz cannot be converted.",
+    );
+  });
+
+  test("runs per value and the total number of runs are errors on the runs field", () => {
+    expect(ladderFieldErrors(input({ repeats: 0 }), 50_000, true).runs).toBe(
+      "Runs per value must be a whole number from 1 to 10.",
+    );
+    expect(ladderFieldErrors(input({ repeats: 11 }), 50_000, true).runs).toBe(
+      "Runs per value must be a whole number from 1 to 10.",
+    );
+    const many = Array.from({ length: 10 }, (_, i) => 100 + i).join(", ");
+    expect(ladderFieldErrors(input({ text: many, repeats: 7 }), 50_000, true).runs).toBe(
+      "A sweep queues at most 60 runs; this one would queue 70.",
+    );
+  });
+
+  test("non-numeric thresholds are errors on the thresholds", () => {
+    expect(ladderFieldErrors(input({ floor: Number.NaN }), 50_000, true).thresholds).toBe(
+      "Stop below damping and Mark as marginal below must be numbers.",
+    );
+  });
+
+  test("the thresholds are not checked for sweeps that have no stop rule", () => {
+    expect(ladderFieldErrors(input({ floor: Number.NaN }), 50_000, false).thresholds).toBeNull();
   });
 });
