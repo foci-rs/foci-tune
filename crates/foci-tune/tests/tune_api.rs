@@ -631,3 +631,50 @@ async fn abandoning_a_tune_that_is_over_says_there_is_nothing_to_abandon() {
         again.error()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_zero_seed_is_refused_with_a_sentence_that_says_what_to_use() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let body = json!({"seed": {"typed": 0.0}, "repeats": 1, "lower_k": 0, "upper_k": 0});
+
+    let reply = post(&app, &format!("/api/tunes/{id}/steps"), body).await;
+
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{}", reply.error());
+    assert_eq!(reply.json()["field"], "seed");
+    assert!(reply.error().contains("can't be zero"), "{}", reply.error());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_tune_on_a_busy_stepper_is_refused_without_naming_a_record() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let first = create(&app).await;
+
+    let second = post(&app, "/api/tunes", setup_body(&[50.0])).await;
+
+    assert_eq!(second.status, StatusCode::CONFLICT);
+    assert!(
+        second.error().contains("already has an unfinished tune"),
+        "{}",
+        second.error()
+    );
+    assert!(!second.error().contains(&first), "{}", second.error());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn starting_without_a_prepared_step_says_to_prepare_one() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+
+    let reply = post_empty(&app, &format!("/api/tunes/{id}/steps/confirm")).await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(
+        reply.error().contains("Prepare a step first"),
+        "{}",
+        reply.error()
+    );
+}

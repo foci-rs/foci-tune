@@ -413,13 +413,15 @@ pub enum TuneError {
     #[error(transparent)]
     SeedRefused(#[from] SeedRefused),
     /// The stepper already has a tune that is not done or abandoned.
-    #[error("the stepper already has the unfinished tune {0}")]
+    #[error(
+        "This stepper already has an unfinished tune. Finish or abandon it before starting another."
+    )]
     StepperBusy(TuneId),
     /// The operation does not fit the tune's progress; the text says why.
     #[error("{0}")]
     OutOfOrder(String),
     /// No step is announced, so there is nothing to confirm.
-    #[error("no step is announced")]
+    #[error("There is no prepared step to start. Prepare a step first.")]
     NotAnnounced,
     /// No such tune in the store.
     #[error("unknown tune {0}")]
@@ -950,7 +952,8 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         );
         let (Some(lowest), Some(highest)) = (rungs.values.first(), rungs.values.last()) else {
             return Err(TuneError::InvalidRequest(
-                "no rung of the ladder can be written".to_owned(),
+                "None of the gains in this range can be written to the stepper. Choose a seed or a range that stays inside what the stepper accepts."
+                    .to_owned(),
             ));
         };
         let announcement_range = (lowest.shown, highest.shown);
@@ -1078,12 +1081,14 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             .copied()
         else {
             return Err(TuneError::NoExtension(
-                "the next rung cannot be written".to_owned(),
+                "The next gain is outside what the stepper accepts, so the ladder can't be extended that way."
+                    .to_owned(),
             ));
         };
         if step.rungs.iter().any(|r| r.raw == value.raw) {
             return Err(TuneError::NoExtension(
-                "the next rung repeats a measured raw value".to_owned(),
+                "The next gain would be the same as one already measured, so the ladder can't be extended that way."
+                    .to_owned(),
             ));
         }
         s.engine.check(&record.setup.stepper).await?;
@@ -1486,12 +1491,12 @@ fn next_axis(tune: &Tune) -> Result<LadderAxis, TuneError> {
     }
     if tune.steps.last().is_some_and(|s| s.chosen.is_none()) {
         return Err(TuneError::OutOfOrder(
-            "the previous step has no chosen value".to_owned(),
+            "Choose a value for the previous step before preparing the next one.".to_owned(),
         ));
     }
-    AXES.get(tune.steps.len())
-        .copied()
-        .ok_or_else(|| TuneError::OutOfOrder("every step of the tune is complete".to_owned()))
+    AXES.get(tune.steps.len()).copied().ok_or_else(|| {
+        TuneError::OutOfOrder("All three steps of this tune are already done.".to_owned())
+    })
 }
 
 impl<M: MoonrakerApi + 'static> Shared<M> {
