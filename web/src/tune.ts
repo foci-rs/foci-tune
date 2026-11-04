@@ -268,14 +268,15 @@ export function buildLadderRequest(base: RunBody, input: LadderInput, pwmHz: num
 }
 
 /**
- * Default rungs from the current gains: velocity P in six steps of +100, position P from 20
- * below in six steps of +20, corners 25 to 100 Hz; every out-of-range rung omitted.
+ * Default rungs from the current gains: velocity P two steps of 100 below and four above (the
+ * current value itself is left out), position P from 20 below in six steps of +20, corners 25
+ * to 100 Hz; every out-of-range rung omitted.
  */
 export function defaultLadderValues(axis: LadderAxis, gains: OuterGains, pwmHz: number): number[] {
   const steps = [0, 1, 2, 3, 4, 5];
   const shown =
     axis === "velocity_p"
-      ? steps.map((k) => gains.velocity_p + 100 * k)
+      ? [-2, -1, 1, 2, 3, 4].map((k) => gains.velocity_p + 100 * k)
       : axis === "position_p"
         ? steps.map((k) => gains.position_p - 20 + 20 * k)
         : [25, 50, 75, 100];

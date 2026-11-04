@@ -278,12 +278,21 @@ describe("buildLadderRequest", () => {
 });
 
 describe("defaultLadderValues", () => {
+  test("velocity P is two steps below and four above the current value, in ascending order", () => {
+    expect(defaultLadderValues("velocity_p", { velocity_p: 841, velocity_i: 0, position_p: 0 }, 50_000)).toEqual([
+      641, 741, 941, 1041, 1141, 1241,
+    ]);
+    expect(defaultLadderValues("velocity_p", { velocity_p: 150, velocity_i: 0, position_p: 0 }, 50_000)).toEqual([
+      50, 250, 350, 450, 550,
+    ]);
+  });
+
   test("omit rungs outside the raw range", () => {
     expect(defaultLadderValues("position_p", { velocity_p: 0, velocity_i: 0, position_p: 10 }, 50_000)).toEqual([
       10, 30, 50, 70, 90,
     ]);
     expect(defaultLadderValues("velocity_p", { velocity_p: 32500, velocity_i: 0, position_p: 0 }, 50_000)).toEqual([
-      32500, 32600, 32700,
+      32300, 32400, 32600, 32700,
     ]);
     expect(
       defaultLadderValues("velocity_i_corner_hz", { velocity_p: 0, velocity_i: 0, position_p: 0 }, 50_000),
