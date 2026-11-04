@@ -13,6 +13,7 @@ import {
   liveSeed,
   prepareState,
   stepPercent,
+  fitReasonText,
   standstillCheckNote,
   sweepProgress,
   stepSentence,
@@ -252,8 +253,7 @@ describe("rungView", () => {
       },
     });
     const rows = rungView(tune("AwaitingChoice", [s]), 0);
-    expect(rows[2].verdict).toMatch(/not checked/i);
-    expect(rows[2].verdict).toMatch(/stopped/i);
+    expect(rows[2].verdict).toBe("Stopped");
   });
 
   test("lists omitted and merged rungs as notes", () => {
@@ -508,7 +508,7 @@ describe("a paused step", () => {
       spreads: [],
     };
     expect(stepSummary(t, 0).pause).toBe(
-      `Paused at gain ${t.steps[0].rungs[1].shown.toFixed(2)}: the damping could not be measured.`,
+      `Paused at gain ${Math.round(t.steps[0].rungs[1].shown)}: the damping could not be measured.`,
     );
   });
   test("explains a waived rung and a paused rung", () => {
@@ -526,7 +526,8 @@ describe("a paused step", () => {
     };
     const rows = rungView(t, 0);
     expect(rows[1].verdict).toContain("Continued anyway: the damping could not be measured");
-    expect(rows[2].verdict).toContain("Not checked: the noise at standstill could not be measured");
+    expect(rows[2].verdict).toBe("Paused: noise not measured");
+    expect(rows[3].verdict).toBe("Paused");
   });
   test("a halt of DampingUnassessable from an old record still reads as a halt", () => {
     const t = tune("AwaitingChoice");
@@ -1034,5 +1035,56 @@ describe("sweepProgress", () => {
       step({ run_count: null, repeats: 2, rungs: [rung(0, { raw: 1000 }), rung(1, { raw: 1100 })], seed_raw: 1000 }),
     ]);
     expect(sweepProgress(t, 0)).toEqual({ done: 0, total: 2 * 2 * 4 + 4 });
+  });
+});
+
+describe("paused and stopped rows", () => {
+  const paused = (reason: "DampingUnassessable" | "StandstillBaselineUnassessable") => {
+    const t = tune("Paused");
+    t.steps[0].paused = { rung: 1, reason, unix_ms: 1 };
+    t.steps[0].assessment = {
+      verdicts: [none, none, none, none],
+      medians: [medians([]), medians([]), medians([]), medians([])],
+      halt: null,
+      pause: [1, reason],
+      best: null,
+      runner_up: null,
+      tie: [],
+      spreads: [],
+    };
+    return rungView(t, 0).map((r) => r.verdict);
+  };
+  test("the paused rung says why in a few words and the rungs after it just say Paused", () => {
+    expect(paused("DampingUnassessable").slice(1)).toEqual(["Paused: damping not measured", "Paused", "Paused"]);
+    expect(paused("StandstillBaselineUnassessable")[1]).toBe("Paused: noise not measured");
+  });
+  test("a gain is a whole number, and a corner gain is in Hz", () => {
+    const t = tune("Paused", [
+      step({ axis: "VelocityICornerHz", rungs: [rung(0, { shown: 25.04 }), rung(1, { shown: 31.5 })] }),
+    ]);
+    t.steps[0].paused = { rung: 1, reason: "DampingUnassessable", unix_ms: 1 };
+    t.steps[0].assessment = {
+      verdicts: [none, none],
+      medians: [medians([]), medians([])],
+      halt: null,
+      pause: [1, "DampingUnassessable"],
+      best: null,
+      runner_up: null,
+      tie: [],
+      spreads: [],
+    };
+    expect(stepSummary(t, 0).pause).toBe("Paused at gain 31.5 Hz: the damping could not be measured.");
+  });
+});
+
+describe("fitReasonText", () => {
+  test("rounds the frequency and says it in the words used elsewhere", () => {
+    expect(fitReasonText("damped frequency 34.73666787130117 Hz is outside 60 to 490 Hz")).toBe(
+      "The ringing frequency, 34.7 Hz, is outside the 60 to 490 Hz the fit accepts.",
+    );
+  });
+  test("any other reason keeps its words but loses the long decimals", () => {
+    expect(fitReasonText("residual 0.123456789 too high")).toBe("residual 0.123 too high");
+    expect(fitReasonText("no probe record")).toBe("no probe record");
   });
 });

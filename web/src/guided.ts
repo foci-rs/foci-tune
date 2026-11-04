@@ -116,7 +116,11 @@ export interface StepSummary {
   driftLines: string[];
 }
 
-const gainAt = (step: TuneStep, index: number): string => step.rungs[index]?.shown.toFixed(2) ?? `${index + 1}`;
+const gainAt = (step: TuneStep, index: number): string => {
+  const shown = step.rungs[index]?.shown;
+  if (shown === undefined) return `${index + 1}`;
+  return step.axis === "VelocityICornerHz" ? `${shown.toFixed(1)} Hz` : String(Math.round(shown));
+};
 
 export function noteText(note: RungNote): string {
   if ("OutOfRange" in note) return `${note.OutOfRange} left out: outside the writable range`;
@@ -204,21 +208,28 @@ export function driftLines(drift: TuneDrift[]): string[] {
 }
 
 /** One row per rung of a step: gain, verdict with its reason, scores and per-speed p99. */
-function notAssessedText(
-  s: TuneStep,
-  index: number,
-  pause: [number, Pause] | null,
-  halt: [number, Halt] | null,
-): string {
+const shortPause = (reason: Pause): string =>
+  reason === "DampingUnassessable" ? "damping not measured" : "noise not measured";
+
+function notAssessedText(index: number, pause: [number, Pause] | null, halt: [number, Halt] | null): string {
   if (pause !== null) {
-    if (index === pause[0]) return `Not checked: ${pauseText(pause[1])}`;
-    if (index > pause[0]) return `Not checked: paused at gain ${gainAt(s, pause[0])}`;
+    if (index === pause[0]) return `Paused: ${shortPause(pause[1])}`;
+    if (index > pause[0]) return "Paused";
   }
   if (halt !== null) {
-    if (index > halt[0]) return `Not checked: the sweep stopped at gain ${gainAt(s, halt[0])}`;
-    if (index === halt[0]) return `Not checked: ${haltText(halt[1])}`;
+    if (index > halt[0]) return "Stopped";
+    if (index === halt[0]) return `Stopped: ${typeof halt[1] === "string" ? shortPause(halt[1]) : "damping too low"}`;
   }
   return "Not checked";
+}
+
+/** A fit's failure reason in plain words, with the long decimals rounded. */
+export function fitReasonText(reason: string): string {
+  const frequency = /^damped frequency ([\d.]+) Hz is outside (\d+) to (\d+) Hz$/.exec(reason);
+  if (frequency !== null) {
+    return `The ringing frequency, ${Number(frequency[1]).toFixed(1)} Hz, is outside the ${frequency[2]} to ${frequency[3]} Hz the fit accepts.`;
+  }
+  return reason.replace(/\d+\.\d{4,}/g, (n) => Number(n).toFixed(3));
 }
 
 export interface GatesForm {
@@ -258,7 +269,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (verdict?.marginal) text = "Low damping";
     else if (verdict?.score != null) text = "Accepted";
     else if (assessment !== null && !flagged && (repeatsDone >= s.repeats || pause !== null || halt !== null)) {
-      text = notAssessedText(s, index, pause, halt);
+      text = notAssessedText(index, pause, halt);
     } else if (repeatsDone >= s.repeats) text = "Measured, waiting for the verdict";
     else if (rung.started_unix_ms !== null && rung.ended_unix_ms === null) {
       text = `Running: ${rung.run_ids.length} of ${s.repeats * (tune.setup.speeds_mm_s.length + 2)} runs`;
