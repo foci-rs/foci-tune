@@ -675,3 +675,23 @@ export function stepSentence(step: TuneStep): string {
   const to = gain(last.shown, last.raw);
   return `${step.rungs.length} gains from ${from} to ${to}, around the starting gain of ${corner ? `${start.toFixed(1)} Hz` : start}, each tested ${times}.`;
 }
+
+/** What running a prepared step does, in one sentence: it moves the stepper, for so many runs and so long. */
+export function runSentence(stepper: string, runCount: number, seconds: number | null): string {
+  const duration = seconds === null ? "" : `, ${durationText(seconds)}`;
+  return `Running this step moves ${stepper}: ${runCount} test runs${duration}.`;
+}
+
+/** The next-step form a prepared step was made from, so it can be adjusted from where it was. */
+export function formFromStep(step: TuneStep, live: number | null): PrepareForm {
+  const corner = step.axis === "VelocityICornerHz";
+  const seed = corner ? (step.seed_raw === 0 ? 0 : (cornerHz(step.seed_raw, step.pwm_hz) ?? 0)) : step.seed_raw;
+  const isLive = live !== null && Math.abs(live - seed) < (corner ? 0.05 : 0.5);
+  return {
+    seed: isLive ? null : seed,
+    repeats: step.repeats,
+    lower: step.lower_k,
+    upper: step.upper_k,
+    divisions: step.octave_divisions,
+  };
+}

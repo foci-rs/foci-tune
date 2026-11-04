@@ -15,6 +15,8 @@ import {
   stepPercent,
   stepSentence,
   axisTitle,
+  formFromStep,
+  runSentence,
   previewLadder,
   defaultProbeSpeed,
   expectedDurationSeconds,
@@ -952,5 +954,35 @@ describe("axisTitle", () => {
   test("names the axis without its unit", () => {
     expect(axisTitle("VelocityICornerHz")).toBe("Velocity I corner");
     expect(axisTitle("VelocityP")).toBe("Velocity P");
+  });
+});
+
+describe("runSentence", () => {
+  test("says the machine moves, how many test runs, and how long when that is known", () => {
+    expect(runSentence("stepper_x", 110, 1500)).toBe("Running this step moves stepper_x: 110 test runs, about 25 min.");
+  });
+  test("leaves the duration out when there is nothing to base it on", () => {
+    expect(runSentence("stepper_x", 110, null)).toBe("Running this step moves stepper_x: 110 test runs.");
+  });
+  test("a short step is told in seconds", () => {
+    expect(runSentence("stepper_x", 5, 20)).toBe("Running this step moves stepper_x: 5 test runs, 20 s.");
+  });
+});
+
+describe("formFromStep", () => {
+  const s = step({ seed_raw: 841, repeats: 2, lower_k: -2, upper_k: 4, octave_divisions: 6 });
+  test("takes the step's repeats, range and step size", () => {
+    expect(formFromStep(s, 841)).toMatchObject({ repeats: 2, lower: -2, upper: 4, divisions: 6 });
+  });
+  test("follows the live value when the seed is still it, and types the seed when it is not", () => {
+    expect(formFromStep(s, 841).seed).toBeNull();
+    expect(formFromStep(s, 900).seed).toBe(841);
+    expect(formFromStep(s, null).seed).toBe(841);
+  });
+  test("a corner seed is read back in Hz", () => {
+    const corner = step({ axis: "VelocityICornerHz", seed_raw: 4200, pwm_hz: 50000 });
+    const hz = (4200 * 50000) / (2 * Math.PI * 65536);
+    expect(formFromStep(corner, hz).seed).toBeNull();
+    expect(formFromStep(corner, 10)?.seed).toBeCloseTo(hz, 6);
   });
 });
