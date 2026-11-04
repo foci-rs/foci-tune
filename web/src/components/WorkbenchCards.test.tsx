@@ -229,6 +229,17 @@ function bar(over: Partial<Parameters<typeof RunBar>[0]> = {}) {
   );
 }
 
+test("on the Run step the bar has no Run button, but a way back and Cancel while running", () => {
+  const onBack = vi.fn();
+  const { rerender } = render(bar({ mode: "run", onBack }));
+  expect(screen.queryByRole("button", { name: /^Run/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Cancel queued runs" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Set up another run" }));
+  expect(onBack).toHaveBeenCalledTimes(1);
+  rerender(bar({ mode: "run", onBack, running: true }));
+  expect(screen.getByRole("button", { name: "Cancel queued runs" })).toBeInTheDocument();
+});
+
 test("a blocked run bar shows the first reason as a sentence and counts the rest", async () => {
   const onRun = vi.fn();
   render(bar({ blocked: ["the printer is not fully homed", "velocity P 99999 is outside 0..=32767"], onRun }));

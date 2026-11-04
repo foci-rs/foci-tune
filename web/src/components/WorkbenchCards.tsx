@@ -154,11 +154,16 @@ export function RunBar({
   onAbort,
   message,
   holdRun = false,
+  mode = "prepare",
+  onBack,
 }: {
   runLabel: string;
   blocked: string[];
   /** Keeps Run disabled without a reason of its own, for a problem another card already explains. */
   holdRun?: boolean;
+  /** "prepare" has the Run button; "run" has a way back to the setup instead. */
+  mode?: "prepare" | "run";
+  onBack?: () => void;
   busy: boolean;
   onRun: () => void;
   running: boolean;
@@ -218,7 +223,11 @@ export function RunBar({
               Cancel queued runs
             </UiButton>
           )}
-          {blocked.length > 0 ? (
+          {mode === "run" ? (
+            <UiButton variant="outline" onClick={onBack}>
+              Set up another run
+            </UiButton>
+          ) : blocked.length > 0 ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span tabIndex={0}>{runButton}</span>
