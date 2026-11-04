@@ -699,6 +699,26 @@ export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
   };
 }
 
+export type PatternMode = "default" | "custom";
+
+const samePattern = (a: Pattern, b: Pattern) =>
+  a.start[0] === b.start[0] && a.start[1] === b.start[1] && a.end[0] === b.end[0] && a.end[1] === b.end[1];
+
+/**
+ * Whether a stepper's pattern follows the proposal or is typed: always custom without a
+ * proposal, otherwise the operator's choice, otherwise custom only when a remembered pattern
+ * differs from the proposal.
+ */
+export function patternMode(
+  chosen: PatternMode | undefined,
+  proposal: Pattern | null,
+  remembered: Pattern | null,
+): PatternMode {
+  if (proposal === null) return "custom";
+  if (chosen !== undefined) return chosen;
+  return remembered !== null && !samePattern(remembered, proposal) ? "custom" : "default";
+}
+
 export interface PatternStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;

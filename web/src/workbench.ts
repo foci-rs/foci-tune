@@ -1,5 +1,12 @@
 import type { Filters, Pattern } from "./api";
-import { DEFAULT_PARAMETERS, type LadderInput, type OuterGains, type RunType, type SessionLink } from "./tune";
+import {
+  DEFAULT_PARAMETERS,
+  type LadderInput,
+  type OuterGains,
+  type PatternMode,
+  type RunType,
+  type SessionLink,
+} from "./tune";
 
 /** The Tune page's form and session link, kept outside React so a route change keeps them. */
 export interface WorkbenchState {
@@ -8,6 +15,7 @@ export interface WorkbenchState {
   params: typeof DEFAULT_PARAMETERS;
   speedsText: string;
   patterns: Record<string, Pattern>;
+  patternModes: Record<string, PatternMode>;
   gains: OuterGains | null;
   filters: Filters | null;
   seededFor: string | null;

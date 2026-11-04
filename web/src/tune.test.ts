@@ -14,6 +14,7 @@ import {
   ladderPlotData,
   patternProblem,
   expectedProbeEdges,
+  patternMode,
   probeEdgeHint,
   suggestedProbeStrokes,
   probeToggleSpacing,
@@ -734,5 +735,26 @@ describe("probe edge hint", () => {
 
   test("no hint when the spacing rule already blocks the run", () => {
     expect(hint(400, 3, 100)).toBeNull();
+  });
+});
+
+describe("pattern mode", () => {
+  const proposal: Pattern = { start: [60, 60], end: [240, 60] };
+  const other: Pattern = { start: [50, 50], end: [250, 50] };
+
+  test("without a proposal the pattern can only be custom", () => {
+    expect(patternMode(undefined, null, null)).toBe("custom");
+    expect(patternMode("default", null, other)).toBe("custom");
+  });
+
+  test("an explicit choice wins", () => {
+    expect(patternMode("custom", proposal, proposal)).toBe("custom");
+    expect(patternMode("default", proposal, other)).toBe("default");
+  });
+
+  test("with no choice, a remembered pattern that differs from the proposal is custom", () => {
+    expect(patternMode(undefined, proposal, null)).toBe("default");
+    expect(patternMode(undefined, proposal, proposal)).toBe("default");
+    expect(patternMode(undefined, proposal, other)).toBe("custom");
   });
 });
