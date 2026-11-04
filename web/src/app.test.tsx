@@ -339,3 +339,64 @@ test("focusing a status item shows its details", async () => {
   fireEvent.focus(label.closest("[data-slot=tooltip-trigger]")!);
   expect(await screen.findByRole("tooltip")).toHaveTextContent("AAA");
 });
+
+test("the manual tune page lays out Test, Pattern, Gains, Filters and Ladder above the run bar", async () => {
+  const control = {
+    pwm_hz: 50_000,
+    velocity_p: 841,
+    velocity_i: 412,
+    position_p: 120,
+    position_i: 4,
+    torque_p: 300,
+    torque_i: 20,
+    flux_p: 310,
+    flux_i: 21,
+    velocity_filter_hz: 200,
+    torque_filter_hz: 1000,
+    position_filter_hz: 300,
+    flux_filter_hz: 1000,
+  };
+  const stepper = (name: string, axis: string) =>
+    ({
+      name,
+      mcu: "ouroboros",
+      channel: axis === "x" ? 0 : 1,
+      serial: "AAA",
+      axis,
+      kinematics: "corexy",
+      position_min: 0,
+      position_max: 300,
+      motor_rotation_distance_mm: 40,
+      homing_current_a: null,
+      electrical_model_present: true,
+      unusable: null,
+      proposal: { pattern: { start: [50, 50], end: [250, 50] }, refusal: null },
+    }) as unknown as StepperView;
+  const view = {
+    ...printerView(),
+    steppers: [stepper("stepper_x", "x"), stepper("stepper_y", "y")],
+    boards: [
+      board({
+        serial: "AAA",
+        channels: [
+          { channel: 0, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+          { channel: 1, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+        ] as never,
+      }),
+    ],
+    preconditions: [
+      { stepper: "stepper_x", ok: false, failing: ["axis x is not homed"] },
+      { stepper: "stepper_y", ok: true, failing: [] },
+    ],
+  } as PrinterView;
+  respond(view);
+  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+  for (const name of ["Test", "Pattern", "Gains", "Filters", "Ladder"]) {
+    expect(await screen.findByRole("region", { name })).toBeInTheDocument();
+  }
+  expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+  expect(screen.getByRole("spinbutton", { name: "Position I (raw)" })).toHaveAttribute("readonly");
+  expect(
+    within(screen.getByRole("list", { name: "Why the run cannot start" })).getAllByRole("listitem").length,
+  ).toBeGreaterThan(0);
+});

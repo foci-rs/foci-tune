@@ -20,9 +20,11 @@ import {
   type StepperView,
 } from "@/api";
 import { ParametersBlock } from "@/components/ParametersBlock";
-import { BedMap } from "@/components/BedMap";
 import { EnsemblePlot } from "@/components/EnsemblePlot";
-import { gainProblems, GainsBlock, ladderAxisLabel, LadderSetup, RunControls } from "@/components/GainsBlock";
+import { FiltersCard, gainProblems, GainsCard, ladderAxisLabel } from "@/components/GainsBlock";
+import { EdgeHintLine } from "@/components/EdgeHint";
+import { TestCard } from "@/components/TestCard";
+import { LadderCard, PatternCard, RunBar, type PatternNote } from "@/components/WorkbenchCards";
 import { GuidedTune } from "@/components/GuidedTune";
 import { LadderPlot } from "@/components/LadderPlot";
 import { LivePanels } from "@/components/LivePanels";
@@ -46,6 +48,7 @@ import {
   headlineMetric,
   ladderMedians,
   loadPattern,
+  patternMode,
   nextSession,
   parseNumberList,
   patternProblem,
@@ -64,7 +67,7 @@ import {
   TERMINAL_STATES,
   toggleSpacingProblem,
   type LadderInput,
-  type ProbeEdgeHint,
+  type PatternMode,
   type RunBody,
   type RunType,
   type Setup,
@@ -94,12 +97,6 @@ export const GuidedRoute = createRoute({
   component: GuidedTunePage,
 });
 
-const RUN_TYPES: { type: RunType; label: string }[] = [
-  { type: "tracking", label: "Tracking" },
-  { type: "probe", label: "Probe" },
-  { type: "standstill", label: "Standstill" },
-];
-
 const DEFAULT_LADDER: LadderInput = {
   axis: "velocity_p",
   text: "",
@@ -109,12 +106,6 @@ const DEFAULT_LADDER: LadderInput = {
 };
 
 const AWAIT_PICKUP_MS = 10_000;
-
-const EDGE_HINT_CLASS: Record<ProbeEdgeHint["tone"], string> = {
-  ok: "text-xs text-muted-foreground",
-  caution: "rounded border border-amber-500/60 px-2 py-1 text-xs text-amber-300",
-  warning: "rounded border border-red-500/60 px-2 py-1 text-xs text-red-300",
-};
 
 /** State kept in the module-level workbench store, so it survives leaving the page. */
 function useStored<K extends keyof WorkbenchState>(
@@ -233,15 +224,28 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const [patterns, setPatterns] = useStored<"patterns">("patterns", () => ({}));
   const [speedsText, setSpeedsText] = useStored("speedsText", () => DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "));
 
-  const patternFor = (s: StepperView | undefined): Pattern | null => {
-    if (s === undefined || limits === null) return null;
+  const [patternModes, setPatternModes] = useStored<"patternModes">("patternModes", () => ({}));
+  const rememberedFor = (s: StepperView): Pattern | null => {
     const typed = patterns[s.name];
     if (typed !== undefined) return typed;
     const remembered = loadPattern(storage, s.name);
-    if (remembered !== null && patternProblem(remembered, limits) === null) return remembered;
-    return s.proposal.pattern ?? fallbackPattern(limits);
+    return remembered !== null && limits !== null && patternProblem(remembered, limits) === null ? remembered : null;
+  };
+  const modeFor = (s: StepperView): PatternMode =>
+    patternMode(patternModes[s.name], s.proposal.pattern, rememberedFor(s));
+  const patternFor = (s: StepperView | undefined): Pattern | null => {
+    if (s === undefined || limits === null) return null;
+    if (modeFor(s) === "default" && s.proposal.pattern !== null) return s.proposal.pattern;
+    return rememberedFor(s) ?? s.proposal.pattern ?? fallbackPattern(limits);
   };
   const pattern = patternFor(stepper);
+  const mode: PatternMode = stepper === undefined ? "custom" : modeFor(stepper);
+  const chooseMode = (next: PatternMode) => {
+    if (stepper === undefined) return;
+    setPatternModes((prev) => ({ ...prev, [stepper.name]: next }));
+    if (next === "default" && stepper.proposal.pattern !== null) setPattern(stepper.proposal.pattern);
+    else if (pattern !== null) setPattern(pattern);
+  };
   const patternError = pattern !== null && limits !== null ? patternProblem(pattern, limits) : null;
 
   const speeds = parseNumberList(speedsText, "the speed set");
@@ -268,23 +272,33 @@ function Workbench({ printer }: { printer: PrinterView }) {
     setParams((prev) => ({ ...prev, [s.type]: s.parameters }));
     if (s.type === "tracking") setSpeedsText(s.parameters.speeds_mm_s.join(", "));
     setPatterns((prev) => ({ ...prev, [s.stepper]: s.pattern }));
+    const proposal = printer.steppers.find((st) => st.name === s.stepper)?.proposal.pattern ?? null;
+    setPatternModes((prev) => ({ ...prev, [s.stepper]: patternMode(undefined, proposal, s.pattern) }));
   };
 
   const [gains, setGains] = useStored<"gains">("gains", () => null);
   const [filters, setFilters] = useStored<"filters">("filters", () => null);
   const [seededFor, setSeededFor] = useStored<"seededFor">("seededFor", () => null);
   const channelKey = stepper === undefined ? null : `${stepper.serial}:${stepper.channel}`;
-  const seed = useCallback(() => {
+  const loadLiveGains = useCallback(() => {
     if (channel === undefined) return;
     const c = channel.control;
     setGains({ velocity_p: c.velocity_p, velocity_i: c.velocity_i, position_p: c.position_p });
+  }, [channel, setGains]);
+  const loadLiveFilters = useCallback(() => {
+    if (channel === undefined) return;
+    const c = channel.control;
     setFilters({
       velocity_hz: c.velocity_filter_hz,
       torque_hz: c.torque_filter_hz,
       position_hz: c.position_filter_hz,
       flux_hz: c.flux_filter_hz,
     });
-  }, [channel, setGains, setFilters]);
+  }, [channel, setFilters]);
+  const seed = useCallback(() => {
+    loadLiveGains();
+    loadLiveFilters();
+  }, [loadLiveGains, loadLiveFilters]);
   const [reseed, setReseed] = useState(false);
   useEffect(() => {
     if (channel === undefined) return;
@@ -392,6 +406,10 @@ function Workbench({ printer }: { printer: PrinterView }) {
         })
       : null;
 
+  const patternNotes: PatternNote[] = [
+    ...(spacingProblem === null ? [] : [{ tone: "caution" as const, text: spacingProblem }]),
+  ];
+
   const runBody = (): RunBody | null =>
     setup === null || gains === null || filters === null
       ? null
@@ -473,156 +491,90 @@ function Workbench({ printer }: { printer: PrinterView }) {
     <div className="space-y-4">
       <h1 className="sr-only">Tune</h1>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card label="Setup">
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-3">
-              <label className="flex flex-col text-xs text-muted-foreground">
-                Stepper
-                <select
-                  value={stepperName}
-                  disabled={busy}
-                  onChange={(e) => setStepperName(e.target.value)}
-                  className="rounded border bg-background px-1.5 py-1 text-sm text-foreground"
-                >
-                  {printer.steppers.map((s) => (
-                    <option key={s.name} value={s.name}>
-                      {s.name}
-                      {s.unusable !== null ? " (unusable)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div role="radiogroup" aria-label="Run type" className="flex items-end gap-1">
-                {RUN_TYPES.map((t) => (
-                  <button
-                    key={t.type}
-                    type="button"
-                    role="radio"
-                    aria-checked={type === t.type}
-                    disabled={busy}
-                    onClick={() => setType(t.type)}
-                    className={
-                      type === t.type
-                        ? "rounded-full border border-emerald-500 px-3 py-1 text-sm text-emerald-300"
-                        : "rounded-full border px-3 py-1 text-sm text-muted-foreground"
-                    }
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {setup !== null && (
-              <ParametersBlock
-                type={type}
-                setup={setup}
-                speedsText={speedsText}
-                disabled={busy}
-                onSpeedsText={setSpeedsText}
-                onSetup={updateSetup}
-              />
-            )}
-            {spacingProblem !== null && <p className="text-xs text-amber-400">{spacingProblem}</p>}
-            {edgeHint !== null && (
-              <p role="note" className={EDGE_HINT_CLASS[edgeHint.tone]}>
-                {edgeHint.text}
-              </p>
-            )}
-            {stepper?.proposal.refusal != null && (
-              <p className="text-xs text-amber-400">
-                No proposed pattern: {stepper.proposal.refusal}. The pattern is yours to choose.
-              </p>
-            )}
-            {limits !== null && pattern !== null && stepper !== undefined && (
-              <div>
-                <BedMap
-                  limits={limits}
-                  pattern={pattern}
-                  proposal={stepper.proposal.pattern}
-                  disabled={busy}
-                  onChange={setPattern}
-                />
-                {patternError !== null && (
-                  <p role="alert" className="mt-2 text-sm text-amber-400">
-                    Pattern refused: {patternError}
-                  </p>
-                )}
-                {stepper.proposal.pattern !== null && (
-                  <Button
-                    className="mt-2 text-xs"
-                    disabled={busy}
-                    onClick={() => setPattern(stepper.proposal.pattern as Pattern)}
-                  >
-                    Use the proposed pattern
-                  </Button>
-                )}
-              </div>
-            )}
-            <p className="text-xs text-muted-foreground">
-              {active !== null
-                ? `Session ${active.id}. Changing the setup starts a new session.`
-                : changedSetup
-                  ? "The setup differs from the last session; the next run starts a new session."
-                  : "The first run starts a new session."}
-            </p>
-          </div>
-        </Card>
-
-        <Card label="Gains">
-          {gains === null || filters === null ? (
-            <p className="text-sm text-muted-foreground">Waiting for a control-state frame from the channel.</p>
-          ) : (
-            <div className="space-y-4">
-              <GainsBlock
-                gains={gains}
-                filters={filters}
-                positionI={
-                  view?.session != null
-                    ? { value: view.session.gains.position_i, source: "the session's baseline" }
-                    : { value: channel?.control.position_i ?? 0, source: "live; a session holds its baseline" }
-                }
-                pwmHz={pwmHz}
-                disabled={busy}
-                ladder={ladder}
-                ladderOn={ladderOn}
-                ladderDefaults={
-                  pwmHz === null && ladder.axis === "velocity_i_corner_hz"
-                    ? []
-                    : defaultLadderValues(ladder.axis, gains, pwmHz ?? 0)
-                }
-                onGains={setGains}
-                onFilters={setFilters}
-                onLadder={setLadder}
-              />
-              <Button className="text-xs" disabled={busy || channel === undefined} onClick={seed}>
-                Load the live values
-              </Button>
-              <LadderSetup
-                on={ladderOn}
-                ladder={ladder}
-                probe={type === "probe"}
-                disabled={busy}
-                onToggle={setLadderOn}
-                onLadder={setLadder}
-              />
-            </div>
+        <TestCard
+          steppers={printer.steppers}
+          stepperName={stepperName}
+          type={type}
+          disabled={busy}
+          onStepper={setStepperName}
+          onType={setType}
+        >
+          {setup !== null && (
+            <ParametersBlock
+              type={type}
+              setup={setup}
+              speedsText={speedsText}
+              disabled={busy}
+              onSpeedsText={setSpeedsText}
+              onSetup={updateSetup}
+            />
           )}
-          <div className="mt-4 flex flex-wrap items-start gap-3 border-t pt-4">
-            <RunControls label={ladderOn ? "Run ladder" : "Run"} blocked={uniqueBlocked} busy={busy} onRun={submit} />
-            <Button disabled={active === null || busyEngine} onClick={revert}>
-              Revert
-            </Button>
-          </div>
-          {message !== null && (
-            <p
-              role="status"
-              className={message.tone === "ok" ? "mt-2 text-sm text-emerald-400" : "mt-2 text-sm text-red-400"}
-            >
-              {message.text}
-            </p>
-          )}
-        </Card>
+          {edgeHint !== null && <EdgeHintLine hint={edgeHint} />}
+        </TestCard>
+        <PatternCard
+          limits={limits}
+          pattern={pattern}
+          proposal={stepper?.proposal.pattern ?? null}
+          mode={mode}
+          refusal={stepper?.proposal.refusal ?? null}
+          error={patternError}
+          notes={patternNotes}
+          disabled={busy}
+          onPattern={setPattern}
+          onMode={chooseMode}
+        />
+        <GainsCard
+          gains={gains}
+          positionI={view?.session != null ? view.session.gains.position_i : (channel?.control.position_i ?? 0)}
+          live={channel?.control}
+          pwmHz={pwmHz}
+          disabled={busy}
+          ladder={ladder}
+          ladderOn={ladderOn}
+          ladderDefaults={
+            gains === null || (pwmHz === null && ladder.axis === "velocity_i_corner_hz")
+              ? []
+              : defaultLadderValues(ladder.axis, gains, pwmHz ?? 0)
+          }
+          canLoadLive={channel !== undefined}
+          onGains={setGains}
+          onLoadLive={loadLiveGains}
+          onLadder={setLadder}
+        />
+        <FiltersCard
+          filters={filters}
+          disabled={busy}
+          canLoadLive={channel !== undefined}
+          onFilters={setFilters}
+          onLoadLive={loadLiveFilters}
+        />
       </div>
+      <LadderCard
+        on={ladderOn}
+        ladder={ladder}
+        probe={type === "probe"}
+        disabled={busy}
+        onToggle={setLadderOn}
+        onLadder={setLadder}
+      />
+      <RunBar
+        runLabel={ladderOn ? "Run ladder" : "Run"}
+        blocked={uniqueBlocked}
+        busy={busy}
+        onRun={submit}
+        canRevert={active !== null && !busyEngine}
+        onRevert={revert}
+        running={current !== null}
+        onAbort={abort}
+        message={message}
+        sessionNote={
+          active !== null
+            ? `Session ${active.id}. Changing the setup starts a new session.`
+            : changedSetup
+              ? "The setup differs from the last session; the next run starts a new session."
+              : "The first run starts a new session."
+        }
+      />
 
       {(current !== null || queue.length > 0) && (
         <Card label="Engine">
@@ -638,7 +590,6 @@ function Workbench({ printer }: { printer: PrinterView }) {
               </span>
             )}
             <span className="text-muted-foreground">{queue.length} queued</span>
-            {current !== null && <Button onClick={abort}>Abort after this run</Button>}
           </div>
           {pending.length > 0 && (
             <ol aria-label="Queue" className="mt-2 flex flex-wrap gap-2 text-xs">

@@ -86,6 +86,7 @@ export function NumberField({
   onValue,
   step,
   disabled = false,
+  readOnly = false,
   className,
 }: {
   label: string;
@@ -93,6 +94,7 @@ export function NumberField({
   onValue: (v: number) => void;
   step?: number;
   disabled?: boolean;
+  readOnly?: boolean;
   className?: string;
 }) {
   const [text, setText] = useState(String(value));
@@ -107,6 +109,7 @@ export function NumberField({
       step={step}
       value={text}
       disabled={disabled}
+      readOnly={readOnly}
       onFocus={() => (focused.current = true)}
       onBlur={() => {
         focused.current = false;

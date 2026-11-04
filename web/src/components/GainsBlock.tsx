@@ -1,15 +1,20 @@
-import type { Filters, LadderAxis } from "@/api";
+import type { ControlSnapshot, Filters, LadderAxis } from "@/api";
 import { formatNumber, PID_GAIN_MAX_RAW, type LadderInput, type OuterGains } from "@/tune";
 import { cornerHz, velocityIRaw } from "@/units";
-import { Button, NumberField } from "./ui";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MinusIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { Button as UiButton } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button, Card, NumberField } from "./ui";
 
 export const GAIN_STEPS = { velocity_p: 50, position_p: 10, corner_hz: 5, filter_hz: 50 } as const;
 
 const FILTERS: { key: keyof Filters; label: string }[] = [
-  { key: "velocity_hz", label: "Velocity filter" },
   { key: "torque_hz", label: "Torque filter" },
-  { key: "position_hz", label: "Position filter" },
   { key: "flux_hz", label: "Flux filter" },
+  { key: "velocity_hz", label: "Velocity filter" },
+  { key: "position_hz", label: "Position filter" },
 ];
 
 export const LADDER_AXES: { axis: LadderAxis; label: string; unit: string }[] = [
@@ -50,7 +55,8 @@ function Stepper({
   unit,
   disabled,
   onValue,
-  aside,
+  hint,
+  locked = false,
 }: {
   label: string;
   value: number;
@@ -58,32 +64,49 @@ function Stepper({
   unit: string;
   disabled: boolean;
   onValue: (v: number) => void;
-  aside?: string;
+  /** Explanation shown on hover or focus. */
+  hint?: string;
+  /** Shown like the others but not editable here. */
+  locked?: boolean;
 }) {
+  const off = disabled || locked;
+  const row = (
+    <div className="flex items-center gap-1">
+      <UiButton
+        variant="outline"
+        size="icon"
+        aria-label={locked ? `Decrease ${label}` : `Decrease ${label} by ${step} ${unit}`}
+        disabled={off}
+        onClick={() => onValue(value - step)}
+      >
+        <MinusIcon />
+      </UiButton>
+      <NumberField label={`${label} (${unit})`} value={value} disabled={disabled} readOnly={locked} onValue={onValue} />
+      <UiButton
+        variant="outline"
+        size="icon"
+        aria-label={locked ? `Increase ${label}` : `Increase ${label} by ${step} ${unit}`}
+        disabled={off}
+        onClick={() => onValue(value + step)}
+      >
+        <PlusIcon />
+      </UiButton>
+      <span className="text-xs text-muted-foreground">{unit}</span>
+    </div>
+  );
   return (
     <div className="min-w-0">
       <p className="text-[0.65rem] uppercase tracking-wider text-muted-foreground">{label}</p>
-      <div className="flex items-center gap-1">
-        <Button
-          aria-label={`Decrease ${label} by ${step} ${unit}`}
-          disabled={disabled}
-          onClick={() => onValue(value - step)}
-          className="px-2 py-0.5"
-        >
-          -
-        </Button>
-        <NumberField label={`${label} (${unit})`} value={value} disabled={disabled} onValue={onValue} />
-        <Button
-          aria-label={`Increase ${label} by ${step} ${unit}`}
-          disabled={disabled}
-          onClick={() => onValue(value + step)}
-          className="px-2 py-0.5"
-        >
-          +
-        </Button>
-        <span className="text-xs text-muted-foreground">{unit}</span>
-        {aside !== undefined && <span className="font-mono text-xs text-muted-foreground">{aside}</span>}
-      </div>
+      {hint === undefined ? (
+        row
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>{row}</TooltipTrigger>
+          <TooltipContent side="bottom" align="start">
+            {hint}
+          </TooltipContent>
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -106,14 +129,14 @@ function LadderValues({
         {axis?.label} ladder ({axis?.unit})
       </p>
       <div className="flex flex-wrap items-center gap-1">
-        <input
+        <Input
           type="text"
           aria-label={`${axis?.label} ladder values`}
           value={ladder.text}
           disabled={disabled}
           onChange={(e) => onLadder({ ...ladder, text: e.target.value })}
           placeholder="100, 120, 140"
-          className="w-56 rounded border bg-background px-1.5 py-0.5 font-mono text-sm"
+          className="w-56 font-mono"
         />
         <Button
           disabled={disabled || defaults.length === 0}
@@ -127,180 +150,267 @@ function LadderValues({
   );
 }
 
+/** A refresh icon that loads the board's current values into a card. */
+function LoadLiveButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+  return (
+    <UiButton variant="outline" size="icon-sm" aria-label={label} disabled={disabled} onClick={onClick}>
+      <RefreshCwIcon />
+    </UiButton>
+  );
+}
+
+function ReadOnlyRow({ label, p, i }: { label: string; p: number | undefined; i: number | undefined }) {
+  return (
+    <tr className="align-top">
+      <th scope="row" className="py-2 pr-4 text-left font-normal text-muted-foreground">
+        {label}
+      </th>
+      <td className="py-2 pr-4 font-mono text-sm">{p ?? "-"}</td>
+      <td className="py-2 font-mono text-sm">{i ?? "-"}</td>
+    </tr>
+  );
+}
+
 /**
- * The gains written before every run: velocity P, velocity I as its corner with raw beside it,
- * position P, the filters, and position I read-only. With the ladder on, the ladder axis'
- * field becomes the value list.
+ * The gains written before every run. Torque and flux are the board's live values and cannot
+ * be set from here; velocity P, velocity I as its corner with raw beside it and position P are
+ * editable, and position I is read-only. With the ladder on, the ladder axis' field becomes the
+ * value list.
  */
-export function GainsBlock({
+export function GainsCard({
   gains,
-  filters,
   positionI,
+  live,
   pwmHz,
   disabled,
   ladder,
   ladderOn,
   ladderDefaults,
+  canLoadLive,
   onGains,
-  onFilters,
+  onLoadLive,
   onLadder,
 }: {
-  gains: OuterGains;
-  filters: Filters;
-  positionI: { value: number; source: string };
+  gains: OuterGains | null;
+  positionI: number;
+  live: ControlSnapshot | undefined;
   pwmHz: number | null;
   disabled: boolean;
   ladder: LadderInput;
   ladderOn: boolean;
   ladderDefaults: number[];
+  canLoadLive: boolean;
   onGains: (g: OuterGains) => void;
-  onFilters: (f: Filters) => void;
+  onLoadLive: () => void;
   onLadder: (l: LadderInput) => void;
 }) {
+  const action = <LoadLiveButton label="Load live gains" disabled={disabled || !canLoadLive} onClick={onLoadLive} />;
+  if (gains === null) {
+    return (
+      <Card label="Gains" action={action}>
+        <p className="text-sm text-muted-foreground">Waiting for a control-state frame from the channel.</p>
+      </Card>
+    );
+  }
   const laddered = (axis: LadderAxis) => ladderOn && ladder.axis === axis;
   const ladderField = (
     <LadderValues ladder={ladder} onLadder={onLadder} disabled={disabled} defaults={ladderDefaults} />
   );
   const corner = pwmHz === null ? null : cornerHz(gains.velocity_i, pwmHz);
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      {laddered("velocity_p") ? (
-        ladderField
-      ) : (
-        <Stepper
-          label="Velocity P"
-          value={gains.velocity_p}
-          step={GAIN_STEPS.velocity_p}
-          unit="raw"
-          disabled={disabled}
-          onValue={(v) => onGains({ ...gains, velocity_p: Math.round(v) })}
-        />
-      )}
-      {laddered("velocity_i_corner_hz") ? (
-        ladderField
-      ) : corner === null || pwmHz === null ? (
-        <p className="text-sm text-amber-400">Velocity I cannot be shown as a corner: the PWM frequency is unknown.</p>
-      ) : (
-        <Stepper
-          label="Velocity I corner"
-          value={Math.round(corner * 100) / 100}
-          step={GAIN_STEPS.corner_hz}
-          unit="Hz"
-          disabled={disabled}
-          aside={`raw ${gains.velocity_i}`}
-          onValue={(v) => onGains({ ...gains, velocity_i: velocityIRaw(v, pwmHz) })}
-        />
-      )}
-      {laddered("position_p") ? (
-        ladderField
-      ) : (
-        <Stepper
-          label="Position P"
-          value={gains.position_p}
-          step={GAIN_STEPS.position_p}
-          unit="raw"
-          disabled={disabled}
-          onValue={(v) => onGains({ ...gains, position_p: Math.round(v) })}
-        />
-      )}
-      <div className="min-w-0">
-        <p className="text-[0.65rem] uppercase tracking-wider text-muted-foreground">Position I</p>
-        <p className="font-mono text-sm">
-          {positionI.value} <span className="text-xs text-muted-foreground">raw, read-only, {positionI.source}</span>
-        </p>
-      </div>
-      {FILTERS.map((f) => (
-        <Stepper
-          key={f.key}
-          label={f.label}
-          value={filters[f.key]}
-          step={GAIN_STEPS.filter_hz}
-          unit="Hz"
-          disabled={disabled}
-          onValue={(v) => onFilters({ ...filters, [f.key]: Math.round(v) })}
-        />
-      ))}
-    </div>
+    <Card label="Gains" action={action}>
+      <table aria-label="Gains" className="w-full text-sm">
+        <thead className="border-b text-[0.65rem] uppercase tracking-wider text-muted-foreground">
+          <tr>
+            <th className="py-1 pr-4 text-left font-normal">Gains</th>
+            <th className="py-1 pr-4 text-left font-normal">P</th>
+            <th className="py-1 text-left font-normal">I</th>
+          </tr>
+        </thead>
+        <tbody>
+          <ReadOnlyRow label="Torque" p={live?.torque_p} i={live?.torque_i} />
+          <ReadOnlyRow label="Flux" p={live?.flux_p} i={live?.flux_i} />
+          <tr className="align-top">
+            <th scope="row" className="py-2 pr-4 text-left font-normal text-muted-foreground">
+              Velocity
+            </th>
+            <td className="py-2 pr-4">
+              {laddered("velocity_p") ? (
+                ladderField
+              ) : (
+                <Stepper
+                  label="Velocity P"
+                  value={gains.velocity_p}
+                  step={GAIN_STEPS.velocity_p}
+                  unit="raw"
+                  disabled={disabled}
+                  onValue={(v) => onGains({ ...gains, velocity_p: Math.round(v) })}
+                />
+              )}
+            </td>
+            <td className="py-2">
+              {laddered("velocity_i_corner_hz") ? (
+                ladderField
+              ) : corner === null || pwmHz === null ? (
+                <p className="text-amber-400">Velocity I cannot be shown as a corner: the PWM frequency is unknown.</p>
+              ) : (
+                <Stepper
+                  label="Velocity I corner"
+                  value={Math.round(corner * 100) / 100}
+                  step={GAIN_STEPS.corner_hz}
+                  unit="Hz"
+                  disabled={disabled}
+                  hint={`Raw value ${gains.velocity_i}, as written to the config`}
+                  onValue={(v) => onGains({ ...gains, velocity_i: velocityIRaw(v, pwmHz) })}
+                />
+              )}
+            </td>
+          </tr>
+          <tr className="align-top">
+            <th scope="row" className="py-2 pr-4 text-left font-normal text-muted-foreground">
+              Position
+            </th>
+            <td className="py-2 pr-4">
+              {laddered("position_p") ? (
+                ladderField
+              ) : (
+                <Stepper
+                  label="Position P"
+                  value={gains.position_p}
+                  step={GAIN_STEPS.position_p}
+                  unit="raw"
+                  disabled={disabled}
+                  onValue={(v) => onGains({ ...gains, position_p: Math.round(v) })}
+                />
+              )}
+            </td>
+            <td className="py-2">
+              <Stepper
+                label="Position I"
+                value={positionI}
+                step={0}
+                unit="raw"
+                disabled={disabled}
+                locked
+                onValue={() => {}}
+              />
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </Card>
   );
 }
 
-/** Ladder toggle and its axis, repeats and stop-rule thresholds. */
-export function LadderSetup({
-  on,
+/** The filters written before every run. */
+export function FiltersCard({
+  filters,
+  disabled,
+  canLoadLive,
+  onFilters,
+  onLoadLive,
+}: {
+  filters: Filters | null;
+  disabled: boolean;
+  canLoadLive: boolean;
+  onFilters: (f: Filters) => void;
+  onLoadLive: () => void;
+}) {
+  return (
+    <Card
+      label="Filters"
+      action={<LoadLiveButton label="Load live filters" disabled={disabled || !canLoadLive} onClick={onLoadLive} />}
+    >
+      {filters === null ? (
+        <p className="text-sm text-muted-foreground">Waiting for a control-state frame from the channel.</p>
+      ) : (
+        <div className="grid gap-3">
+          {FILTERS.map((f) => (
+            <Stepper
+              key={f.key}
+              label={f.label}
+              value={filters[f.key]}
+              step={GAIN_STEPS.filter_hz}
+              unit="Hz"
+              disabled={disabled}
+              onValue={(v) => onFilters({ ...filters, [f.key]: Math.round(v) })}
+            />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** The ladder's axis, repeats and stop-rule thresholds. */
+export function LadderFields({
   ladder,
   probe,
   disabled,
-  onToggle,
   onLadder,
 }: {
-  on: boolean;
   ladder: LadderInput;
   probe: boolean;
   disabled: boolean;
-  onToggle: (on: boolean) => void;
   onLadder: (l: LadderInput) => void;
 }) {
   return (
     <div className="flex flex-wrap items-end gap-3">
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={on} disabled={disabled} onChange={(e) => onToggle(e.target.checked)} />
-        Ladder
+      <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+        Axis
+        <Select
+          value={ladder.axis}
+          disabled={disabled}
+          onValueChange={(axis) => onLadder({ ...ladder, axis: axis as LadderAxis, text: "" })}
+        >
+          <SelectTrigger aria-label="Ladder axis" className="text-foreground">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {LADDER_AXES.map((a) => (
+              <SelectItem key={a.axis} value={a.axis}>
+                {a.label} ({a.unit})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <label className="flex flex-col text-xs text-muted-foreground">
+        Repeats
+        <NumberField
+          label="Repeats"
+          value={ladder.repeats}
+          disabled={disabled}
+          onValue={(v) => onLadder({ ...ladder, repeats: v })}
+          className="w-16"
+        />
       </label>
-      {on && (
-        <>
-          <label className="flex flex-col text-xs text-muted-foreground">
-            Axis
-            <select
-              value={ladder.axis}
-              disabled={disabled}
-              onChange={(e) => onLadder({ ...ladder, axis: e.target.value as LadderAxis, text: "" })}
-              className="rounded border bg-background px-1.5 py-1 text-sm text-foreground"
-            >
-              {LADDER_AXES.map((a) => (
-                <option key={a.axis} value={a.axis}>
-                  {a.label} ({a.unit})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col text-xs text-muted-foreground">
-            Repeats
-            <NumberField
-              label="Repeats"
-              value={ladder.repeats}
-              disabled={disabled}
-              onValue={(v) => onLadder({ ...ladder, repeats: v })}
-              className="w-16"
-            />
-          </label>
-          <label className="flex flex-col text-xs text-muted-foreground">
-            Zeta floor
-            <NumberField
-              label="Zeta floor"
-              value={ladder.floor}
-              step={0.01}
-              disabled={disabled}
-              onValue={(v) => onLadder({ ...ladder, floor: v })}
-              className="w-20"
-            />
-          </label>
-          <label className="flex flex-col text-xs text-muted-foreground">
-            Marginal below
-            <NumberField
-              label="Marginal below"
-              value={ladder.marginal}
-              step={0.01}
-              disabled={disabled}
-              onValue={(v) => onLadder({ ...ladder, marginal: v })}
-              className="w-20"
-            />
-          </label>
-          {!probe && (
-            <p className="text-xs text-muted-foreground">
-              The stop rule applies to probe ladders only; this ladder runs to completion.
-            </p>
-          )}
-        </>
+      <label className="flex flex-col text-xs text-muted-foreground">
+        Zeta floor
+        <NumberField
+          label="Zeta floor"
+          value={ladder.floor}
+          step={0.01}
+          disabled={disabled}
+          onValue={(v) => onLadder({ ...ladder, floor: v })}
+          className="w-20"
+        />
+      </label>
+      <label className="flex flex-col text-xs text-muted-foreground">
+        Marginal below
+        <NumberField
+          label="Marginal below"
+          value={ladder.marginal}
+          step={0.01}
+          disabled={disabled}
+          onValue={(v) => onLadder({ ...ladder, marginal: v })}
+          className="w-20"
+        />
+      </label>
+      {!probe && (
+        <p className="text-xs text-muted-foreground">
+          The stop rule applies to probe ladders only; this ladder runs to completion.
+        </p>
       )}
     </div>
   );
