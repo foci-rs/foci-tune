@@ -653,7 +653,8 @@ describe("probe edge hint", () => {
   test("40 or more is a neutral note", () => {
     const h = hint(195, 3, 100, 10)!;
     expect(h.tone).toBe("ok");
-    expect(h.text).toContain("Expected about 49 edges");
+    expect(h.edges).toBe(49);
+    expect(h.text).toContain("about 49 step responses");
     expect(h.text).toContain("at least 20");
   });
 
@@ -704,31 +705,31 @@ describe("probe edge hint", () => {
   test("between 20 and 39 is a caution naming the strokes that reach 40", () => {
     const h = hint(400, 6, 150)!;
     expect(h.tone).toBe("caution");
-    expect(h.text).toContain("about 26 edges");
-    expect(h.text).toContain("enough to pass (20)");
-    expect(h.text).toContain("13 strokes");
+    expect(h.text).toContain("about 26 step responses");
+    expect(h.text).toContain("enough to run");
+    expect(h.text).toContain("Use 13 strokes");
   });
 
   test("below 20 is a warning with the strokes and the pattern length that reach 40", () => {
     const h = hint(400, 6, 100)!;
     expect(h.tone).toBe("warning");
-    expect(h.text).toContain("about 12 edges");
-    expect(h.text).toContain("not comparable (needs 20)");
-    expect(h.text).toContain("25 strokes");
+    expect(h.text).toContain("only about 12 step responses");
+    expect(h.text).toContain("needs 20");
+    expect(h.text).toContain("Use 25 strokes");
     expect(h.text).toContain("290 mm");
   });
 
   test("when 50 strokes cannot reach 40 only the pattern length is offered", () => {
     const h = hint(600, 10, 60)!;
     expect(h.tone).toBe("warning");
-    expect(h.text).not.toContain("strokes for");
-    expect(h.text).toContain("lengthen the pattern");
+    expect(h.text).not.toContain("strokes (about");
+    expect(h.text).toContain("Lengthen the pattern");
   });
 
   test("toggles in the low-yield spacing band ask for more segments", () => {
     const h = hint(600, 6, 200)!;
-    expect(h.text).toContain("about 0 edges");
-    expect(h.text).toContain("9 or more segments");
+    expect(h.text).toContain("about 0 step responses");
+    expect(h.text).toContain("Raise Segments between toggles to 9 or more");
   });
 
   test("no hint when the spacing rule already blocks the run", () => {

@@ -634,6 +634,8 @@ export function expectedProbeEdges(input: ProbeEdgeInput): number | null {
 
 export interface ProbeEdgeHint {
   tone: "ok" | "caution" | "warning";
+  /** Expected number of edges. */
+  edges: number;
   text: string;
 }
 
@@ -642,19 +644,18 @@ function edgeSuggestion(m: EdgeModel, input: ProbeEdgeInput): string {
     const travel = segmentTravelMm(input.pattern, input.kinematics) as number;
     const segments = Math.ceil((PROBE_FULL_YIELD_SPACING_S * m.spacing.speedMmS) / travel - ESTIMATE_TOLERANCE);
     const ms = (m.spacing.spacingS * 1000).toFixed(0);
-    return `toggles ${ms} ms apart rarely give clean edges: use ${segments} or more segments`;
-  }
-  const options: string[] = [];
-  if (m.perStroke > 0) {
-    const strokes = Math.ceil(PROBE_STEADY_EDGES / m.perStroke - ESTIMATE_TOLERANCE);
-    if (strokes <= PROBE_MAX_STROKES) {
-      options.push(`use ${strokes} strokes for about ${floorEdges(m.perStroke * strokes)}`);
-    }
+    return `Gain changes ${ms} ms apart rarely give clean step responses. Raise Segments between toggles to ${segments} or more.`;
   }
   const passS = (PROBE_STEADY_EDGES * m.spacing.spacingS) / (input.strokes * m.yieldFraction) + PROBE_DEAD_S;
   const lengthMm = Math.ceil((passS * m.spacing.speedMmS * m.ratio) / 10) * 10;
-  options.push(`lengthen the pattern to about ${lengthMm} mm`);
-  return options.join(", or ");
+  const lengthen = `lengthen the pattern to about ${lengthMm} mm`;
+  if (m.perStroke > 0) {
+    const strokes = Math.ceil(PROBE_STEADY_EDGES / m.perStroke - ESTIMATE_TOLERANCE);
+    if (strokes <= PROBE_MAX_STROKES) {
+      return `Use ${strokes} strokes (about ${floorEdges(m.perStroke * strokes)}), or ${lengthen}.`;
+    }
+  }
+  return `${lengthen[0].toUpperCase()}${lengthen.slice(1)}.`;
 }
 
 /** The fewest strokes whose expected edges reach the steady-estimate bar; null when none do. */
@@ -665,7 +666,7 @@ export function suggestedProbeStrokes(input: Omit<ProbeEdgeInput, "strokes">): n
   return strokes <= PROBE_MAX_STROKES ? strokes : null;
 }
 
-/** The edge estimate as a note for the probe parameters; null when there is none to give. */
+/** The expected step responses as a note for the probe parameters; null when there is none to give. */
 export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
   const m = edgeModel(input);
   if (m === null || !m.spacing.ok) return null;
@@ -673,23 +674,28 @@ export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
   if (n >= PROBE_STEADY_EDGES) {
     return {
       tone: "ok",
+      edges: n,
       text:
-        `Expected about ${n} edges (the run needs at least ${PROBE_MIN_EDGES}; ` +
-        `${PROBE_STEADY_EDGES} or more gives a steadier damping estimate)`,
+        `This setup should record about ${n} step responses. The test needs at least ${PROBE_MIN_EDGES}; ` +
+        `${PROBE_STEADY_EDGES} or more gives a steadier damping result.`,
     };
   }
   const suggestion = edgeSuggestion(m, input);
   if (n >= PROBE_MIN_EDGES) {
     return {
       tone: "caution",
+      edges: n,
       text:
-        `Expected about ${n} edges: enough to pass (${PROBE_MIN_EDGES}) but a steadier estimate needs ` +
-        `${PROBE_STEADY_EDGES} or more: add strokes or lengthen the pattern (${suggestion})`,
+        `This setup should record about ${n} step responses. That is enough to run, but ` +
+        `${PROBE_STEADY_EDGES} or more gives a steadier damping result. ${suggestion}`,
     };
   }
   return {
     tone: "warning",
-    text: `Expected about ${n} edges: the run will likely be not comparable (needs ${PROBE_MIN_EDGES}); ${suggestion}`,
+    edges: n,
+    text:
+      `This setup should record only about ${n} step responses, and the test needs ${PROBE_MIN_EDGES}. ` +
+      `Its result probably can't be compared with other runs. ${suggestion}`,
   };
 }
 
