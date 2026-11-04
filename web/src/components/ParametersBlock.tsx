@@ -1,3 +1,4 @@
+import { Input } from "@/components/ui/input";
 import { NumberField } from "@/components/ui";
 import type { RunType, Setup } from "@/tune";
 
@@ -28,13 +29,13 @@ export function ParametersBlock({
       <div className="flex flex-wrap gap-3">
         <label className="flex flex-col text-xs text-muted-foreground">
           Speeds (mm/s)
-          <input
+          <Input
             type="text"
             aria-label="Speeds (mm/s)"
             value={speedsText}
             disabled={disabled}
             onChange={(e) => onSpeedsText(e.target.value)}
-            className="w-48 rounded border bg-background px-1.5 py-0.5 font-mono text-sm text-foreground"
+            className="w-48 font-mono text-foreground"
           />
         </label>
         {field("Strokes per speed", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}

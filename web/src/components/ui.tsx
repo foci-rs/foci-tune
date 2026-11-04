@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 export function Card({
@@ -100,7 +101,7 @@ export function NumberField({
     if (!focused.current) setText(String(value));
   }, [value]);
   return (
-    <input
+    <Input
       type="number"
       aria-label={label}
       step={step}
@@ -116,10 +117,7 @@ export function NumberField({
         const v = Number(e.target.value);
         if (e.target.value.trim() !== "" && Number.isFinite(v)) onValue(v);
       }}
-      className={cn(
-        "w-24 rounded border bg-background px-1.5 py-0.5 font-mono text-sm text-foreground disabled:opacity-50",
-        className,
-      )}
+      className={cn("w-24 font-mono", className)}
     />
   );
 }
