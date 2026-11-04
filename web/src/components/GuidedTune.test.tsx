@@ -969,3 +969,83 @@ test("a tune in progress has no New tune button", async () => {
   await screen.findByRole("button", { name: "More ways to choose" });
   expect(screen.queryByRole("button", { name: "New tune" })).toBeNull();
 });
+
+const CONFIG = "[foci stepper_x]\npid_velocity_p: 1000\npid_velocity_i: 50\npid_position_p: 800\n";
+
+function finishedTune() {
+  current = detail("Done");
+  const first = current.steps[0];
+  current.steps = (["VelocityP", "VelocityICornerHz", "PositionP"] as const).map((axis, i) => ({
+    ...structuredClone(first),
+    axis,
+    chosen: [1000, 50, 900][i],
+    chosen_shown: [1000, (50 * 50000) / (2 * Math.PI * 65536), 900][i],
+    pwm_hz: 50000,
+  }));
+  current.config_block = CONFIG;
+}
+
+const resultStep = async () => {
+  render(<GuidedTune printer={printer} initialTune="t1" />);
+  return screen.findByRole("region", { name: "Result" });
+};
+
+test("the finished Result keeps the checklist and adds a before and after table", async () => {
+  finishedTune();
+  listed = [{ id: "t1", state: "Done" }];
+  const card = await resultStep();
+  expect(
+    within(within(card).getByRole("list", { name: "Gains chosen" }))
+      .getAllByRole("listitem")
+      .map((li) => li.dataset.done),
+  ).toEqual(["true", "true", "true"]);
+  const table = within(card).getByRole("table", { name: "Before and after" });
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((c) => c.textContent),
+  ).toEqual(["Gain", "Before", "After", "Change"]);
+  const rows = within(table)
+    .getAllByRole("row")
+    .slice(1)
+    .map((r) =>
+      within(r)
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    );
+  expect(rows).toEqual([
+    ["Velocity P", "1000", "1000", "unchanged"],
+    ["Velocity I", "6.1 Hz", "6.1 Hz", "unchanged"],
+    ["Position P", "800", "900", "+13%"],
+  ]);
+});
+
+test("the config block sits in its own card with how to use it and a Copy button", async () => {
+  finishedTune();
+  listed = [{ id: "t1", state: "Done" }];
+  const writeText = vi.fn(async () => undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  await resultStep();
+  const card = screen.getByRole("region", { name: "Printer config" });
+  expect(
+    within(card).getByText(
+      "The stepper is using these gains now. To keep them after a restart, replace the values in the [foci stepper_x] section of your printer config with this block.",
+    ),
+  ).toBeInTheDocument();
+  expect(card).toHaveTextContent("pid_velocity_p: 1000");
+  fireEvent.click(within(card).getByRole("button", { name: "Copy" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(CONFIG));
+  expect(await within(card).findByRole("button", { name: "Copied" })).toBeInTheDocument();
+});
+
+test("while the result is not ready the checklist still shows in the Result card", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(
+    within(await screen.findByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Result/ }),
+  );
+  expect(
+    within(screen.getByRole("region", { name: "Result" })).getByRole("list", { name: "Gains chosen" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Printer config" })).toBeNull();
+});

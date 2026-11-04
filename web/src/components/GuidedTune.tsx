@@ -61,6 +61,7 @@ import { ChooseGain } from "./ChooseGain";
 import { NextStepCard } from "./NextStepCard";
 import { PausePanel } from "./PausePanel";
 import { ResultPlaceholder } from "./ResultPlaceholder";
+import { ResultView } from "./ResultView";
 import { Steps } from "./Steps";
 import { SweepResultsTable } from "./SweepResultsTable";
 import { TuneRunCard } from "./TuneRunCard";
@@ -298,9 +299,7 @@ function TuneView({
 
       {shown === "result" &&
         (detail.config_block !== null ? (
-          <Card label="Config block">
-            <pre className="overflow-x-auto font-mono text-xs">{detail.config_block}</pre>
-          </Card>
+          <ResultView tune={detail} block={detail.config_block} />
         ) : (
           <ResultPlaceholder items={gainChecklist(detail)} />
         ))}
