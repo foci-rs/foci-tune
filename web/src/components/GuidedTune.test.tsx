@@ -175,27 +175,14 @@ test("an announced step shows its settings locked and one sentence, and only Run
   const run = await screen.findByRole("button", { name: "Run" });
   expect(screen.getByRole("spinbutton", { name: "Seed" })).toBeDisabled();
   expect(screen.getByRole("combobox", { name: "Lowest step" })).toBeDisabled();
-  const cost = within(screen.getByRole("list", { name: "Cost of the step" })).getAllByRole("listitem");
-  expect(cost[0]).toHaveTextContent(/^Runs: \d+$/);
-  expect(cost[1]).toHaveTextContent("Estimated duration: not known yet");
+  expect(screen.getByText("Runs:").parentElement).toHaveTextContent(/^Runs: \d+$/);
+  expect(screen.queryByText(/duration/i)).toBeNull();
   expect(screen.queryByText(/machine will move/i)).toBeNull();
   expect(screen.queryByText("Announcement")).toBeNull();
   expect(screen.queryByRole("table", { name: /results/ })).toBeNull();
   expect(posts).toEqual([]);
   fireEvent.click(run);
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps/confirm"]));
-});
-
-test("the duration estimate uses the run times of the tune's own earlier steps", async () => {
-  current = detail("Announced");
-  const finished = structuredClone(current.steps[0]);
-  finished.rungs[0].run_times = [{ id: "r1", started_unix_ms: 0, ended_unix_ms: 30000 }];
-  current.steps = [finished, current.steps[0]];
-  render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Run" });
-  expect(within(screen.getByRole("list", { name: "Cost of the step" })).getAllByRole("listitem")[1]).toHaveTextContent(
-    /\d+ (minutes?|seconds)$/,
-  );
 });
 
 test("Adjust discards the prepared step and opens the form again with the same settings", async () => {
@@ -668,7 +655,5 @@ test("the step card is titled by its sweep and says in a sentence what it tries"
 test("before Next the card already says how many runs the step makes", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
-  const cost = within(await screen.findByRole("list", { name: "Cost of the step" })).getAllByRole("listitem");
-  expect(cost[0]).toHaveTextContent("Runs: 88");
-  expect(cost[1]).toHaveTextContent("Estimated duration: not known yet");
+  expect((await screen.findByText("Runs:")).parentElement).toHaveTextContent("Runs: 88");
 });

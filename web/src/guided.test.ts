@@ -16,7 +16,6 @@ import {
   stepSentence,
   axisTitle,
   formFromStep,
-  durationWords,
   plannedRuns,
   previewLadder,
   defaultProbeSpeed,
@@ -972,18 +971,6 @@ describe("plannedRuns", () => {
   });
   test("matches the service's own count for the default ladder", () => {
     expect(plannedRuns(preview([-3, 3]), 3, 3)).toBe(110);
-  });
-});
-
-describe("durationWords", () => {
-  test.each([
-    [null, "not known yet"],
-    [20, "20 seconds"],
-    [60, "1 minute"],
-    [1020, "17 minutes"],
-    [1049, "17 minutes"],
-  ])("%j reads %s", (seconds, text) => {
-    expect(durationWords(seconds)).toBe(text);
   });
 });
 

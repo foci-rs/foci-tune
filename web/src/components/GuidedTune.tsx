@@ -32,7 +32,6 @@ import {
   currentGuidedStep,
   currentStep,
   driftCheckRunning,
-  expectedDurationSeconds,
   failureText,
   formFromStep,
   GUIDED_STEPS,
@@ -168,37 +167,11 @@ function useTune(id: TuneId) {
   return { detail, error, refresh };
 }
 
-function useEarlierTunes(id: TuneId, enabled: boolean): Tune[] {
-  const [earlier, setEarlier] = useState<Tune[]>([]);
-  useEffect(() => {
-    if (!enabled) return;
-    let live = true;
-    getTunes()
-      .then((list) =>
-        Promise.all(
-          list
-            .filter((s) => s.id !== id)
-            .sort((a, b) => b.created - a.created)
-            .slice(0, 5)
-            .map((s) => getTune(s.id)),
-        ),
-      )
-      .then((tunes) => live && setEarlier(tunes))
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [id, enabled]);
-  return earlier;
-}
-
 function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; offline: boolean }) {
   const { detail, error, refresh } = useTune(id);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const announced = detail?.state === "Announced";
-  const preparingNow = detail !== null && detail.state === "Ready";
-  const earlier = useEarlierTunes(id, announced || preparingNow);
   const [prepare, setPrepare] = useState<PrepareForm>(DEFAULT_PREPARE);
   const [picked, setPicked] = useState<GuidedStepId | null>(null);
   const followed = detail === null ? null : currentGuidedStep(detail);
@@ -242,10 +215,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const prepareBlocked = prepared?.problem ?? null;
   const plannedCount =
     prepared?.preview == null ? null : plannedRuns(prepared.preview, prepare.repeats, detail.setup.speeds_mm_s.length);
-  const runs =
-    plannedCount === null
-      ? undefined
-      : { count: plannedCount, seconds: expectedDurationSeconds([detail, ...earlier], plannedCount) };
+  const runs = plannedCount ?? undefined;
   const setupEditable = actions.prepare && detail.steps.length === 0;
   const announcedStep = starting && last !== null ? detail.steps[last] : null;
   const abandon = actions.abandon ? (
@@ -298,7 +268,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           prepareAxis={actions.prepare ? next : null}
           actions={actions}
           busy={frozen}
-          earlier={earlier}
           engine={printer.engine}
           announced={announced}
           onChoose={(choice) => run("choose", () => postTuneChoice(id, choice))}
@@ -387,7 +356,6 @@ function AxisStep({
   prepareAxis,
   actions,
   busy,
-  earlier,
   engine,
   announced,
   onChoose,
@@ -406,7 +374,6 @@ function AxisStep({
   prepareAxis: ReturnType<typeof nextAxis>;
   actions: ReturnType<typeof availableActions>;
   busy: boolean;
-  earlier: Tune[];
   engine: EngineView;
   announced: boolean;
   onChoose: (choice: TuneChoiceBody) => void;
@@ -414,7 +381,7 @@ function AxisStep({
   onDecide: (d: TuneDecision) => void;
   prepare: PrepareForm;
   prepared: PrepareState | null;
-  runs: { count: number; seconds: number | null } | undefined;
+  runs: number | undefined;
   live: number | null;
   onPrepare: (form: PrepareForm) => void;
 }) {
@@ -445,9 +412,7 @@ function AxisStep({
           {actions.decide && i === last && <PausePanel tune={tune} step={i} busy={busy} onDecide={onDecide} />}
         </div>
       ))}
-      {announcing && last !== null && (
-        <AnnouncedStep tune={tune} step={tune.steps[last]} earlier={earlier} live={live} />
-      )}
+      {announcing && last !== null && <AnnouncedStep tune={tune} step={tune.steps[last]} live={live} />}
       {preparing && prepared !== null && (
         <NextStepCard
           axis={axis}
@@ -467,18 +432,15 @@ function AxisStep({
 function AnnouncedStep({
   tune,
   step,
-  earlier,
   live,
 }: {
   tune: TuneDetail;
   step: TuneDetail["steps"][number];
-  earlier: Tune[];
   live: number | null;
 }) {
   const form = formFromStep(step, live);
   const control = { velocity_p: 0, velocity_i: 0, position_p: 0, pwm_hz: step.pwm_hz };
   const announcement = announcementOf(tune);
-  const seconds = announcement === null ? null : expectedDurationSeconds([tune, ...earlier], announcement.runCount);
   return (
     <NextStepCard
       axis={step.axis}
@@ -487,7 +449,7 @@ function AnnouncedStep({
       state={prepareState(step.axis, form, control)}
       live={live}
       onForm={() => undefined}
-      runs={announcement === null ? undefined : { count: announcement.runCount, seconds }}
+      runs={announcement?.runCount}
     />
   );
 }

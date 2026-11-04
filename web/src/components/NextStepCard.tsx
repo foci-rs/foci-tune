@@ -6,7 +6,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   axisLabel,
-  durationWords,
   STEP_DIVISIONS,
   stepPercent,
   type LadderPreview,
@@ -131,8 +130,8 @@ export function NextStepCard({
   state: PrepareState;
   /** The stepper's live value on this axis, to go back to; null when it reports none. */
   live: number | null;
-  /** How many runs the step makes and how long they take; shown under the ladder. */
-  runs?: { count: number; seconds: number | null };
+  /** How many runs the step makes; shown under the ladder. */
+  runs?: number;
   onForm: (form: PrepareForm) => void;
 }) {
   const corner = axis === "VelocityICornerHz";
@@ -190,14 +189,9 @@ export function NextStepCard({
       </div>
       {state.preview !== null && <LadderTable preview={state.preview} corner={corner} divisions={form.divisions} />}
       {state.preview !== null && runs !== undefined && (
-        <ul aria-label="Cost of the step" className="mt-3 space-y-0.5 text-sm">
-          <li>
-            <span className="text-muted-foreground">Runs:</span> {runs.count}
-          </li>
-          <li>
-            <span className="text-muted-foreground">Estimated duration:</span> {durationWords(runs.seconds)}
-          </li>
-        </ul>
+        <p className="mt-3 text-sm">
+          <span className="text-muted-foreground">Runs:</span> {runs}
+        </p>
       )}
     </Card>
   );

@@ -699,14 +699,6 @@ export function plannedRuns(preview: LadderPreview, repeats: number, speedCount:
   return preview.gains.length * repeats * perRepeat + (seedInLadder ? perRepeat : 0);
 }
 
-/** A duration for the operator: whole minutes, or seconds for a short one, or that it is not known. */
-export function durationWords(seconds: number | null): string {
-  if (seconds === null) return "not known yet";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 1) return `${Math.round(seconds)} seconds`;
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
-}
-
 /** The next-step form a prepared step was made from, so it can be adjusted from where it was. */
 export function formFromStep(step: TuneStep, live: number | null): PrepareForm {
   const corner = step.axis === "VelocityICornerHz";

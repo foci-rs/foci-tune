@@ -154,24 +154,13 @@ test("the change from the seed follows the step size", () => {
   expect(rowsOf()[1]).toEqual(["Gain", "707", "794", "891", "1000", "1122", "1260", "1414"]);
 });
 
-test("under the ladder the card says how many runs and how long, as a pair of lines", () => {
-  render(card(DEFAULT_PREPARE, { runs: { count: 110, seconds: 1020 } }));
-  const list = screen.getByRole("list", { name: "Cost of the step" });
-  expect(
-    within(list)
-      .getAllByRole("listitem")
-      .map((li) => li.textContent),
-  ).toEqual(["Runs: 110", "Estimated duration: 17 minutes"]);
-});
-
-test("an unknown duration says so rather than leaving the line out", () => {
-  render(card(DEFAULT_PREPARE, { runs: { count: 110, seconds: null } }));
-  expect(within(screen.getByRole("list", { name: "Cost of the step" })).getAllByRole("listitem")[1]).toHaveTextContent(
-    "Estimated duration: not known yet",
-  );
+test("under the ladder the card says how many runs the step makes, and nothing about duration", () => {
+  render(card(DEFAULT_PREPARE, { runs: 110 }));
+  expect(screen.getByText("Runs:").parentElement).toHaveTextContent("Runs: 110");
+  expect(screen.queryByText(/duration/i)).toBeNull();
 });
 
 test("without a ladder there are no runs to count", () => {
-  render(card({ ...DEFAULT_PREPARE, seed: 0 }, { runs: { count: 0, seconds: null } }));
-  expect(screen.queryByRole("list", { name: "Cost of the step" })).toBeNull();
+  render(card({ ...DEFAULT_PREPARE, seed: 0 }, { runs: 0 }));
+  expect(screen.queryByText("Runs:")).toBeNull();
 });
