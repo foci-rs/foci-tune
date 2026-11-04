@@ -169,13 +169,13 @@ export function NextStepCard({
         <div className="flex flex-col text-xs text-muted-foreground">
           Step size
           <Select value={String(form.divisions)} disabled={busy} onValueChange={(v) => set({ divisions: Number(v) })}>
-            <SelectTrigger aria-label="Step size" className="w-24 font-mono text-foreground">
+            <SelectTrigger aria-label="Step size" className="w-32 font-mono text-foreground">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {STEP_DIVISIONS.map((d) => (
                 <SelectItem key={d} value={String(d)} className="font-mono">
-                  {stepPercent(d)}%
+                  {stepPercent(d)}% (1/{d})
                 </SelectItem>
               ))}
             </SelectContent>

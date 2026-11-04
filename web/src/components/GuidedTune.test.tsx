@@ -624,7 +624,7 @@ test("a chosen step size is sent with the step", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
   fireEvent.click(await screen.findByRole("combobox", { name: "Step size" }));
-  fireEvent.click(screen.getByRole("option", { name: "12%" }));
+  fireEvent.click(screen.getByRole("option", { name: "12% (1/6)" }));
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() => expect(bodies[0]).toMatchObject({ octave_divisions: 6 }));
 });

@@ -135,10 +135,15 @@ test("without a ladder there is no Sweep title", () => {
 test("the step size is a dropdown of the offered sizes and reports the choice", () => {
   const onForm = vi.fn();
   render(card(DEFAULT_PREPARE, { onForm }));
-  expect(screen.getByRole("combobox", { name: "Step size" })).toHaveTextContent("26%");
+  expect(screen.getByRole("combobox", { name: "Step size" })).toHaveTextContent("26% (1/3)");
   fireEvent.click(screen.getByRole("combobox", { name: "Step size" }));
-  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["12%", "19%", "26%", "41%"]);
-  fireEvent.click(screen.getByRole("option", { name: "12%" }));
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+    "12% (1/6)",
+    "19% (1/4)",
+    "26% (1/3)",
+    "41% (1/2)",
+  ]);
+  fireEvent.click(screen.getByRole("option", { name: "12% (1/6)" }));
   expect(onForm).toHaveBeenCalledWith({ ...DEFAULT_PREPARE, divisions: 6 });
 });
 
