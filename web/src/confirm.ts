@@ -30,12 +30,12 @@ export function useConfirmClick(
   const state = useRef<ConfirmState>({ armedAt: null });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clearTimer = () => {
+  const clearTimer = useCallback(() => {
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
-  };
+  }, []);
 
-  useEffect(() => clearTimer, []);
+  useEffect(() => clearTimer, [clearTimer]);
 
   const click = useCallback(() => {
     const result = press(state.current, Date.now(), windowMs);
@@ -51,7 +51,7 @@ export function useConfirmClick(
       state.current = { armedAt: null };
       setArmed(false);
     }, windowMs + 1);
-  }, [onConfirm, windowMs]);
+  }, [clearTimer, onConfirm, windowMs]);
 
   return { armed, click };
 }
