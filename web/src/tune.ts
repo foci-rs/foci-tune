@@ -583,6 +583,8 @@ export interface ToggleSpacing {
   /** Stepper speed after the `max_velocity` clamp. */
   speedMmS: number;
   minSegments: number;
+  /** The fewest segments at which the gain changes are far enough apart to give clean step responses. */
+  cleanSegments: number;
   ok: boolean;
 }
 
@@ -606,6 +608,10 @@ export function probeToggleSpacing(
     spacingS,
     speedMmS: speed,
     minSegments: Math.max(1, Math.ceil(needed)),
+    cleanSegments: Math.max(
+      1,
+      Math.ceil((Math.max(PROBE_FULL_YIELD_SPACING_S, MIN_TOGGLE_SPACING_S) * speed) / travel - ESTIMATE_TOLERANCE),
+    ),
     ok: spacingS + SPACING_TOLERANCE_S >= MIN_TOGGLE_SPACING_S,
   };
 }
@@ -614,8 +620,9 @@ export function probeToggleSpacing(
 export function toggleSpacingProblem(s: ToggleSpacing): string | null {
   if (s.ok) return null;
   return (
-    `At ${s.speedMmS.toFixed(0)} mm/s toggles are ${(s.spacingS * 1000).toFixed(0)} ms apart; the fit needs ` +
-    `at least ${(MIN_TOGGLE_SPACING_S * 1000).toFixed(0)} ms: use ${s.minSegments} or more segments`
+    `At ${s.speedMmS.toFixed(0)} mm/s gain changes are ${(s.spacingS * 1000).toFixed(0)} ms apart; the fit needs ` +
+    `at least ${(MIN_TOGGLE_SPACING_S * 1000).toFixed(0)} ms and about ${(PROBE_FULL_YIELD_SPACING_S * 1000).toFixed(0)} ms ` +
+    `gives clean step responses: use ${s.cleanSegments} or more moves between gain changes`
   );
 }
 

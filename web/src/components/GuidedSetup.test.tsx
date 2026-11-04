@@ -100,3 +100,11 @@ test("the step-response warning belongs to the probe settings, not the path card
   expect(hint.closest("section")).toHaveAccessibleName("Tune setup");
   expect(within(screen.getByRole("region", { name: "Path" })).queryByText(/step responses/i)).toBeNull();
 });
+
+test("the gain-change spacing warning sits with the probe settings too", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Speed (mm/s)" }), { target: { value: "400" } });
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Moves between gain changes" }), { target: { value: "3" } });
+  const note = screen.getByText(/apart; the fit needs/i);
+  expect(note.closest("section")).toHaveAccessibleName("Tune setup");
+});

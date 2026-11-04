@@ -23,14 +23,14 @@ import {
 import { ParametersBlock } from "@/components/ParametersBlock";
 import { EnsemblePlot } from "@/components/EnsemblePlot";
 import { FiltersCard, gainProblems, GainsCard, ladderAxisLabel } from "@/components/GainsBlock";
-import { EdgeHintLine } from "@/components/EdgeHint";
+import { ProbeNotes } from "@/components/EdgeHint";
 import { RunDetails } from "@/components/RunDetails";
 import { RunQueueCard } from "@/components/RunQueueCard";
 import { SessionCard } from "@/components/SessionCard";
 import { Steps } from "@/components/Steps";
 import { sweepLadderEntries, sweepNotesFor } from "@/sweep";
 import { TestCard } from "@/components/TestCard";
-import { LadderCard, PatternCard, RunBar, type PatternNote } from "@/components/WorkbenchCards";
+import { LadderCard, PatternCard, RunBar } from "@/components/WorkbenchCards";
 import { GuidedTune } from "@/components/GuidedTune";
 import { LadderPlot } from "@/components/LadderPlot";
 import { LivePanels } from "@/components/LivePanels";
@@ -439,10 +439,6 @@ function Workbench({ printer }: { printer: PrinterView }) {
         })
       : null;
 
-  const patternNotes: PatternNote[] = [
-    ...(spacingProblem === null ? [] : [{ tone: "caution" as const, text: spacingProblem }]),
-  ];
-
   const runBody = (): RunBody | null =>
     setup === null || gains === null || filters === null
       ? null
@@ -571,7 +567,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
                   onSetup={updateSetup}
                 />
               )}
-              {edgeHint !== null && <EdgeHintLine hint={edgeHint} />}
+              <ProbeNotes spacingProblem={spacingProblem} hint={edgeHint} />
             </TestCard>
             <PatternCard
               limits={limits}
@@ -581,7 +577,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
               isolation={isolation.ok ? null : isolation}
               refusal={stepper?.proposal.refusal ?? null}
               error={patternError}
-              notes={patternNotes}
+              notes={[]}
               disabled={busy}
               onPattern={setPattern}
               onMode={chooseMode}

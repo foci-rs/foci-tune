@@ -550,6 +550,14 @@ describe("probe toggle spacing", () => {
     expect(at(400, 3, alongX, "cartesian")!.spacingS * 1000).toBeCloseTo(37.5, 6);
   });
 
+  test("the advised count is one the step-response estimate accepts", () => {
+    const advised = at(400)!.cleanSegments;
+    expect(advised).toBe(6);
+    const spacing = at(400, advised)!;
+    expect(spacing.ok).toBe(true);
+    expect(spacing.spacingS).toBeGreaterThanOrEqual(0.15 - 1e-9);
+  });
+
   test("exactly the minimum passes, just below it does not", () => {
     expect(at(400, 4)!.ok).toBe(true);
     expect(at(401, 4)!.ok).toBe(false);
@@ -567,7 +575,8 @@ describe("probe toggle spacing", () => {
     expect(problem).toContain("400 mm/s");
     expect(problem).toContain("75 ms");
     expect(problem).toContain("100 ms");
-    expect(problem).toContain("4 or more segments");
+    expect(problem).toContain("150 ms");
+    expect(problem).toContain("6 or more moves between gain changes");
     expect(toggleSpacingProblem(at(195)!)).toBeNull();
   });
 });

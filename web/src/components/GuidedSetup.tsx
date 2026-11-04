@@ -32,10 +32,10 @@ import {
   type PatternMode,
   type Setup,
 } from "@/tune";
-import { EdgeHintLine } from "./EdgeHint";
+import { ProbeNotes } from "./EdgeHint";
 import { ParametersBlock } from "./ParametersBlock";
 import { Card, NumberField } from "./ui";
-import { ActionBar, PatternCard, type PatternNote } from "./WorkbenchCards";
+import { ActionBar, PatternCard } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
 
@@ -169,10 +169,6 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         })
       : null;
 
-  const patternNotes: PatternNote[] = [
-    ...(spacingProblem === null ? [] : [{ tone: "caution" as const, text: spacingProblem }]),
-  ];
-
   const blocked: string[] = [];
   if (stepper?.unusable) blocked.push(stepper.unusable);
   const precondition = printer.preconditions.find((p) => p.stepper === stepperName);
@@ -281,7 +277,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               {derived.warning}
             </p>
           )}
-          {edgeHint !== null && <EdgeHintLine hint={edgeHint} />}
+          <ProbeNotes spacingProblem={spacingProblem} hint={edgeHint} />
           <p className="text-sm font-bold text-muted-foreground">Standstill</p>
           {standstillSetup !== null && (
             <ParametersBlock
@@ -340,7 +336,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         isolation={isolation === null || isolation.ok ? null : isolation}
         refusal={stepper?.proposal.refusal ?? null}
         error={patternError}
-        notes={patternNotes}
+        notes={[]}
         disabled={busy}
         onPattern={setPattern}
         onMode={chooseMode}
