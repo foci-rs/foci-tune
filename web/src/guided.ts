@@ -75,6 +75,8 @@ export interface RungView {
   gap: number | null;
   tolerance: number | null;
   best: boolean;
+  /** The longer explanation of the status, shown on hover; null when the status says it all. */
+  detail: string | null;
 }
 
 const UNSCORED_TEXT: Record<UnscoredReason, string> = {
@@ -112,7 +114,6 @@ export interface StepSummary {
   halt: string | null;
   pause: string | null;
   failed: string | null;
-  comparison: string | null;
   driftLines: string[];
 }
 
@@ -166,42 +167,8 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
     halt: halt === null ? null : `The sweep stopped at gain ${gainAt(s, halt[0])}: ${haltText(halt[1])}.`,
     pause: pause === null ? null : `Paused at gain ${gainAt(s, pause[0])}: ${pauseText(pause[1])}.`,
     failed: s.failed,
-    comparison:
-      assessment === null || s.recommendation === null || s.recommendation === undefined
-        ? null
-        : comparisonText(assessment, s.repeats, (i) => gainAt(s, i)),
     driftLines: driftLines(s.drift),
   };
-}
-
-const um = (value: number): string => `${value.toFixed(1)} μm`;
-
-function gainList(gains: string[]): string {
-  return gains.length < 2 ? (gains[0] ?? "") : `${gains.slice(0, -1).join(", ")} and ${gains[gains.length - 1]}`;
-}
-
-/** How the recommended gain was chosen over its closest competitor; null without a best gain. */
-export function comparisonText(
-  a: LadderAssessment,
-  repeats: number,
-  gain: (rung: number) => string = (i) => String(i + 1),
-): string | null {
-  if (a.best === null) return null;
-  if (a.tie.length > 1) {
-    const widest = a.tie
-      .filter((i) => i !== a.best)
-      .map((i) => a.verdicts[i])
-      .reduce((max, v) => ((v.gap ?? 0) > (max.gap ?? 0) ? v : max));
-    const tolerance = widest.tolerance === null ? "" : `, within ${um(widest.tolerance)}`;
-    return `Gains ${gainList(a.tie.map(gain))} are too close to tell apart (widest gap ${um(widest.gap ?? 0)}${tolerance}), so the lowest of them is recommended.`;
-  }
-  if (a.runner_up === null) return "Only one gain was scored, so there was nothing to compare it with.";
-  const runnerUp = a.verdicts[a.runner_up];
-  const name = `The next best gain, ${gain(a.runner_up)}, is ${um(runnerUp.gap ?? 0)} behind`;
-  if (repeats < 2) return `${name}. With one repeat the tool cannot tell whether a small difference is real.`;
-  const tolerance =
-    runnerUp.tolerance === null ? "" : `, more than the ${um(runnerUp.tolerance)} the repeats varied by`;
-  return `${name}${tolerance}.`;
 }
 
 /** One line per speed whose re-run drifted or could not be assessed. */
@@ -272,12 +239,16 @@ export function rungView(tune: Tune, step: number): RungView[] {
     const repeatsDone = rung.repeat_values.length;
 
     let text: string;
-    if (rung.skipped !== null) text = `Skipped: ${rung.skipped}`;
-    else if (rung.waived !== null) text = `Continued: ${shortPause(rung.waived.reason)}`;
+    let detail: string | null = null;
+    if (rung.skipped !== null) {
+      const skip = skipText(rung.skipped);
+      text = `Skipped: ${skip.text}`;
+      detail = skip.detail;
+    } else if (rung.waived !== null) text = `Continued: ${shortPause(rung.waived.reason)}`;
     else if (verdict?.inadmissible != null) text = `Rejected: ${INADMISSIBLE_TEXT[verdict.inadmissible]}`;
     else if (verdict?.unscored != null) text = `Not scored: ${UNSCORED_TEXT[verdict.unscored]}`;
     else if (verdict?.marginal) text = "Low damping";
-    else if (verdict?.score != null) text = "Accepted";
+    else if (verdict?.score != null) text = "Scored";
     else if (assessment !== null && !flagged && (repeatsDone >= s.repeats || pause !== null || halt !== null)) {
       text = notAssessedText(index, pause, halt);
     } else if (repeatsDone >= s.repeats) text = "Measured, waiting for the verdict";
@@ -292,8 +263,11 @@ export function rungView(tune: Tune, step: number): RungView[] {
       recommended = "interpolated";
     }
 
+    if (text === "Scored" && recommended === "measured") text = "Recommended";
+
     return {
       index,
+      detail,
       shown: rung.shown,
       raw: rung.raw,
       verdict: text,
@@ -752,4 +726,16 @@ export function standstillCheckNote(tune: Tune, step: number): string | null {
   return off
     ? "The standstill noise check is off for this step, so a gain is not rejected for noise at standstill."
     : null;
+}
+
+/** A skipped gain's reason in a few words, with the service's numbers as the detail. */
+export function skipText(reason: string): { text: string; detail: string | null } {
+  const body = reason.replace(/^not run: /, "");
+  const low = /^median damping ([\d.]+) is below the floor ([\d.]+)$/.exec(body);
+  if (low !== null) {
+    return { text: "damping too low", detail: `Median damping ${low[1]} was below the stop limit of ${low[2]}.` };
+  }
+  if (body === "damping unassessable") return { text: "damping not measured", detail: null };
+  if (body === "standstill baseline unassessable") return { text: "noise not measured", detail: null };
+  return { text: "step stopped", detail: body };
 }

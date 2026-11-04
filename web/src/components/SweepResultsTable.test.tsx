@@ -8,7 +8,7 @@ const row = (index: number, over: Partial<RungView> = {}): RungView => ({
   index,
   shown: 841 + index,
   raw: 841 + index,
-  verdict: "Accepted",
+  verdict: "Scored",
   skipped: null,
   marginal: false,
   inadmissible: false,
@@ -23,6 +23,7 @@ const row = (index: number, over: Partial<RungView> = {}): RungView => ({
   gap: null,
   tolerance: null,
   best: false,
+  detail: null,
   ...over,
 });
 
@@ -109,4 +110,26 @@ test("each row is numbered from 1, in the order the gains are run", () => {
     .getAllByRole("row")
     .slice(1);
   expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["1", "2", "3"]);
+});
+
+test("a status with detail explains itself on hover", async () => {
+  render(
+    table({
+      rows: [
+        row(0, {
+          verdict: "Skipped: damping too low",
+          detail: "Median damping 0.011 was below the stop limit of 0.02.",
+        }),
+      ],
+    }),
+  );
+  fireEvent.focus(screen.getByText("Skipped: damping too low"));
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(
+    "Median damping 0.011 was below the stop limit of 0.02.",
+  );
+});
+
+test("the recommended gain is not followed by a technical suffix", () => {
+  render(table({ rows: [row(0, { verdict: "Recommended", recommended: "measured" })] }));
+  expect(screen.queryByText("(measured)")).toBeNull();
 });

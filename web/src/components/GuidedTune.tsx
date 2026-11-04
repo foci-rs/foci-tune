@@ -603,15 +603,6 @@ function StepCard({
           <GuidedCurve rows={rows} speeds={tune.setup.speeds_mm_s} axisLabel={label} recommended={mark} />
         </div>
       )}
-      {rec !== null && (
-        <p className="mt-2 text-sm">
-          {rec.kind === "measured" && `Recommended: rung ${rec.rung + 1}, measured`}
-          {rec.kind === "interpolated" &&
-            `Recommended: ${rec.shown.toFixed(2)}, interpolated between rungs ${rec.between[0] + 1} and ${rec.between[1] + 1}`}
-          {rec.kind === "none" && "No rung scored, so there is no recommendation"}
-        </p>
-      )}
-      {summary.comparison !== null && <p className="mt-1 text-sm">{summary.comparison}</p>}
       {summary.driftLines.map((line) => (
         <p key={line} className="mt-1 text-xs text-muted-foreground">
           {line}

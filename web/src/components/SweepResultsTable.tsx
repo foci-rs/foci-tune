@@ -62,8 +62,7 @@ export function SweepResultsTable({
               <td className="pr-4 text-muted-foreground">{r.index + 1}</td>
               <td className="pr-4">{corner ? `${r.shown.toFixed(1)} Hz` : r.raw}</td>
               <td className="pr-4 font-sans">
-                {r.verdict}
-                {r.recommended !== null && <span className="ml-2 text-xs">({r.recommended})</span>}
+                {r.detail === null ? r.verdict : <Explained tip={r.detail}>{r.verdict}</Explained>}
               </td>
               <td className="pr-4">
                 {fmt(r.score)}

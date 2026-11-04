@@ -13,6 +13,7 @@ import {
   liveSeed,
   prepareState,
   stepPercent,
+  skipText,
   fitReasonText,
   standstillCheckNote,
   sweepProgress,
@@ -27,7 +28,6 @@ import {
   recommendedGain,
   driftCheckRunning,
   rungView,
-  comparisonText,
   driftLines,
   gatesBody,
   stepSummary,
@@ -179,7 +179,7 @@ describe("rungView", () => {
       },
     });
     const rows = rungView(tune("Running", [s]), 0);
-    expect(rows[0].verdict).toBe("Accepted");
+    expect(rows[0].verdict).toBe("Scored");
     expect(rows[0].score).toBe(1);
     expect(rows[1].verdict).toBe("1 of 2 repeats");
     expect(rows[2].verdict).toBe("Pending");
@@ -227,7 +227,8 @@ describe("rungView", () => {
     const s = step({ rungs: [rung(0, { skipped: "run failed earlier" }), rung(1)] });
     const rows = rungView(tune("Running", [s]), 0);
     expect(rows[0].skipped).toBe("run failed earlier");
-    expect(rows[0].verdict).toMatch(/skipped.*run failed earlier/i);
+    expect(rows[0].verdict).toBe("Skipped: step stopped");
+    expect(rows[0].detail).toBe("run failed earlier");
   });
 
   test("shows repeat progress before the verdict exists", () => {
@@ -627,84 +628,6 @@ describe("comparison fields", () => {
     );
     expect(rows[2]).toMatchObject({ decidingSpeed: null, gap: null, tolerance: null, best: false });
   });
-
-  const gainOf = (i: number) => String([421, 530, 668, 841][i]);
-
-  test("the comparison line names the tie, its gap and tolerance, and the lower gain", () => {
-    const text = comparisonText(
-      ladder({
-        best: 1,
-        tie: [1, 2],
-        verdicts: [none, scored({ gap: 0 }), scored({ gap: 2.0, tolerance: 3.1 }), none],
-      }),
-      3,
-      gainOf,
-    );
-    expect(text).toBe(
-      "Gains 530 and 668 are too close to tell apart (widest gap 2.0 μm, within 3.1 μm), so the lowest of them is recommended.",
-    );
-  });
-
-  test("a three-rung tie reports the largest gap in the set with that rung's tolerance", () => {
-    const text = comparisonText(
-      ladder({
-        best: 1,
-        tie: [0, 1, 2],
-        verdicts: [
-          scored({ gap: 2.5, tolerance: 3.3 }),
-          scored({ gap: 0 }),
-          scored({ gap: 1.0, tolerance: 3.0 }),
-          none,
-        ],
-      }),
-      3,
-      gainOf,
-    );
-    expect(text).toMatch(/Gains 421, 530 and 668/);
-    expect(text).toMatch(/2\.5/);
-    expect(text).toMatch(/3\.3/);
-    expect(text).not.toMatch(/1\.0 μm/);
-    expect(text).not.toMatch(/3\.0 μm/);
-  });
-
-  test("the comparison line names the runner-up when there is no tie", () => {
-    const text = comparisonText(
-      ladder({
-        best: 1,
-        tie: [1],
-        runner_up: 2,
-        verdicts: [none, scored({ gap: 0 }), scored({ gap: 5.1, tolerance: 3.1 }), none],
-      }),
-      3,
-      gainOf,
-    );
-    expect(text).toBe("The next best gain, 668, is 5.1 μm behind, more than the 3.1 μm the repeats varied by.");
-  });
-
-  test("one repeat names the runner-up without a tolerance and says ties are undetectable", () => {
-    const text = comparisonText(
-      ladder({
-        best: 1,
-        tie: [1],
-        runner_up: 2,
-        verdicts: [none, scored({ gap: 0 }), scored({ gap: 0.1, tolerance: null }), none],
-      }),
-      1,
-      gainOf,
-    );
-    expect(text).toBe(
-      "The next best gain, 668, is 0.1 μm behind. With one repeat the tool cannot tell whether a small difference is real.",
-    );
-  });
-
-  test("a single eligible rung says nothing was compared", () => {
-    const text = comparisonText(ladder({ best: 0, runner_up: null, tie: [0] }), 3, gainOf);
-    expect(text).toBe("Only one gain was scored, so there was nothing to compare it with.");
-  });
-
-  test("no best rung gives no comparison line", () => {
-    expect(comparisonText(ladder({ best: null }), 3)).toBeNull();
-  });
 });
 
 describe("driftLines", () => {
@@ -1095,5 +1018,47 @@ describe("fitReasonText", () => {
   test("any other reason keeps its words but loses the long decimals", () => {
     expect(fitReasonText("residual 0.123456789 too high")).toBe("residual 0.123 too high");
     expect(fitReasonText("no probe record")).toBe("no probe record");
+  });
+});
+
+describe("skipText", () => {
+  test("a gain not run because damping was too low is short, with the numbers as the detail", () => {
+    expect(skipText("not run: median damping 0.011 is below the floor 0.02")).toEqual({
+      text: "damping too low",
+      detail: "Median damping 0.011 was below the stop limit of 0.02.",
+    });
+  });
+  test("damping or standstill noise that could not be measured", () => {
+    expect(skipText("not run: damping unassessable").text).toBe("damping not measured");
+    expect(skipText("not run: standstill baseline unassessable").text).toBe("noise not measured");
+  });
+  test("any other reason is a stopped step with the service's words as the detail", () => {
+    expect(skipText("not run: run refused: the printer is printing")).toEqual({
+      text: "step stopped",
+      detail: "run refused: the printer is printing",
+    });
+  });
+});
+
+describe("the status of a scored gain", () => {
+  test("is Scored, and the recommended measured gain reads Recommended", () => {
+    const t = tune("AwaitingChoice", [
+      step({
+        assessment: {
+          verdicts: [none, { ...none, score: 5 }, { ...none, score: 3 }, { ...none, score: 9 }],
+          medians: [medians([]), medians([4]), medians([3]), medians([9])],
+          halt: null,
+          best: 2,
+          runner_up: 1,
+          tie: [2],
+          spreads: [],
+        },
+        recommendation: { choice: { Measured: { rung: 2 } }, extend: null },
+      }),
+    ]);
+    const rows = rungView(t, 0);
+    expect(rows[1].verdict).toBe("Scored");
+    expect(rows[2].verdict).toBe("Recommended");
+    expect(rows[3].verdict).toBe("Scored");
   });
 });
