@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ApiRequestError,
+  getTune,
   postTune,
   putTuneSetup,
   type Pattern,
@@ -14,7 +15,7 @@ import { Button as UiButton } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InputGroup, InputGroupAddon, InputGroupText } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
-import { defaultProbeSpeed, gatesBody, type GatesForm } from "@/guided";
+import { defaultProbeSpeed, failureText, gatesBody, type GatesForm } from "@/guided";
 import {
   bedLimits,
   browserStorage,
@@ -235,7 +236,16 @@ export function GuidedSetup({
       tune === undefined
         ? postTune(body).then((t) => onCreated?.(t))
         : putTuneSetup(tune.id, body).then((t) => onSaved?.(t));
-    sent.catch((e: unknown) => setError(errorText(e))).finally(() => setBusy(false));
+    sent
+      .catch((e: unknown) =>
+        tune === undefined
+          ? setError(errorText(e))
+          : getTune(tune.id).then(
+              (fresh) => setError(failureText("setup", e, tune, fresh)),
+              () => setError(failureText("setup", e, tune, null)),
+            ),
+      )
+      .finally(() => setBusy(false));
   };
 
   const asSetup = (parameters: Setup["parameters"], type: Setup["type"]): Setup | null =>

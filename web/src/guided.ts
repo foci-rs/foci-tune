@@ -1,3 +1,4 @@
+import { ApiRequestError } from "./api";
 import type {
   Halt,
   LadderAssessment,
@@ -501,4 +502,38 @@ export function prepareProblem(form: PrepareForm): string | null {
   }
   if (form.typed && !(form.seed > 0)) return "The seed must be above zero.";
   return null;
+}
+
+export type GuidedAction = "setup" | "prepare" | "start" | "choose" | "extend" | "decide" | "abandon" | "restore";
+
+function requestFailure(e: unknown): string {
+  if (e instanceof ApiRequestError) return e.field === null ? e.message : `${e.field}: ${e.message}`;
+  return e instanceof Error ? e.message : "request failed";
+}
+
+const OVER_REASON: Record<GuidedAction, string> = {
+  abandon: "there is nothing to abandon",
+  setup: "its setup can't change any more",
+  restore: "there is nothing to restore",
+  prepare: "nothing more can be done with it",
+  start: "nothing more can be done with it",
+  choose: "nothing more can be done with it",
+  extend: "nothing more can be done with it",
+  decide: "nothing more can be done with it",
+};
+
+/**
+ * What to tell the operator when an action failed. A refusal because the tune is not as the page
+ * showed it is explained from the tune as it is now; any other failure keeps the server's reason.
+ */
+export function failureText(action: GuidedAction, error: unknown, before: Tune | null, after: Tune | null): string {
+  if (!(error instanceof ApiRequestError) || error.status !== 409 || after === null) return requestFailure(error);
+  if (after.state === "Done" || after.state === "Abandoned") {
+    const word = after.state === "Done" ? "finished" : "abandoned";
+    return `This tune was already ${word}, so ${OVER_REASON[action]}. The page now shows its current state.`;
+  }
+  if (before !== null && (before.state !== after.state || before.steps.length !== after.steps.length)) {
+    return "This tune changed since the page last updated, so that didn't go through. The page now shows where it is.";
+  }
+  return requestFailure(error);
 }

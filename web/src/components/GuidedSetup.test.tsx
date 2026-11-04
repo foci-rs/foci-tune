@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
-import { putTuneSetup, type PrinterView, type StepperView, type Tune } from "@/api";
+import { ApiRequestError, putTuneSetup, type PrinterView, type StepperView, type Tune } from "@/api";
 import { browserStorage, savePattern } from "@/tune";
 import { GuidedSetup } from "./GuidedSetup";
 
@@ -8,6 +8,7 @@ vi.mock("@/api", async (orig) => ({
   ...(await orig<typeof import("@/api")>()),
   postTune: vi.fn(),
   putTuneSetup: vi.fn(async () => ({})),
+  getTune: vi.fn(async () => ({ state: "Abandoned", steps: [] })),
 }));
 
 const stepper = (name: string, axis: string): StepperView =>
@@ -161,4 +162,12 @@ test("a read-only setup shows the values, locks every control and has no Next", 
   for (const field of screen.getAllByRole("spinbutton")) expect(field).toBeDisabled();
   expect(screen.getByRole("switch", { name: "Include low-damping gains" })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+});
+
+test("saving the setup of a tune that is already over explains it", async () => {
+  vi.mocked(putTuneSetup).mockRejectedValueOnce(new ApiRequestError(409, "the tune is already over"));
+  const tune = { ...recorded, state: "Ready", steps: [] } as unknown as Tune;
+  render(<GuidedSetup printer={printer} tune={tune} onSaved={() => undefined} />);
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  expect(await screen.findByText(/already abandoned, so its setup can't change any more/i)).toBeInTheDocument();
 });

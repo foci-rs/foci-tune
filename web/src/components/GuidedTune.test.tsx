@@ -11,7 +11,15 @@ vi.mock("./GuidedSetup", () => ({
     </div>
   ),
 }));
-vi.mock("@/feed", () => ({ useFeed: () => ({ listen: () => () => undefined }) }));
+let feedListener: ((m: { type: string; reason?: string }) => void) | null = null;
+vi.mock("@/feed", () => ({
+  useFeed: () => ({
+    listen: (fn: typeof feedListener) => {
+      feedListener = fn;
+      return () => undefined;
+    },
+  }),
+}));
 
 const gains = { velocity_p: 1000, velocity_i: 50, position_p: 800, position_i: 0 };
 const filters = { velocity_hz: 500, torque_hz: 1000, position_hz: 500, flux_hz: 1000 };
@@ -78,6 +86,7 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
 }
 
 let current: TuneDetail;
+let postRefused: string | null = null;
 let listed: { id: string; state: TuneState }[] | null = null;
 let posts: string[];
 let bodies: unknown[];
@@ -88,6 +97,9 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST" && postRefused !== null) {
+        return new Response(JSON.stringify({ error: postRefused }), { status: 409 });
+      }
       if (init?.method === "POST") {
         posts.push(path);
         bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : init.body);
@@ -129,6 +141,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   listed = null;
+  postRefused = null;
+  feedListener = null;
   vi.unstubAllGlobals();
 });
 
@@ -479,4 +493,24 @@ test("once a step exists the Setup step is read-only and the bar keeps Abandon",
   fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
   expect(screen.getByText("setup form read-only")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Abandon tune" })).toBeInTheDocument();
+});
+
+test("a feed resync refreshes the tune, so its buttons match what the service holds", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Start the step" });
+  current = detail("Abandoned");
+  feedListener?.({ type: "resync", reason: "reconnected" });
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Start the step" })).not.toBeInTheDocument());
+});
+
+test("abandoning a tune that is already over explains it instead of repeating the server", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  const abandon = await screen.findByRole("button", { name: "Abandon tune" });
+  current = detail("Abandoned");
+  postRefused = "the tune is already over";
+  fireEvent.click(abandon);
+  expect(await screen.findByText(/already abandoned, so there is nothing to abandon/i)).toBeInTheDocument();
+  expect(screen.queryByText("the tune is already over")).not.toBeInTheDocument();
 });

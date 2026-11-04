@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { ApiRequestError } from "./api";
 import type { LadderAssessment, RungVerdict, Tune, TuneState, TuneStep } from "./api";
 import {
   announcementOf,
@@ -6,6 +7,7 @@ import {
   curveData,
   canChoose,
   currentGuidedStep,
+  failureText,
   defaultProbeSpeed,
   expectedDurationSeconds,
   nextAxis,
@@ -715,5 +717,47 @@ describe("currentGuidedStep", () => {
   });
   test("a locked tune stays on the axis it was working on", () => {
     expect(currentGuidedStep(tune("RestorePending", [step({ axis: "PositionP" })]))).toBe("position-p");
+  });
+});
+
+describe("failureText", () => {
+  const conflict = new ApiRequestError(409, "the tune is already over");
+  const open = tune("Ready", []);
+  test.each([
+    ["abandon", "there is nothing to abandon"],
+    ["setup", "its setup can't change any more"],
+    ["start", "nothing more can be done with it"],
+    ["restore", "there is nothing to restore"],
+  ] as const)("a refused %s on an abandoned tune says why", (action, reason) => {
+    const text = failureText(action, conflict, open, tune("Abandoned", []));
+    expect(text).toContain("This tune was already abandoned");
+    expect(text).toContain(reason);
+    expect(text).toContain("The page now shows its current state.");
+    expect(text).not.toContain("already over");
+  });
+
+  test("a finished tune is called finished", () => {
+    expect(failureText("abandon", conflict, open, tune("Done"))).toContain("already finished");
+  });
+
+  test("a tune that moved on since the page last updated says so", () => {
+    const text = failureText("setup", new ApiRequestError(409, "x"), open, tune("Announced"));
+    expect(text).toMatch(/changed since the page last updated/);
+    expect(text).not.toContain("x");
+  });
+
+  test("a refusal about the tune as it really is keeps the server's reason", () => {
+    const reason = new ApiRequestError(409, "stepper_x is locked: restore pending");
+    expect(failureText("start", reason, open, tune("Ready", []))).toBe("stepper_x is locked: restore pending");
+  });
+
+  test("a rejected value keeps its field and reason", () => {
+    const bad = new ApiRequestError(400, "must be above zero", "seed");
+    expect(failureText("prepare", bad, open, open)).toBe("seed: must be above zero");
+  });
+
+  test("a failure that is not an API error reads as a request failure", () => {
+    expect(failureText("start", new Error("boom"), open, open)).toBe("boom");
+    expect(failureText("start", "weird", null, null)).toBe("request failed");
   });
 });

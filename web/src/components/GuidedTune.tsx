@@ -31,6 +31,7 @@ import {
   driftCheckRunning,
   durationText,
   expectedDurationSeconds,
+  failureText,
   GUIDED_STEPS,
   nextAxis,
   recommendedGain,
@@ -38,6 +39,7 @@ import {
   stepSummary,
   DEFAULT_PREPARE,
   prepareProblem,
+  type GuidedAction,
   type GuidedStepId,
   type PrepareForm,
   type RungView,
@@ -147,7 +149,7 @@ function useTune(id: TuneId) {
   useEffect(
     () =>
       listen((m) => {
-        if (m.type === "tune" && m.tune.id === id) refresh();
+        if ((m.type === "tune" && m.tune.id === id) || m.type === "resync") refresh();
       }),
     [listen, id, refresh],
   );
@@ -190,12 +192,17 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
   const followed = detail === null ? null : currentGuidedStep(detail);
   useEffect(() => setPicked(null), [followed]);
 
-  const run = (action: () => Promise<unknown>, after?: () => void) => {
+  const run = (kind: GuidedAction, action: () => Promise<unknown>, after?: () => void) => {
     setBusy(true);
     setActionError(null);
     action()
       .then(() => after?.())
-      .catch((e: unknown) => setActionError(errorText(e)))
+      .catch((e: unknown) =>
+        getTune(id).then(
+          (fresh) => setActionError(failureText(kind, e, detail, fresh)),
+          () => setActionError(failureText(kind, e, detail, null)),
+        ),
+      )
       .finally(() => {
         setBusy(false);
         refresh();
@@ -214,7 +221,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
   const prepareBlocked = preparing ? prepareProblem(prepare) : null;
   const setupEditable = actions.prepare && detail.steps.length === 0;
   const abandon = actions.abandon ? (
-    <Button disabled={busy} onClick={() => run(() => postTuneAbandon(id))}>
+    <Button disabled={busy} onClick={() => run("abandon", () => postTuneAbandon(id))}>
       Abandon tune
     </Button>
   ) : null;
@@ -236,7 +243,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
           detail={detail}
           busy={busy}
           canRestore={actions.restore}
-          onRestore={() => run(() => postTuneRestore(id))}
+          onRestore={() => run("restore", () => postTuneRestore(id))}
         />
       )}
 
@@ -266,9 +273,9 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
           earlier={earlier}
           engine={printer.engine}
           announced={announced}
-          onChoose={(choice) => run(() => postTuneChoice(id, choice))}
-          onExtend={(direction) => run(() => postTuneExtension(id, direction))}
-          onDecide={(d) => run(() => postTuneDecision(id, d))}
+          onChoose={(choice) => run("choose", () => postTuneChoice(id, choice))}
+          onExtend={(direction) => run("extend", () => postTuneExtension(id, direction))}
+          onDecide={(d) => run("decide", () => postTuneDecision(id, d))}
           prepare={prepare}
           onPrepare={setPrepare}
         />
@@ -292,7 +299,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
             <Button
               disabled={busy || prepareBlocked !== null}
               onClick={() =>
-                run(() =>
+                run("prepare", () =>
                   postTuneStep(id, {
                     seed: prepare.typed ? { typed: prepare.seed } : "live",
                     repeats: prepare.repeats,
@@ -310,6 +317,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
               disabled={busy}
               onClick={() =>
                 run(
+                  "start",
                   () => postTuneConfirm(id),
                   () => setPlan(null),
                 )
