@@ -1,8 +1,9 @@
 import { createRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getSessions, type SessionView } from "@/api";
+import { getSessions, getTunes, type SessionView, type TuneSummary } from "@/api";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
+import { stateText } from "@/guided";
 import { sessionLabel, sortSessions, summarizeSession } from "@/sessions";
 import { formatNumber, stateLabel } from "@/tune";
 import { Route as rootRoute } from "./__root";
@@ -34,12 +35,24 @@ function SessionsPage() {
   }, []);
 
   useEffect(refresh, [refresh]);
+  const [tunes, setTunes] = useState<TuneSummary[]>([]);
+  const loadTunes = useCallback(() => {
+    getTunes().then(
+      (list) =>
+        setTunes(
+          list.filter((t) => t.state === "Done" || t.state === "Abandoned").sort((a, b) => b.created - a.created),
+        ),
+      () => undefined,
+    );
+  }, []);
+  useEffect(loadTunes, [loadTunes]);
   useEffect(
     () =>
       listen((m) => {
         if (m.type === "run_state" || m.type === "run_result" || m.type === "resync") refresh();
+        if (m.type === "tune" || m.type === "resync") loadTunes();
       }),
-    [listen, refresh],
+    [listen, refresh, loadTunes],
   );
 
   return (
@@ -52,6 +65,27 @@ function SessionsPage() {
         )}
         {sessions !== null && sessions.length > 0 && <SessionTable sessions={sessions} />}
       </Card>
+      {tunes.length > 0 && (
+        <Card label="Tunes">
+          <ul className="divide-y text-sm">
+            {tunes.map((t) => (
+              <li key={t.id}>
+                <Link
+                  to="/tune/guided"
+                  search={{ tune: t.id }}
+                  className="flex items-baseline gap-4 py-1.5 hover:underline"
+                >
+                  <span className="font-mono">{t.stepper}</span>
+                  <span className="text-muted-foreground">{stateText(t.state)}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    {new Date(t.created * 1000).toLocaleString()}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </main>
   );
 }

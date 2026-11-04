@@ -34,6 +34,14 @@ const broken = session("20261030-bbb", {
   ],
 });
 const sessions = [session("20261029-aaa"), broken];
+const tune = (id: string, state: string, created: number) => ({
+  id,
+  stepper: "stepper_y",
+  state,
+  created,
+  current_step: null,
+});
+const tunes = [tune("t-open", "Running", 5), tune("t-done", "Done", 3), tune("t-gone", "Abandoned", 4)];
 
 beforeEach(() => {
   vi.stubGlobal("WebSocket", StubSocket);
@@ -41,6 +49,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (path: string) => {
       if (path === "/api/sessions") return new Response(JSON.stringify(sessions));
+      if (path === "/api/tunes") return new Response(JSON.stringify(tunes));
       if (path === "/api/sessions/20261030-bbb") return new Response(JSON.stringify(broken));
       return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
     }),
@@ -299,4 +308,12 @@ test("a run that did not run has nothing to accept", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Details for 100 Hz" }));
   const panel = await screen.findByRole("dialog");
   expect(within(panel).queryByRole("button", { name: "Use these settings" })).toBeNull();
+});
+
+test("finished and abandoned tunes are listed with a link to open them in the guided tune", async () => {
+  render(<RouterProvider router={createTestRouter("/sessions")} />);
+  const links = await screen.findAllByRole("link", { name: /stepper_y/ });
+  expect(links.map((l) => l.getAttribute("href"))).toEqual(["/tune/guided?tune=t-gone", "/tune/guided?tune=t-done"]);
+  expect(links[0]).toHaveTextContent("Abandoned");
+  expect(links[1]).toHaveTextContent("Done");
 });
