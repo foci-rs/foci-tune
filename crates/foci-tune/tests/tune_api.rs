@@ -9,7 +9,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use foci_tune::api::{Api, router};
 use foci_tune::model::{Filters, Gains};
-use foci_tune::tune::{TuneScheduler, TuneSetup};
+use foci_tune::tune::{TuneScheduler, TuneSetup, TuneState};
 use futures_util::StreamExt;
 use rig::*;
 use serde_json::{Value, json};
@@ -534,4 +534,100 @@ async fn a_replacement_setup_is_validated_like_a_new_one() {
     }
     let after = get(&app, &format!("/api/tunes/{id}")).await.json();
     assert_eq!(after["setup"]["speeds_mm_s"], json!([50.0]));
+}
+
+#[test]
+fn every_state_that_freezes_the_setup_says_why_and_what_to_do() {
+    let cases = [
+        (
+            TuneState::Abandoned,
+            false,
+            "was abandoned",
+            "Start a new tune",
+        ),
+        (TuneState::Done, true, "is finished", "Start a new tune"),
+        (
+            TuneState::RestorePending,
+            false,
+            "restoring the starting gains",
+            "right now",
+        ),
+        (
+            TuneState::RestoreFailed("gain write unconfirmed".into()),
+            false,
+            "restoring the starting gains",
+            "right now",
+        ),
+        (
+            TuneState::Announced,
+            true,
+            "already started its first step",
+            "abandon it",
+        ),
+        (
+            TuneState::Running,
+            true,
+            "already started its first step",
+            "abandon it",
+        ),
+        (
+            TuneState::AwaitingChoice,
+            true,
+            "already started its first step",
+            "abandon it",
+        ),
+        (
+            TuneState::Paused,
+            true,
+            "already started its first step",
+            "abandon it",
+        ),
+        (
+            TuneState::Ready,
+            true,
+            "already started its first step",
+            "abandon it",
+        ),
+    ];
+    for (state, has_steps, why, advice) in cases {
+        let text = state.setup_refusal(has_steps).expect("setup is frozen");
+        assert!(text.contains(why), "{state:?}: {text}");
+        assert!(text.contains(advice), "{state:?}: {text}");
+    }
+    assert_eq!(TuneState::Ready.setup_refusal(false), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_setup_change_on_an_abandoned_tune_is_refused_in_plain_words() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    post_empty(&app, &format!("/api/tunes/{id}/abandon")).await;
+
+    let reply = put(
+        &app,
+        &format!("/api/tunes/{id}/setup"),
+        setup_body(&[100.0]),
+    )
+    .await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(reply.error().contains("was abandoned"), "{}", reply.error());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn abandoning_a_tune_that_is_over_says_there_is_nothing_to_abandon() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    post_empty(&app, &format!("/api/tunes/{id}/abandon")).await;
+
+    let again = post_empty(&app, &format!("/api/tunes/{id}/abandon")).await;
+
+    assert_eq!(again.status, StatusCode::CONFLICT);
+    assert!(
+        again.error().contains("nothing to abandon"),
+        "{}",
+        again.error()
+    );
 }

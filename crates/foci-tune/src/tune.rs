@@ -279,6 +279,28 @@ impl TuneState {
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Done | Self::Abandoned)
     }
+
+    /// Why the setup of a tune in this state cannot change, in words for the operator and
+    /// ending in what to do instead; `None` when it can. `has_steps` is whether any step was
+    /// prepared.
+    pub fn setup_refusal(&self, has_steps: bool) -> Option<&'static str> {
+        const STARTED: &str = "This tune has already started its first step, so its setup is \
+            fixed. To use different settings, abandon it and start a new tune.";
+        match self {
+            Self::Abandoned => Some(
+                "This tune was abandoned, so its setup can't change any more. Start a new tune.",
+            ),
+            Self::Done => {
+                Some("This tune is finished, so its setup can't change any more. Start a new tune.")
+            }
+            Self::RestorePending | Self::RestoreFailed(_) => Some(
+                "This tune is restoring the starting gains, so its setup can't change right now.",
+            ),
+            Self::Announced | Self::Running | Self::AwaitingChoice | Self::Paused => Some(STARTED),
+            Self::Ready if has_steps => Some(STARTED),
+            Self::Ready => None,
+        }
+    }
 }
 
 /// A tune record, persisted as `tunes/<id>.json`.
@@ -874,10 +896,8 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         let s = &self.shared;
         let _held = s.hold_tune(tune).await?;
         let mut record = s.read(tune)?;
-        if record.state != TuneState::Ready || !record.steps.is_empty() {
-            return Err(TuneError::OutOfOrder(
-                "the setup can only change before the first step is prepared".to_owned(),
-            ));
+        if let Some(why) = record.state.setup_refusal(!record.steps.is_empty()) {
+            return Err(TuneError::OutOfOrder(why.to_owned()));
         }
         if setup.stepper != record.setup.stepper {
             return Err(TuneError::InvalidRequest(
@@ -1504,7 +1524,10 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             let _held = self.hold_tune(tune).await?;
             let mut record = self.read(tune)?;
             if record.state.is_terminal() {
-                return Err(TuneError::OutOfOrder("the tune is already over".to_owned()));
+                return Err(TuneError::OutOfOrder(
+                    "This tune is already finished or abandoned, so there is nothing to abandon."
+                        .to_owned(),
+                ));
             }
             self.ensure_locked(&record, "abandon in progress");
             record.state = TuneState::RestorePending;
