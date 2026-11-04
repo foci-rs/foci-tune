@@ -84,3 +84,11 @@ test("the noise check switch sits in the same input group as the noise limit, be
   const input = within(group).getByRole("spinbutton");
   expect(toggle.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
+
+test("the low-damping switch says what it changes and why it starts off", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  const toggle = screen.getByRole("switch", { name: "Include low-damping gains" });
+  expect(toggle).not.toBeChecked();
+  expect(screen.getByText(/never recommended/i)).toBeInTheDocument();
+  expect(screen.getByText(/close to instability/i)).toBeInTheDocument();
+});

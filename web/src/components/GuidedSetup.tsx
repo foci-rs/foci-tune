@@ -317,8 +317,13 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               </InputGroup>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="space-y-1">
             {toggle("Include low-damping gains", includeMarginal, setIncludeMarginal)}
+            <p className="text-xs text-muted-foreground">
+              Gains whose damping is above the stop limit but below the low-damping limit are never recommended unless
+              this is on. They tend to score best because they sit close to instability, so leave it off unless you want
+              them considered.
+            </p>
           </div>
         </div>
       </Card>
