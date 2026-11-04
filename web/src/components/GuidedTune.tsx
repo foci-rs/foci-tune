@@ -19,7 +19,7 @@ import {
   type TuneId,
   type TuneSummary,
 } from "@/api";
-import { PlayIcon } from "lucide-react";
+import { ArrowRightIcon, PlayIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
@@ -296,6 +296,12 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
           {abandon}
+          {shown === "setup" && !setupEditable && followed !== "setup" && (
+            <UiButton onClick={() => setPicked(null)}>
+              Next
+              <ArrowRightIcon />
+            </UiButton>
+          )}
           {preparing && (
             <UiButton
               disabled={frozen || prepareBlocked !== null}

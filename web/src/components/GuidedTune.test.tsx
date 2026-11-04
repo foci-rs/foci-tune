@@ -681,3 +681,29 @@ test("before Next the card already says how many runs the step makes", async () 
   render(<GuidedTune printer={printer} />);
   expect((await screen.findByText("Runs:")).parentElement).toHaveTextContent("Runs: 88");
 });
+
+test("the read-only Setup step has a Next that goes on to the step the tune is at", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Accept the recommendation" });
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
+  expect(screen.getByText("setup form read-only")).toBeInTheDocument();
+  const next = screen.getByRole("button", { name: "Next" });
+  expect(
+    within(next.closest(".sticky") as HTMLElement)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual(["Abandon tune", "Next"]);
+  fireEvent.click(next);
+  expect(await screen.findByRole("button", { name: "Accept the recommendation" })).toBeInTheDocument();
+  expect(screen.queryByText("setup form read-only")).toBeNull();
+});
+
+test("the editable Setup step leaves Next to the setup form, which saves", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Run" });
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
+  expect(screen.getByText("setup form editable")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+});
