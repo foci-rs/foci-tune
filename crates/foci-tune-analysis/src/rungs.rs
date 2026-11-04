@@ -7,6 +7,9 @@ use crate::signals::corner_hz;
 
 /// Corner frequency in Hz that seeds the velocity I ladder when the live gain is zero.
 pub const SEED_CORNER_HZ: f64 = 50.0;
+/// Divisions of an octave between neighbouring rungs unless the operator picks another: the
+/// rungs are a third of an octave apart.
+pub const DEFAULT_OCTAVE_DIVISIONS: u32 = 3;
 /// Default lowest rung exponent: the seed times `2^(k/3)`.
 pub const DEFAULT_LOWER_K: i32 = -3;
 /// Default highest rung exponent.
@@ -92,6 +95,26 @@ pub fn rung_values(
     lower_k: i32,
     upper_k: i32,
 ) -> Rungs {
+    rung_values_in(
+        axis,
+        seed_raw,
+        pwm_hz,
+        DEFAULT_OCTAVE_DIVISIONS,
+        lower_k,
+        upper_k,
+    )
+}
+
+/// Like [`rung_values`] with the rungs `1 / divisions` of an octave apart: the seed times
+/// `2^(k/divisions)`. `divisions` must be at least one.
+pub fn rung_values_in(
+    axis: LadderAxis,
+    seed_raw: i32,
+    pwm_hz: u32,
+    divisions: u32,
+    lower_k: i32,
+    upper_k: i32,
+) -> Rungs {
     let base = match axis {
         LadderAxis::VelocityP | LadderAxis::PositionP => f64::from(seed_raw),
         LadderAxis::VelocityICornerHz if seed_raw == 0 => SEED_CORNER_HZ,
@@ -102,7 +125,7 @@ pub fn rung_values(
         notes: Vec::new(),
     };
     for k in lower_k..=upper_k {
-        let shown = base * 2f64.powf(f64::from(k) / 3.0);
+        let shown = base * 2f64.powf(f64::from(k) / f64::from(divisions));
         let Ok(value) = to_raw(axis, shown, pwm_hz) else {
             rungs.notes.push(RungNote::OutOfRange(shown));
             continue;

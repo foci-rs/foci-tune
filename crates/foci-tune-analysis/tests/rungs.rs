@@ -1,6 +1,7 @@
 use foci_tune_analysis::ladder::{LadderAxis, PID_GAIN_MAX_RAW};
 use foci_tune_analysis::rungs::{
-    DEFAULT_LOWER_K, DEFAULT_UPPER_K, RungNote, SEED_CORNER_HZ, SeedRefused, rung_values, seed_from,
+    DEFAULT_LOWER_K, DEFAULT_OCTAVE_DIVISIONS, DEFAULT_UPPER_K, RungNote, SEED_CORNER_HZ,
+    SeedRefused, rung_values, rung_values_in, seed_from,
 };
 
 const PWM_HZ: u32 = 50_000;
@@ -116,4 +117,33 @@ fn k_range_is_editable() {
     let last = r.values[6].shown / 840.0;
     assert!((first - 0.7937).abs() < 1e-3);
     assert!((last - 3.1748).abs() < 1e-3);
+}
+
+#[test]
+fn the_default_division_is_the_third_octave() {
+    assert_eq!(DEFAULT_OCTAVE_DIVISIONS, 3);
+    let default = rung_values(LadderAxis::VelocityP, 840, PWM_HZ, -3, 3);
+    let explicit = rung_values_in(LadderAxis::VelocityP, 840, PWM_HZ, 3, -3, 3);
+    assert_eq!(raws(&default), raws(&explicit));
+}
+
+#[test]
+fn a_finer_division_spaces_the_same_number_of_steps_closer() {
+    let sixth = rung_values_in(LadderAxis::VelocityP, 1000, PWM_HZ, 6, -3, 3);
+
+    assert_eq!(raws(&sixth), [707, 794, 891, 1000, 1122, 1260, 1414]);
+}
+
+#[test]
+fn a_coarser_division_reaches_further() {
+    let half = rung_values_in(LadderAxis::VelocityP, 1000, PWM_HZ, 2, -2, 2);
+
+    assert_eq!(raws(&half), [500, 707, 1000, 1414, 2000]);
+}
+
+#[test]
+fn the_corner_ladder_follows_the_division_in_hz() {
+    let r = rung_values_in(LadderAxis::VelocityICornerHz, 0, PWM_HZ, 6, 6, 6);
+
+    assert!((r.values[0].shown - SEED_CORNER_HZ * 2.0).abs() < 1e-9);
 }
