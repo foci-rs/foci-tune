@@ -73,6 +73,7 @@ const BAR_TONE = { low: "bg-red-400", marginal: "bg-amber-400", good: "bg-emeral
 function DampingBar({ zeta, limits }: { zeta: number; limits: { floor: number; marginal: number } }) {
   const { fraction, tone } = dampingBar(zeta, limits.floor, limits.marginal);
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <meter> cannot be styled with a coloured fill, so the bar is a div with the meter role.
     <div
       role="meter"
       aria-label={`Damping ${formatNumber(zeta, 3)}`}

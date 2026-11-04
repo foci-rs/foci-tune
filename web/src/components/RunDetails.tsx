@@ -130,12 +130,11 @@ export function RunDetails({
                     {config !== null && "error" in config && <p className="text-red-400">{config.error}</p>}
                     {shown !== null && "text" in shown && (
                       <div className="space-y-2">
-                        <pre
-                          aria-label="Config block"
-                          className="overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs select-all"
-                        >
-                          {shown.text}
-                        </pre>
+                        <section aria-label="Config block">
+                          <pre className="overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs select-all">
+                            {shown.text}
+                          </pre>
+                        </section>
                         <Button variant="outline" onClick={() => onCopy(shown.text)}>
                           {copied ? "Copied" : "Copy"}
                         </Button>

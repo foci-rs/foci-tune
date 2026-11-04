@@ -49,7 +49,7 @@ function CoordRow({
   onValue: (k: 0 | 1, v: number) => void;
 }) {
   return (
-    <div role="group" aria-label={label} className="flex items-center gap-3">
+    <fieldset aria-label={label} className="flex items-center gap-3">
       <span className="flex w-14 items-center gap-1.5 text-xs text-muted-foreground">
         <span
           aria-hidden="true"
@@ -59,7 +59,7 @@ function CoordRow({
       </span>
       <CoordField label={`${label} X`} axis="X" value={point[0]} disabled={disabled} onValue={(v) => onValue(0, v)} />
       <CoordField label={`${label} Y`} axis="Y" value={point[1]} disabled={disabled} onValue={(v) => onValue(1, v)} />
-    </div>
+    </fieldset>
   );
 }
 

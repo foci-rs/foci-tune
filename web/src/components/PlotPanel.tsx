@@ -79,5 +79,5 @@ export function PlotPanel({
     plot.current?.setData(data);
   }, [data]);
 
-  return <div role="figure" aria-label={label} ref={container} className="w-full" />;
+  return <figure aria-label={label} ref={container} className="w-full" />;
 }
