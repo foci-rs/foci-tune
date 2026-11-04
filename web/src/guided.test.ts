@@ -753,11 +753,11 @@ describe("failureText", () => {
 
   test("a rejected value keeps its field and reason", () => {
     const bad = new ApiRequestError(400, "must be above zero", "seed");
-    expect(failureText("prepare", bad, open, open)).toBe("seed: must be above zero");
+    expect(failureText("prepare", bad, open, open)).toBe("Seed: must be above zero");
   });
 
   test("a failure that is not an API error reads as a request failure", () => {
     expect(failureText("start", new Error("boom"), open, open)).toBe("boom");
-    expect(failureText("start", "weird", null, null)).toBe("request failed");
+    expect(failureText("start", "weird", null, null)).toBe("Something went wrong. Try again.");
   });
 });

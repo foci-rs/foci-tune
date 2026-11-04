@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ApiRequestError,
   getTune,
   getTunes,
   postTuneAbandon,
@@ -20,6 +19,7 @@ import {
   type TuneStepPlan,
   type TuneSummary,
 } from "@/api";
+import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
 import {
   announcementOf,
@@ -53,11 +53,6 @@ import { TuneRunCard } from "./TuneRunCard";
 import { ActionBar } from "./WorkbenchCards";
 import { Button, Card, Field, NumberField } from "./ui";
 
-function errorText(e: unknown): string {
-  if (e instanceof ApiRequestError) return e.field === null ? e.message : `${e.field}: ${e.message}`;
-  return e instanceof Error ? e.message : "request failed";
-}
-
 const pillClass = (active: boolean) =>
   active
     ? "flex items-center gap-2 rounded-full border border-emerald-500 px-3 py-1 text-sm text-emerald-300"
@@ -78,7 +73,7 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
         setSummaries([...list].sort((a, b) => b.created - a.created));
         setListError(null);
       },
-      (e: unknown) => setListError(errorText(e)),
+      (e: unknown) => setListError(failureMessage(e)),
     );
   }, []);
   useEffect(load, [load]);
@@ -142,7 +137,7 @@ function useTune(id: TuneId) {
           setError(null);
         }
       },
-      (e: unknown) => mine === sequence.current && setError(errorText(e)),
+      (e: unknown) => mine === sequence.current && setError(failureMessage(e)),
     );
   }, [id]);
   useEffect(refresh, [refresh]);

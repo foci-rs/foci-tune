@@ -10,6 +10,7 @@ import {
   type Tune,
   type TuneDecision,
 } from "@/api";
+import { failureMessage } from "@/failure";
 import { stepSummary } from "@/guided";
 import { declaredMetrics } from "@/tune";
 import { EnsemblePlot } from "./EnsemblePlot";
@@ -38,10 +39,6 @@ interface Loaded {
 function runProblem(run: Run | undefined): string | null {
   if (run === undefined || !("reason" in run)) return null;
   return `${run.state.replace("_", " ")}: ${run.reason}`;
-}
-
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : "request failed";
 }
 
 /** The paused rung's evidence and the operator's three decisions. */
@@ -101,7 +98,7 @@ export function PausePanel({
           series: Object.fromEntries(refs.map((r, i) => [r.probeId, series[i]])),
         });
       },
-      (e: unknown) => live && setError(errorMessage(e)),
+      (e: unknown) => live && setError(failureMessage(e)),
     );
     return () => {
       live = false;

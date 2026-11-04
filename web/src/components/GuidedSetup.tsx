@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  ApiRequestError,
   getTune,
   postTune,
   putTuneSetup,
@@ -15,6 +14,7 @@ import { Button as UiButton } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InputGroup, InputGroupAddon, InputGroupText } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
+import { failureMessage } from "@/failure";
 import { defaultProbeSpeed, failureText, gatesBody, type GatesForm } from "@/guided";
 import {
   bedLimits,
@@ -40,11 +40,6 @@ import { Card, NumberField } from "./ui";
 import { ActionBar, PatternCard } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
-
-function errorText(e: unknown): string {
-  if (e instanceof ApiRequestError) return e.field === null ? e.message : `${e.field}: ${e.message}`;
-  return e instanceof Error ? e.message : "request failed";
-}
 
 /**
  * The setup of a tune: a form that creates one, the same form on a tune that has no step yet (saving
@@ -239,7 +234,7 @@ export function GuidedSetup({
     sent
       .catch((e: unknown) =>
         tune === undefined
-          ? setError(errorText(e))
+          ? setError(failureMessage(e))
           : getTune(tune.id).then(
               (fresh) => setError(failureText("setup", e, tune, fresh)),
               () => setError(failureText("setup", e, tune, null)),
