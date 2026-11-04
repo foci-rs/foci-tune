@@ -156,7 +156,7 @@ describe("rungView", () => {
     expect(rows[0].verdict).toMatch(/not scored/i);
     expect(rows[0].verdict).toMatch(/no tracking result/i);
     expect(rows[1].verdict).toMatch(/rejected/i);
-    expect(rows[1].verdict).toMatch(/damping below the stop limit/i);
+    expect(rows[1].verdict).toMatch(/damping too low/i);
   });
 
   test("a running step shows finished rungs assessed and the others as still to run", () => {
@@ -191,7 +191,7 @@ describe("rungView", () => {
     s.assessment!.verdicts[1] = { ...none, inadmissible: "StandstillHigh" };
     const rows = rungView(tune("AwaitingChoice", [s]), 0);
     expect(rows[0].verdict).toMatch(/no standstill result/i);
-    expect(rows[1].verdict).toMatch(/too much noise at standstill/i);
+    expect(rows[1].verdict).toMatch(/standstill noise too high/i);
   });
 
   test("flags marginal rungs and carries score, gain and per-speed p99", () => {

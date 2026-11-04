@@ -84,8 +84,8 @@ const UNSCORED_TEXT: Record<UnscoredReason, string> = {
 };
 
 const INADMISSIBLE_TEXT: Record<InadmissibleReason, string> = {
-  DampingBelowFloor: "damping below the stop limit",
-  StandstillHigh: "too much noise at standstill",
+  DampingBelowFloor: "damping too low",
+  StandstillHigh: "standstill noise too high",
 };
 
 function pauseText(reason: Pause): string {
