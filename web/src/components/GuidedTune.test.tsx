@@ -1,7 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render as renderPlain, screen, waitFor, within } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView, Tune, TuneDetail, TuneState } from "@/api";
 import { GuidedTune } from "./GuidedTune";
+
+const render = (ui: React.ReactElement) => renderPlain(<TooltipProvider>{ui}</TooltipProvider>);
 
 vi.mock("./GuidedSetup", () => ({
   GuidedSetup: (p: { tune?: unknown; readOnly?: boolean; actions?: React.ReactNode }) => (
@@ -453,7 +456,9 @@ test("the next-step card shows the seed, the range as dropdowns and the ladder t
   expect(screen.getByRole("spinbutton", { name: "Seed" })).toHaveValue(1000);
   expect(screen.getByRole("combobox", { name: "Lowest step" })).toBeInTheDocument();
   expect(screen.getByRole("combobox", { name: "Highest step" })).toBeInTheDocument();
-  expect(within(screen.getByRole("list", { name: "Ladder" })).getAllByRole("listitem")).toHaveLength(7);
+  expect(
+    within(within(screen.getByRole("table", { name: "Ladder" })).getAllByRole("row")[0]).getAllByRole("cell"),
+  ).toHaveLength(7);
   expect(screen.queryByText(/rung/i)).toBeNull();
 });
 
@@ -592,4 +597,24 @@ test("a failed action is announced as an alert", async () => {
   postRefused = "klipper is not ready";
   fireEvent.click(abandon);
   expect(await screen.findByRole("alert")).toHaveTextContent("Klipper isn't ready");
+});
+
+test("Next is the rightmost button of the bar, after Abandon", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  const next = await screen.findByRole("button", { name: "Next" });
+  const names = within(next.closest(".sticky") as HTMLElement)
+    .getAllByRole("button")
+    .map((b) => b.textContent);
+  expect(names).toEqual(["Abandon tune", "Next"]);
+});
+
+test("Start is the rightmost button of the bar, after Abandon", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  const start = await screen.findByRole("button", { name: "Start the step" });
+  const names = within(start.closest(".sticky") as HTMLElement)
+    .getAllByRole("button")
+    .map((b) => b.textContent);
+  expect(names).toEqual(["Abandon tune", "Start the step"]);
 });

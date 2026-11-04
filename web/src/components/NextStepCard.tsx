@@ -3,7 +3,7 @@ import type { TuneAxis } from "@/api";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { axisLabel, type PrepareForm, type PrepareState } from "@/guided";
+import { axisLabel, type LadderPreview, type PrepareForm, type PrepareState } from "@/guided";
 import { Card, NumberField } from "./ui";
 
 const STEPS = Array.from({ length: 19 }, (_, i) => i - 9);
@@ -38,7 +38,71 @@ function StepSelect({
   );
 }
 
-const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+const shownLive = (live: number, corner: boolean) => (corner ? `${live.toFixed(1)} Hz` : String(Math.round(live)));
+
+const change = (step: number) => {
+  const percent = Math.round((2 ** (step / 3) - 1) * 100);
+  return percent > 0 ? `+${percent}%` : `${percent}%`;
+};
+
+/** The ladder's steps from low to high: the step, the gain it gives and how far that is from the seed. */
+function LadderTable({ preview, corner }: { preview: LadderPreview; corner: boolean }) {
+  const columns = [
+    ...preview.gains.map((g) => ({
+      step: g.step,
+      gain: corner ? `${g.shown.toFixed(1)} Hz` : String(g.raw),
+      left: false,
+    })),
+    ...preview.left.map((l) => ({ step: l.step, gain: "left out", left: true })),
+  ].sort((a, b) => a.step - b.step);
+  const cell = (c: (typeof columns)[number]) =>
+    `px-3 py-1 text-right font-mono ${c.left ? "text-muted-foreground" : ""} ${c.step === 0 ? "bg-muted/50 font-semibold" : ""}`;
+  return (
+    <div className="mt-3 space-y-1">
+      <div className="overflow-x-auto">
+        <table aria-label="Ladder" className="text-sm">
+          <tbody>
+            <tr>
+              <th scope="row" className="py-1 pr-3 text-left text-xs font-normal text-muted-foreground">
+                Step
+              </th>
+              {columns.map((c) => (
+                <td key={c.step} data-seed={c.step === 0} className={`${cell(c)} text-xs text-muted-foreground`}>
+                  {c.step}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th scope="row" className="py-1 pr-3 text-left text-xs font-normal text-muted-foreground">
+                Gain
+              </th>
+              {columns.map((c) => (
+                <td key={c.step} className={cell(c)}>
+                  {c.gain}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th scope="row" className="py-1 pr-3 text-left text-xs font-normal text-muted-foreground">
+                vs seed
+              </th>
+              {columns.map((c) => (
+                <td key={c.step} className={`${cell(c)} text-xs text-muted-foreground`}>
+                  {change(c.step)}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {preview.left.map((l) => (
+        <p key={l.step} className="text-xs text-muted-foreground">
+          Step {l.step} is left out because it {l.reason}.
+        </p>
+      ))}
+    </div>
+  );
+}
 
 /** The seed, the range of steps and the repeats of the next ladder, with the gains they give. */
 export function NextStepCard({
@@ -46,31 +110,20 @@ export function NextStepCard({
   busy,
   form,
   state,
-  canReload,
+  live,
   onForm,
 }: {
   axis: TuneAxis;
   busy: boolean;
   form: PrepareForm;
   state: PrepareState;
-  /** Whether the stepper reports a live value to go back to. */
-  canReload: boolean;
+  /** The stepper's live value on this axis, to go back to; null when it reports none. */
+  live: number | null;
   onForm: (form: PrepareForm) => void;
 }) {
   const corner = axis === "VelocityICornerHz";
   const set = (patch: Partial<PrepareForm>) => onForm({ ...form, ...patch });
   const seedShown = state.seed === null ? 0 : form.seed === null && corner ? Number(state.seed.toFixed(1)) : state.seed;
-  const items =
-    state.preview === null
-      ? []
-      : [
-          ...state.preview.gains.map((g) => ({
-            step: g.step,
-            gain: corner ? `${g.shown.toFixed(1)} Hz` : String(g.raw),
-            reason: null,
-          })),
-          ...state.preview.left.map((l) => ({ step: l.step, gain: null, reason: l.reason })),
-        ].sort((a, b) => a.step - b.step);
   return (
     <Card label={`Next step: ${axisLabel(axis)}`}>
       <div className="flex flex-wrap items-end gap-3">
@@ -80,13 +133,22 @@ export function NextStepCard({
             <NumberField inGroup label="Seed" value={seedShown} disabled={busy} onValue={(seed) => set({ seed })} />
             <InputGroupAddon align="inline-end">
               {state.unit !== "" && <InputGroupText>{state.unit}</InputGroupText>}
-              <InputGroupButton
-                aria-label="Use the live value"
-                disabled={busy || !canReload || form.seed === null}
-                onClick={() => set({ seed: null })}
-              >
-                <RotateCcwIcon />
-              </InputGroupButton>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={-1}>
+                    <InputGroupButton
+                      aria-label="Use the live value"
+                      disabled={busy || live === null || form.seed === null}
+                      onClick={() => set({ seed: null })}
+                    >
+                      <RotateCcwIcon />
+                    </InputGroupButton>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {live === null ? "No live value is available" : `Use the live value: ${shownLive(live, corner)}`}
+                </TooltipContent>
+              </Tooltip>
             </InputGroupAddon>
           </InputGroup>
         </div>
@@ -97,35 +159,7 @@ export function NextStepCard({
         <StepSelect label="Lowest step" value={form.lower} disabled={busy} onValue={(lower) => set({ lower })} />
         <StepSelect label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
       </div>
-      {state.preview !== null && (
-        <div className="mt-3 space-y-1">
-          <ul aria-label="Ladder" className="flex flex-wrap gap-2">
-            {items.map((item) => (
-              <li
-                key={item.step}
-                className={`rounded border px-2 py-1 font-mono text-xs ${item.reason === null ? "" : "text-muted-foreground"}`}
-              >
-                <span className="mr-2 text-muted-foreground">{item.step}</span>
-                {item.reason === null ? (
-                  <span>{item.gain}</span>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0} className="font-sans underline decoration-dotted">
-                        left out
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{item.reason}</TooltipContent>
-                  </Tooltip>
-                )}
-              </li>
-            ))}
-          </ul>
-          <p className="text-xs text-muted-foreground">
-            {plural(state.preview.gains.length, "gain")}, {plural(form.repeats, "repeat")} each
-          </p>
-        </div>
-      )}
+      {state.preview !== null && <LadderTable preview={state.preview} corner={corner} />}
     </Card>
   );
 }

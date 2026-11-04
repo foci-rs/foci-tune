@@ -631,13 +631,13 @@ export function previewLadder(
     const shown = base * 2 ** (step / 3);
     const raw = toRaw(shown);
     if (!writable(shown, raw)) {
-      preview.left.push({ step, shown, reason: "It is outside what the stepper accepts." });
+      preview.left.push({ step, shown, reason: "is outside what the stepper accepts" });
     } else if (raw === 0) {
-      preview.left.push({ step, shown, reason: "It rounds to zero." });
+      preview.left.push({ step, shown, reason: "rounds to zero" });
     } else {
       const kept = preview.gains.find((g) => g.raw === raw);
       if (kept === undefined) preview.gains.push({ step, shown, raw });
-      else preview.left.push({ step, shown, reason: `It is the same gain as step ${kept.step}.` });
+      else preview.left.push({ step, shown, reason: `is the same gain as step ${kept.step}` });
     }
   }
   return preview;

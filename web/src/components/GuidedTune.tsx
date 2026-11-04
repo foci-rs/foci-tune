@@ -41,6 +41,7 @@ import {
   stepSummary,
   DEFAULT_PREPARE,
   liveControlFor,
+  liveSeed,
   prepareState,
   type GuidedAction,
   type GuidedStepId,
@@ -297,7 +298,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           onDecide={(d) => run("decide", () => postTuneDecision(id, d))}
           prepare={prepare}
           prepared={prepared}
-          canReload={liveControl !== null}
+          live={next !== null && liveControl !== null ? liveSeed(next, liveControl) : null}
           onPrepare={setPrepare}
         />
       )}
@@ -316,6 +317,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           blocked={offline ? ["Reconnecting to foci-tune."] : prepareBlocked === null ? [] : [prepareBlocked]}
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
+          {abandon}
           {preparing && (
             <UiButton
               disabled={frozen || prepareBlocked !== null}
@@ -348,7 +350,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
               Start the step
             </Button>
           )}
-          {abandon}
         </ActionBar>
       )}
     </div>
@@ -372,7 +373,7 @@ function AxisStep({
   onDecide,
   prepare,
   prepared,
-  canReload,
+  live,
   onPrepare,
 }: {
   tune: TuneDetail;
@@ -391,7 +392,7 @@ function AxisStep({
   onDecide: (d: TuneDecision) => void;
   prepare: PrepareForm;
   prepared: PrepareState | null;
-  canReload: boolean;
+  live: number | null;
   onPrepare: (form: PrepareForm) => void;
 }) {
   const indices = tune.steps.flatMap((s, i) => (s.axis === axis ? [i] : []));
@@ -421,14 +422,7 @@ function AxisStep({
       ))}
       {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} />}
       {preparing && prepared !== null && (
-        <NextStepCard
-          axis={axis}
-          busy={busy}
-          form={prepare}
-          state={prepared}
-          canReload={canReload}
-          onForm={onPrepare}
-        />
+        <NextStepCard axis={axis} busy={busy} form={prepare} state={prepared} live={live} onForm={onPrepare} />
       )}
     </>
   );
