@@ -13,6 +13,7 @@ import {
   type PrinterView,
   type Tune,
   type TuneChoiceBody,
+  type TuneDecision,
   type TuneDetail,
   type TuneId,
   type TuneStepPlan,
@@ -23,21 +24,27 @@ import {
   announcementOf,
   availableActions,
   axisLabel,
+  axisOfStep,
+  currentGuidedStep,
   currentStep,
   driftCheckRunning,
   durationText,
   expectedDurationSeconds,
+  GUIDED_STEPS,
   nextAxis,
   recommendedGain,
   rungView,
   stateText,
   stepSummary,
+  type GuidedStepId,
   type RungView,
 } from "@/guided";
 import { cn } from "@/lib/utils";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
 import { PausePanel } from "./PausePanel";
+import { Steps } from "./Steps";
+import { ActionBar } from "./WorkbenchCards";
 import { Button, Card, Field, NumberField } from "./ui";
 
 function errorText(e: unknown): string {
@@ -176,6 +183,9 @@ function TuneView({ id }: { id: TuneId }) {
   const [plan, setPlan] = useState<TuneStepPlan | null>(null);
   const announced = detail?.state === "Announced";
   const earlier = useEarlierTunes(id, announced);
+  const [picked, setPicked] = useState<GuidedStepId | null>(null);
+  const followed = detail === null ? null : currentGuidedStep(detail);
+  useEffect(() => setPicked(null), [followed]);
 
   const run = (action: () => Promise<unknown>, after?: () => void) => {
     setBusy(true);
@@ -192,29 +202,14 @@ function TuneView({ id }: { id: TuneId }) {
   if (detail === null) return <p className="text-sm text-muted-foreground">{error ?? "Loading the tune"}</p>;
   const actions = availableActions(detail, detail.lock);
   const last = currentStep(detail);
+  const shown = picked ?? followed ?? "setup";
+  const axis = axisOfStep(shown);
+  const lastAxis = last === null ? null : detail.steps[last].axis;
+  const next = nextAxis(detail);
 
   return (
     <div className="space-y-4">
-      <Card label="Tune">
-        <dl className="flex flex-wrap gap-x-8 gap-y-2">
-          <Field label="Stepper">{detail.setup.stepper}</Field>
-          <Field label="State">{stateText(detail.state)}</Field>
-          <Field label="Tracking speeds">{detail.setup.speeds_mm_s.join(", ")} mm/s</Field>
-          <Field label="Steps">{detail.steps.length} of 3</Field>
-        </dl>
-        {detail.notes.length > 0 && (
-          <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
-            {detail.notes.map((n) => (
-              <li key={n.unix_ms}>{n.text}</li>
-            ))}
-          </ul>
-        )}
-        {actions.abandon && (
-          <Button className="mt-3" disabled={busy} onClick={() => run(() => postTuneAbandon(id))}>
-            Abandon tune
-          </Button>
-        )}
-      </Card>
+      <Steps steps={GUIDED_STEPS} current={shown} onSelect={(next) => setPicked(next as GuidedStepId)} />
 
       {actions.restore && (
         <LockBanner
@@ -225,59 +220,128 @@ function TuneView({ id }: { id: TuneId }) {
         />
       )}
 
-      {actionError !== null && (
-        <p role="alert" className="text-sm text-red-400">
-          {actionError}
-        </p>
+      {shown === "setup" && (
+        <Card label="Tune">
+          <dl className="flex flex-wrap gap-x-8 gap-y-2">
+            <Field label="Stepper">{detail.setup.stepper}</Field>
+            <Field label="State">{stateText(detail.state)}</Field>
+            <Field label="Tracking speeds">{detail.setup.speeds_mm_s.join(", ")} mm/s</Field>
+            <Field label="Steps">{detail.steps.length} of 3</Field>
+          </dl>
+          {detail.notes.length > 0 && (
+            <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+              {detail.notes.map((n) => (
+                <li key={n.unix_ms}>{n.text}</li>
+              ))}
+            </ul>
+          )}
+        </Card>
       )}
 
-      {detail.steps.map((_, i) => (
-        <div key={i} className="space-y-4">
-          <StepCard
-            tune={detail}
-            index={i}
-            active={i === last}
-            busy={busy}
-            canChoose={actions.choose && i === last}
-            canExtend={actions.extension && i === last}
-            onChoose={(choice) => run(() => postTuneChoice(id, choice))}
-            onExtend={(direction) => run(() => postTuneExtension(id, direction))}
-          />
-          {actions.decide && i === last && (
-            <PausePanel tune={detail} step={i} busy={busy} onDecide={(d) => run(() => postTuneDecision(id, d))} />
-          )}
-        </div>
-      ))}
-
-      {announced && actions.start && (
-        <AnnouncementPanel
+      {axis !== null && (
+        <AxisStep
           tune={detail}
+          axis={axis}
+          last={last}
+          lastAxis={lastAxis}
+          prepareAxis={actions.prepare ? next : null}
+          actions={actions}
+          busy={busy}
           plan={plan}
           earlier={earlier}
-          busy={busy}
+          announced={announced}
+          onChoose={(choice) => run(() => postTuneChoice(id, choice))}
+          onExtend={(direction) => run(() => postTuneExtension(id, direction))}
+          onDecide={(d) => run(() => postTuneDecision(id, d))}
           onStart={() =>
             run(
               () => postTuneConfirm(id),
               () => setPlan(null),
             )
           }
-        />
-      )}
-
-      {actions.prepare && nextAxis(detail) !== null && (
-        <PrepareCard
-          axis={nextAxis(detail) as NonNullable<ReturnType<typeof nextAxis>>}
-          busy={busy}
           onPrepare={(body) => run(() => postTuneStep(id, body).then(setPlan))}
         />
       )}
 
-      {detail.config_block !== null && (
-        <Card label="Config block">
-          <pre className="overflow-x-auto font-mono text-xs">{detail.config_block}</pre>
-        </Card>
-      )}
+      {shown === "result" &&
+        (detail.config_block !== null ? (
+          <Card label="Config block">
+            <pre className="overflow-x-auto font-mono text-xs">{detail.config_block}</pre>
+          </Card>
+        ) : (
+          <p className="text-sm text-muted-foreground">There is no result yet. It appears when the tune is done.</p>
+        ))}
+
+      <ActionBar blocked={[]} message={actionError === null ? null : { tone: "error", text: actionError }}>
+        {actions.abandon && (
+          <Button disabled={busy} onClick={() => run(() => postTuneAbandon(id))}>
+            Abandon tune
+          </Button>
+        )}
+      </ActionBar>
     </div>
+  );
+}
+
+function AxisStep({
+  tune,
+  axis,
+  last,
+  lastAxis,
+  prepareAxis,
+  actions,
+  busy,
+  plan,
+  earlier,
+  announced,
+  onChoose,
+  onExtend,
+  onDecide,
+  onStart,
+  onPrepare,
+}: {
+  tune: TuneDetail;
+  axis: NonNullable<ReturnType<typeof nextAxis>>;
+  last: number | null;
+  lastAxis: string | null;
+  prepareAxis: ReturnType<typeof nextAxis>;
+  actions: ReturnType<typeof availableActions>;
+  busy: boolean;
+  plan: TuneStepPlan | null;
+  earlier: Tune[];
+  announced: boolean;
+  onChoose: (choice: TuneChoiceBody) => void;
+  onExtend: (direction: "below" | "above") => void;
+  onDecide: (d: TuneDecision) => void;
+  onStart: () => void;
+  onPrepare: (body: { seed: "live" | { typed: number }; repeats: number; lower_k: number; upper_k: number }) => void;
+}) {
+  const indices = tune.steps.flatMap((s, i) => (s.axis === axis ? [i] : []));
+  const preparing = prepareAxis === axis;
+  const announcing = announced && actions.start && lastAxis === axis;
+  if (indices.length === 0 && !preparing) {
+    return <p className="text-sm text-muted-foreground">{axisLabel(axis)} is not reached yet.</p>;
+  }
+  return (
+    <>
+      {indices.map((i) => (
+        <div key={i} className="space-y-4">
+          <StepCard
+            tune={tune}
+            index={i}
+            active={i === last}
+            busy={busy}
+            canChoose={actions.choose && i === last}
+            canExtend={actions.extension && i === last}
+            onChoose={onChoose}
+            onExtend={onExtend}
+          />
+          {actions.decide && i === last && <PausePanel tune={tune} step={i} busy={busy} onDecide={onDecide} />}
+        </div>
+      ))}
+      {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} busy={busy} onStart={onStart} />}
+      {preparing && <PrepareCard axis={axis} busy={busy} onPrepare={onPrepare} />}
+    </>
   );
 }
 

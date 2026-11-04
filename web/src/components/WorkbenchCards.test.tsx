@@ -262,7 +262,7 @@ test("a run held back silently stays disabled without adding a warning", () => {
 
 test("every reason stays available to screen readers as a list", () => {
   render(bar({ blocked: ["the printer is not fully homed", "no control-state frame yet"] }));
-  const reasons = within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem");
+  const reasons = within(screen.getByRole("list", { name: "Why this is disabled" })).getAllByRole("listitem");
   expect(reasons.map((r) => r.textContent)).toEqual(["the printer is not fully homed", "no control-state frame yet"]);
 });
 

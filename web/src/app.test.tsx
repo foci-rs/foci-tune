@@ -430,7 +430,7 @@ test("the manual tune page lays out Test, Pattern, Gains, Filters and Ladder abo
   expect(await screen.findByRole("textbox", { name: "Velocity P sweep values" })).not.toHaveValue("");
   expect(screen.getByRole("spinbutton", { name: "Position I (raw)" })).toHaveAttribute("readonly");
   expect(
-    within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem").length,
+    within(screen.getByRole("list", { name: "Why this is disabled" })).getAllByRole("listitem").length,
   ).toBeGreaterThan(0);
 });
 

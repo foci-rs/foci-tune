@@ -1,5 +1,6 @@
 import type { LadderAxis, Pattern } from "@/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { ReactNode } from "react";
 import { PlayIcon, TriangleAlertIcon, WandSparklesIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -144,6 +145,72 @@ const sentence = (reason: string): string => {
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 };
 
+/** The left side of a bar: the first reason the action is disabled, a count of the rest, a status. */
+function BarStatus({
+  blocked,
+  message,
+}: {
+  blocked: string[];
+  message: { tone: "ok" | "error"; text: string } | null;
+}) {
+  return (
+    <div className="min-h-9 min-w-0 flex-1 space-y-1 text-sm">
+      {blocked.length > 0 && (
+        <p className="flex items-center gap-2 text-amber-400">
+          <TriangleAlertIcon className="size-4 shrink-0" />
+          <span>{sentence(blocked[0])}</span>
+          {blocked.length > 1 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={0} className="shrink-0 underline decoration-dotted">
+                  +{blocked.length - 1} more
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="top" align="start" className="max-w-sm">
+                {blocked.slice(1).map((reason) => (
+                  <p key={reason}>{sentence(reason)}</p>
+                ))}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </p>
+      )}
+      {message !== null && (
+        <p role="status" className={message.tone === "ok" ? "text-emerald-400" : "text-red-400"}>
+          {message.text}
+        </p>
+      )}
+      {blocked.length > 0 && (
+        <ul aria-label="Why this is disabled" className="sr-only">
+          {blocked.map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** A sticky bar with the status on the left and the step's actions on the right. */
+export function ActionBar({
+  blocked,
+  message,
+  children,
+}: {
+  blocked: string[];
+  message: { tone: "ok" | "error"; text: string } | null;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="sticky bottom-0 z-40 -mx-4 border-t bg-background px-4 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <BarStatus blocked={blocked} message={message} />
+        <div className="flex shrink-0 items-center gap-2">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 /** Run and Cancel, with the first reason Run is disabled, a count of the rest and the status. */
 export function RunBar({
   runLabel,
@@ -183,40 +250,7 @@ export function RunBar({
   return (
     <div className="sticky bottom-0 z-40 -mx-4 border-t bg-background px-4 py-3">
       <div className="flex items-center justify-between gap-4">
-        <div className="min-h-9 min-w-0 flex-1 space-y-1 text-sm">
-          {blocked.length > 0 && (
-            <p className="flex items-center gap-2 text-amber-400">
-              <TriangleAlertIcon className="size-4 shrink-0" />
-              <span>{sentence(blocked[0])}</span>
-              {blocked.length > 1 && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={0} className="shrink-0 underline decoration-dotted">
-                      +{blocked.length - 1} more
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" align="start" className="max-w-sm">
-                    {blocked.slice(1).map((reason) => (
-                      <p key={reason}>{sentence(reason)}</p>
-                    ))}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-            </p>
-          )}
-          {message !== null && (
-            <p role="status" className={message.tone === "ok" ? "text-emerald-400" : "text-red-400"}>
-              {message.text}
-            </p>
-          )}
-          {blocked.length > 0 && (
-            <ul aria-label="Why Run is disabled" className="sr-only">
-              {blocked.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <BarStatus blocked={blocked} message={message} />
         <div className="flex shrink-0 items-center gap-2">
           {running && (
             <UiButton variant="outline" onClick={onAbort}>

@@ -447,3 +447,37 @@ export function recommendedGain(tune: Tune, step: number): { gain: number; kind:
   const rung = tune.steps[step].rungs[rec.rung];
   return rung === undefined ? null : { gain: rung.shown, kind: "measured" };
 }
+
+export type GuidedStepId = "setup" | "velocity-p" | "velocity-i" | "position-p" | "result";
+
+export const GUIDED_STEPS: { id: GuidedStepId; label: string }[] = [
+  { id: "setup", label: "Setup" },
+  { id: "velocity-p", label: "Velocity P" },
+  { id: "velocity-i", label: "Velocity I corner" },
+  { id: "position-p", label: "Position P" },
+  { id: "result", label: "Result" },
+];
+
+const AXIS_STEP: Record<TuneAxis, GuidedStepId> = {
+  VelocityP: "velocity-p",
+  VelocityICornerHz: "velocity-i",
+  PositionP: "position-p",
+};
+
+export const axisStepId = (axis: TuneAxis): GuidedStepId => AXIS_STEP[axis];
+
+/** The axis a step of the guided header tunes; null for Setup and Result. */
+export function axisOfStep(id: GuidedStepId): TuneAxis | null {
+  return AXIS_ORDER.find((axis) => AXIS_STEP[axis] === id) ?? null;
+}
+
+/** The header step the operator is working on, from the tune's state. */
+export function currentGuidedStep(tune: Tune): GuidedStepId {
+  if (tune.state === "Done" || tune.state === "Abandoned") return "result";
+  const last = tune.steps[tune.steps.length - 1];
+  if (tune.state === "Ready") {
+    const next = nextAxis(tune);
+    return next === null ? "result" : AXIS_STEP[next];
+  }
+  return last === undefined ? "setup" : AXIS_STEP[last.axis];
+}

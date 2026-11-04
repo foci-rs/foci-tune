@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView, Tune, TuneDetail, TuneState } from "@/api";
 import { GuidedTune } from "./GuidedTune";
@@ -300,4 +300,45 @@ test("a pause decision is posted through the tune's decision route", async () =>
   fireEvent.click(await screen.findByRole("button", { name: "Stop the ladder" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
   expect(bodies[0]).toEqual({ decision: "stop" });
+});
+
+test("the header marks the axis being tuned and Setup shows the tune's settings instead", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Accept the recommendation" });
+  const steps = within(screen.getByRole("navigation", { name: "Steps" }));
+  expect(steps.getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "1Setup",
+    "2Velocity P",
+    "3Velocity I corner",
+    "4Position P",
+    "5Result",
+  ]);
+  expect(steps.getByRole("button", { name: /Velocity P/ })).toHaveAttribute("aria-current", "step");
+  fireEvent.click(steps.getByRole("button", { name: /Setup/ }));
+  expect(screen.getByText("Tracking speeds")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Accept the recommendation" })).not.toBeInTheDocument();
+});
+
+test("an axis that has no step yet says so", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Accept the recommendation" });
+  fireEvent.click(screen.getByRole("button", { name: /Position P/ }));
+  expect(screen.getByText(/not reached yet/i)).toBeInTheDocument();
+});
+
+test("the result step explains that there is no result before the tune is done", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Accept the recommendation" });
+  fireEvent.click(screen.getByRole("button", { name: /Result/ }));
+  expect(screen.getByText(/no result yet/i)).toBeInTheDocument();
+});
+
+test("abandoning is offered from the bar", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  const bar = (await screen.findByRole("button", { name: "Abandon tune" })).closest(".sticky");
+  expect(bar).not.toBeNull();
 });

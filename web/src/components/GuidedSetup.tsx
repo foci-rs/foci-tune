@@ -31,7 +31,7 @@ import {
 } from "@/tune";
 import { ParametersBlock } from "./ParametersBlock";
 import { Button, Card, NumberField } from "./ui";
-import { PatternCard, type PatternNote } from "./WorkbenchCards";
+import { ActionBar, PatternCard, type PatternNote } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
 const DEFAULT_SPEEDS = [50, 195, 400];
@@ -298,42 +298,25 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
           </div>
         </div>
       </Card>
-      <div className="space-y-4">
-        <PatternCard
-          limits={limits}
-          pattern={pattern}
-          proposal={stepper?.proposal.pattern ?? null}
-          mode={mode}
-          isolation={isolation === null || isolation.ok ? null : isolation}
-          refusal={stepper?.proposal.refusal ?? null}
-          error={patternError}
-          notes={patternNotes}
-          disabled={busy}
-          onPattern={setPattern}
-          onMode={chooseMode}
-        />
-        <Card label="Create">
-          <div className="space-y-2">
-            <p className="text-xs text-muted-foreground">
-              Creating the tune records this setup and the starting gains. Nothing moves until you start a step.
-            </p>
-            {blocked.length > 0 && (
-              <ul className="list-disc pl-5 text-xs text-amber-400">
-                {[...new Set(blocked)].map((b) => (
-                  <li key={b}>{b}</li>
-                ))}
-              </ul>
-            )}
-            <Button disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={create}>
-              Create tune
-            </Button>
-            {error !== null && (
-              <p role="alert" className="text-sm text-red-400">
-                {error}
-              </p>
-            )}
-          </div>
-        </Card>
+      <PatternCard
+        limits={limits}
+        pattern={pattern}
+        proposal={stepper?.proposal.pattern ?? null}
+        mode={mode}
+        isolation={isolation === null || isolation.ok ? null : isolation}
+        refusal={stepper?.proposal.refusal ?? null}
+        error={patternError}
+        notes={patternNotes}
+        disabled={busy}
+        onPattern={setPattern}
+        onMode={chooseMode}
+      />
+      <div className="lg:col-span-2">
+        <ActionBar blocked={[...new Set(blocked)]} message={error === null ? null : { tone: "error", text: error }}>
+          <Button disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={create}>
+            Create tune
+          </Button>
+        </ActionBar>
       </div>
     </div>
   );

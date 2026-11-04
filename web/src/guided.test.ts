@@ -5,6 +5,7 @@ import {
   availableActions,
   curveData,
   canChoose,
+  currentGuidedStep,
   defaultProbeSpeed,
   expectedDurationSeconds,
   nextAxis,
@@ -690,5 +691,29 @@ describe("driftLines", () => {
     expect(lines[0]).toMatch(/drift/i);
     expect(lines[1]).toMatch(/400 mm\/s/);
     expect(lines[1]).toMatch(/could not be assessed/i);
+  });
+});
+
+describe("currentGuidedStep", () => {
+  test("a tune with no step yet starts at its first axis", () => {
+    expect(currentGuidedStep(tune("Ready", []))).toBe("velocity-p");
+  });
+  test("a step in progress shows its own axis", () => {
+    for (const state of ["Announced", "Running", "Paused", "AwaitingChoice"] as const) {
+      expect(currentGuidedStep(tune(state, [step({ axis: "VelocityICornerHz" })]))).toBe("velocity-i");
+    }
+  });
+  test("a chosen step moves on to the next axis", () => {
+    expect(currentGuidedStep(tune("Ready", [step({ axis: "VelocityP" })]))).toBe("velocity-i");
+    expect(currentGuidedStep(tune("Ready", [step(), step({ axis: "VelocityICornerHz" })]))).toBe("position-p");
+  });
+  test("a finished or abandoned tune, or one with all three axes done, shows the result", () => {
+    expect(currentGuidedStep(tune("Done"))).toBe("result");
+    expect(currentGuidedStep(tune("Abandoned"))).toBe("result");
+    const all = [step(), step({ axis: "VelocityICornerHz" }), step({ axis: "PositionP" })];
+    expect(currentGuidedStep(tune("Ready", all))).toBe("result");
+  });
+  test("a locked tune stays on the axis it was working on", () => {
+    expect(currentGuidedStep(tune("RestorePending", [step({ axis: "PositionP" })]))).toBe("position-p");
   });
 });
