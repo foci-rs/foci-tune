@@ -1135,11 +1135,10 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 .to_owned(),
             ));
         }
-        let Some(step) = record.steps.pop() else {
-            return Err(TuneError::OutOfOrder(
-                "There is no prepared step to adjust.".to_owned(),
-            ));
-        };
+        let step = record
+            .steps
+            .pop()
+            .expect("an announced tune has a prepared step");
         record.state = TuneState::Ready;
         s.save(&record)?;
         for session in [
