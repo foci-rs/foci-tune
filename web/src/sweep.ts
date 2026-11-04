@@ -41,7 +41,7 @@ export function sweepNotesFor(view: SessionView, printer: PrinterView | null): s
   const repeats = ladder.repeats;
   const unassessable = ladderMedians(sweepLadderEntries(entries, type), repeats)
     .filter((m) => m.unassessable)
-    .map((m) => m.value as number);
+    .map((m) => m.value);
   const tested = session.stepper;
   const board = printer?.steppers.find((s) => s.name === tested)?.serial;
   const others = (printer?.steppers ?? []).filter((s) => s.serial === board && s.name !== tested).map((s) => s.name);
@@ -65,9 +65,10 @@ export function sweepNotesFor(view: SessionView, printer: PrinterView | null): s
     });
   const skippedValues = [
     ...new Set(
-      entries
-        .filter((e) => e.state === "skipped" && e.run?.request.ladder_value != null)
-        .map((e) => e.run?.request.ladder_value as number),
+      entries.flatMap((e) => {
+        const value = e.run?.request.ladder_value;
+        return e.state === "skipped" && value != null ? [value] : [];
+      }),
     ),
   ].sort((a, b) => place(a) - place(b));
   return sweepRejectionNotes({

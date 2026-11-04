@@ -632,8 +632,6 @@ export const PROBE_MIN_EDGES = 20;
 export const PROBE_STEADY_EDGES = 40;
 /** Mirrors `MAX_STROKES` in the stimulus composer. */
 const PROBE_MAX_STROKES = 50;
-// The three constants below are fitted to the stepper_x corexy probe runs of 2026-10-31/11-01
-// (195-707 mm/s, 100-260 mm diagonals) so that no recorded run found fewer edges than estimated.
 // The gain toggles run when Klipper parses them, not in step with the motion, so they lose
 // their spacing below about 150 ms.
 /** Time of each pass in which no clean edge lands: the reversal and the toggle lag. */
