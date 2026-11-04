@@ -13,6 +13,8 @@ import {
   liveSeed,
   prepareState,
   stepPercent,
+  standstillCheckNote,
+  sweepProgress,
   stepSentence,
   axisTitle,
   formFromStep,
@@ -542,10 +544,13 @@ describe("a paused step", () => {
     expect(stepSummary(t, 0).halt).toContain("The sweep stopped at gain");
     expect(stepSummary(t, 0).halt).toContain("the damping could not be measured");
   });
-  test("names the standstill gate as off", () => {
+  test("the standstill check being off is a note for the step, not part of every row", () => {
     const t = tune("Running");
     t.steps[0].standstill_gate_off = 5;
-    expect(rungView(t, 0)[0].verdict).toContain("standstill check off");
+    expect(standstillCheckNote(t, 0)).toBe(
+      "The standstill noise check is off for this step, so a gain is not rejected for noise at standstill.",
+    );
+    for (const row of rungView(t, 0)) expect(row.verdict).not.toMatch(/standstill/i);
   });
 });
 
@@ -561,18 +566,19 @@ describe("gatesBody", () => {
   });
 });
 
-test("a setup without a standstill factor labels every rung gate-off once", () => {
+test("the standstill note appears when the setup or the step has the check off, and only then", () => {
   const off = tune("AwaitingChoice", [step({ standstill_gate_off: 123 })]);
   off.setup.gates.standstill_factor = null;
-  for (const row of rungView(off, 0)) expect(row.verdict.match(/\(standstill check off\)/g)).toHaveLength(1);
+  expect(standstillCheckNote(off, 0)).not.toBeNull();
 
   const setupOnly = tune("AwaitingChoice", [step()]);
   setupOnly.setup.gates.standstill_factor = null;
-  for (const row of rungView(setupOnly, 0)) expect(row.verdict.match(/\(standstill check off\)/g)).toHaveLength(1);
+  expect(standstillCheckNote(setupOnly, 0)).not.toBeNull();
 
   const on = tune("AwaitingChoice", [step({ standstill_gate_off: null })]);
   on.setup.gates.standstill_factor = 2;
-  for (const row of rungView(on, 0)) expect(row.verdict).not.toContain("standstill check off");
+  expect(standstillCheckNote(on, 0)).toBeNull();
+  for (const row of rungView(setupOnly, 0)) expect(row.verdict).not.toMatch(/standstill/i);
 });
 
 describe("comparison fields", () => {
@@ -989,5 +995,44 @@ describe("formFromStep", () => {
     const hz = (4200 * 50000) / (2 * Math.PI * 65536);
     expect(formFromStep(corner, hz).seed).toBeNull();
     expect(formFromStep(corner, 10)?.seed).toBeCloseTo(hz, 6);
+  });
+});
+
+describe("the status of a rung that is being run", () => {
+  const running = (rungOver: Partial<ReturnType<typeof rung>>) => {
+    const t = tune("Running", [step({ repeats: 3, rungs: [rung(0, rungOver), rung(1), rung(2), rung(3)] })]);
+    return rungView(t, 0);
+  };
+  test("a rung whose runs have started says how many of its runs are done, not Pending", () => {
+    const rows = running({ started_unix_ms: 1, run_ids: ["a", "b"] });
+    expect(rows[0].verdict).toMatch(/^Running: 2 of 12 runs/);
+    expect(rows[1].verdict).toMatch(/^Pending/);
+  });
+  test("the first run of a rung is already Running with none done", () => {
+    expect(running({ started_unix_ms: 1 })[0].verdict).toMatch(/^Running: 0 of 12 runs/);
+  });
+  test("a rung that has ended is not shown as running", () => {
+    const rows = running({ started_unix_ms: 1, ended_unix_ms: 2, run_ids: Array(12).fill("r") });
+    expect(rows[0].verdict).not.toMatch(/Running/);
+  });
+});
+
+describe("sweepProgress", () => {
+  const time = (id: string) => ({ id, started_unix_ms: 0, ended_unix_ms: 1 });
+  test("counts the runs finished across the rungs and the drift check against the service's total", () => {
+    const t = tune("Running", [
+      step({
+        run_count: 110,
+        rungs: [rung(0, { run_times: [time("a"), time("b")] }), rung(1, { run_times: [time("c")] })],
+        drift_rung: rung(0, { run_times: [time("d")] }),
+      }),
+    ]);
+    expect(sweepProgress(t, 0)).toEqual({ done: 4, total: 110 });
+  });
+  test("works out the total itself before the service has given one", () => {
+    const t = tune("Running", [
+      step({ run_count: null, repeats: 2, rungs: [rung(0, { raw: 1000 }), rung(1, { raw: 1100 })], seed_raw: 1000 }),
+    ]);
+    expect(sweepProgress(t, 0)).toEqual({ done: 0, total: 2 * 2 * 4 + 4 });
   });
 });

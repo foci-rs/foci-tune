@@ -260,11 +260,10 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (assessment !== null && !flagged && (repeatsDone >= s.repeats || pause !== null || halt !== null)) {
       text = notAssessedText(s, index, pause, halt);
     } else if (repeatsDone >= s.repeats) text = "Measured, waiting for the verdict";
-    else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
+    else if (rung.started_unix_ms !== null && rung.ended_unix_ms === null) {
+      text = `Running: ${rung.run_ids.length} of ${s.repeats * (tune.setup.speeds_mm_s.length + 2)} runs`;
+    } else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
     else text = "Pending";
-
-    if (s.standstill_gate_off !== null || tune.setup.gates.standstill_factor === null)
-      text = `${text} (standstill check off)`;
 
     let recommended: RecommendationKind | null = null;
     if (choice !== undefined && "Measured" in choice && choice.Measured.rung === index) recommended = "measured";
@@ -711,4 +710,25 @@ export function formFromStep(step: TuneStep, live: number | null): PrepareForm {
     upper: step.upper_k,
     divisions: step.octave_divisions,
   };
+}
+
+/** How many of a step's runs are finished and how many it makes in all, as the service counts them. */
+export function sweepProgress(tune: Tune, index: number): { done: number; total: number } {
+  const step = tune.steps[index];
+  const perRepeat = tune.setup.speeds_mm_s.length + 2;
+  const done = [...step.rungs, ...(step.drift_rung === null ? [] : [step.drift_rung])].reduce(
+    (sum, rung) => sum + rung.run_times.length,
+    0,
+  );
+  const seedInLadder = step.rungs.some((r) => r.raw === step.seed_raw);
+  const total = step.run_count ?? step.rungs.length * step.repeats * perRepeat + (seedInLadder ? perRepeat : 0);
+  return { done, total };
+}
+
+/** A note for the step when its standstill noise check is off, whether the setup left it off or the step turned it off. */
+export function standstillCheckNote(tune: Tune, step: number): string | null {
+  const off = tune.steps[step].standstill_gate_off !== null || tune.setup.gates.standstill_factor === null;
+  return off
+    ? "The standstill noise check is off for this step, so a gain is not rejected for noise at standstill."
+    : null;
 }
