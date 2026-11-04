@@ -10,7 +10,6 @@ import {
   type RunType,
 } from "./tune";
 
-/** The sweep's finished runs as the plot and the medians take them. */
 export function sweepLadderEntries(runs: SessionView["runs"], type: RunType) {
   return [...runs]
     .filter(

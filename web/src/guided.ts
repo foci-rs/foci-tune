@@ -117,7 +117,6 @@ export interface StepSummary {
   driftLines: string[];
 }
 
-/** A rung's gain as the operator reads it: the written value, or Hz for a corner. */
 export function gainText(rung: TuneStep["rungs"][number] | undefined, axis: TuneAxis): string {
   if (rung === undefined) return "-";
   return axis === "VelocityICornerHz" ? `${rung.shown.toFixed(1)} Hz` : String(Math.round(rung.shown));
@@ -209,7 +208,6 @@ function notAssessedText(index: number, pause: [number, Pause] | null, halt: [nu
   return "Not checked";
 }
 
-/** A fit's failure reason in plain words, with the long decimals rounded. */
 export function fitReasonText(reason: string): string {
   const frequency = /^damped frequency ([\d.]+) Hz is outside (\d+) to (\d+) Hz$/.exec(reason);
   if (frequency !== null) {
@@ -465,7 +463,7 @@ export const GUIDED_STEPS: { id: GuidedStepId; label: string }[] = [
   { id: "result", label: "Result" },
 ];
 
-/** The step after `shown` in the header, when the tune is already past `shown`; null at the tune's own step. */
+/** Null at the tune's own step. */
 export function nextGuidedStep(shown: GuidedStepId, followed: GuidedStepId): GuidedStepId | null {
   const at = GUIDED_STEPS.findIndex((s) => s.id === shown);
   const to = GUIDED_STEPS.findIndex((s) => s.id === followed);
@@ -480,12 +478,11 @@ const AXIS_STEP: Record<TuneAxis, GuidedStepId> = {
 
 export const axisStepId = (axis: TuneAxis): GuidedStepId => AXIS_STEP[axis];
 
-/** The axis a step of the guided header tunes; null for Setup and Result. */
+/** Null for Setup and Result. */
 export function axisOfStep(id: GuidedStepId): TuneAxis | null {
   return AXIS_ORDER.find((axis) => AXIS_STEP[axis] === id) ?? null;
 }
 
-/** The header step the operator is working on, from the tune's state. */
 export function currentGuidedStep(tune: Tune): GuidedStepId {
   if (tune.state === "Done" || tune.state === "Abandoned") return "result";
   const last = tune.steps[tune.steps.length - 1];
@@ -508,7 +505,7 @@ export interface PrepareForm {
 
 export const DEFAULT_PREPARE: PrepareForm = { seed: null, repeats: 3, lower: -3, upper: 3, divisions: 3 };
 
-/** The step sizes on offer, as divisions of an octave, from the finest to the coarsest. */
+/** Ordered finest to coarsest. */
 export const STEP_DIVISIONS = [6, 4, 3, 2] as const;
 
 /** How much one step changes the gain, in percent. */
@@ -523,7 +520,6 @@ export interface PrepareState {
   problem: string | null;
 }
 
-/** What the next-step form amounts to: its seed, the ladder it gives, and what stops it. */
 export function prepareState(axis: TuneAxis, form: PrepareForm, control: LiveControl | null): PrepareState {
   const unit = axis === "VelocityICornerHz" ? "Hz" : "";
   const seed = form.seed ?? (control === null ? null : liveSeed(axis, control));
@@ -545,7 +541,7 @@ export function prepareState(axis: TuneAxis, form: PrepareForm, control: LiveCon
   return { seed, unit, preview, problem };
 }
 
-/** The live control values of the stepper's own board and channel; null when it is not reporting. */
+/** Null when the stepper's board is not reporting. */
 export function liveControlFor(printer: PrinterView, stepperName: string): LiveControl | null {
   const stepper = printer.steppers.find((s) => s.name === stepperName);
   if (stepper === undefined) return null;
@@ -598,7 +594,6 @@ export function failureText(action: GuidedAction, error: unknown, before: Tune |
   return failureMessage(error);
 }
 
-/** The control values a ladder can start from. */
 export interface LiveControl {
   velocity_p: number;
   velocity_i: number;
@@ -681,7 +676,6 @@ export function previewLadder(
 /** The axis' name as the steps header shows it, without its unit. */
 export const axisTitle = (axis: TuneAxis): string => GUIDED_STEPS.find((s) => s.id === AXIS_STEP[axis])?.label ?? axis;
 
-/** What a prepared step will try, in one sentence: how many gains, their range, the start and the repeats. */
 export function stepSentence(step: TuneStep): string {
   const corner = step.axis === "VelocityICornerHz";
   const gain = (shown: number, raw: number) => (corner ? `${shown.toFixed(1)} Hz` : String(raw));
@@ -711,7 +705,6 @@ export function plannedRuns(preview: LadderPreview, repeats: number, speedCount:
   return preview.gains.length * repeats * perRepeat + (seedInLadder ? perRepeat : 0);
 }
 
-/** The next-step form a prepared step was made from, so it can be adjusted from where it was. */
 export function formFromStep(step: TuneStep, live: number | null): PrepareForm {
   const corner = step.axis === "VelocityICornerHz";
   const seed = corner ? (step.seed_raw === 0 ? 0 : (cornerHz(step.seed_raw, step.pwm_hz) ?? 0)) : step.seed_raw;
@@ -725,7 +718,6 @@ export function formFromStep(step: TuneStep, live: number | null): PrepareForm {
   };
 }
 
-/** How many of a step's runs are finished and how many it makes in all, as the service counts them. */
 export function sweepProgress(tune: Tune, index: number): { done: number; total: number } {
   const step = tune.steps[index];
   const perRepeat = tune.setup.speeds_mm_s.length + 2;
@@ -738,7 +730,6 @@ export function sweepProgress(tune: Tune, index: number): { done: number; total:
   return { done, total };
 }
 
-/** A note for the step when its standstill noise check is off, whether the setup left it off or the step turned it off. */
 export function standstillCheckNote(tune: Tune, step: number): string | null {
   const off = tune.steps[step].standstill_gate_off !== null || tune.setup.gates.standstill_factor === null;
   return off
@@ -746,7 +737,6 @@ export function standstillCheckNote(tune: Tune, step: number): string | null {
     : null;
 }
 
-/** A skipped gain's reason in a few words, with the service's numbers as the detail. */
 export function skipText(reason: string): { text: string; detail: string | null } {
   const body = reason.replace(/^not run: /, "");
   const low = /^median damping ([\d.]+) is below the floor ([\d.]+)$/.exec(body);
@@ -761,7 +751,7 @@ export function skipText(reason: string): { text: string; detail: string | null 
 const measuredRows = (tune: Tune, index: number) =>
   rungView(tune, index).filter((r) => r.skipped === null && r.repeatsDone >= tune.steps[index].repeats);
 
-/** The gain the Accept button takes, as the operator reads it; null while there is no recommendation. */
+/** Null while there is no recommendation. */
 export function acceptGain(tune: Tune, index: number): string | null {
   const step = tune.steps[index];
   const choice = step.recommendation?.choice;
@@ -773,13 +763,11 @@ export function acceptGain(tune: Tune, index: number): string | null {
   return null;
 }
 
-/** The gains that finished measuring, for picking one by hand. */
 export function measuredGains(tune: Tune, index: number): { index: number; label: string }[] {
   const step = tune.steps[index];
   return measuredRows(tune, index).map((r) => ({ index: r.index, label: gainAt(step, r.index) }));
 }
 
-/** Why a typed gain cannot be used, as a sentence; null when it can. */
 export function manualProblem(axis: TuneAxis, value: number, pwmHz: number): string | null {
   if (!Number.isFinite(value)) return "Enter a number.";
   if (!(value > 0)) return "The gain must be above zero.";
@@ -792,14 +780,12 @@ export function manualProblem(axis: TuneAxis, value: number, pwmHz: number): str
 
 export interface ExtensionOffer {
   direction: "below" | "above";
-  /** The gain the extension would try. */
   gain: string;
-  /** How many more runs it makes. */
   runs: number;
   text: string;
 }
 
-/** The one more gain the step offers beyond the end of its range, when the best gain is at that end. */
+/** Offered only when the best gain is at the end of the range. */
 export function extensionOffer(tune: Tune, index: number): ExtensionOffer | null {
   const step = tune.steps[index];
   const extend = stepSummary(tune, index).extend;
@@ -841,7 +827,6 @@ export interface ResultRow {
   active: boolean;
 }
 
-/** What the tune changed, per axis: the gain it started with, the one chosen and how far apart they are. */
 export function resultRows(tune: Tune, live: LiveControl | null): ResultRow[] {
   const [gains] = tune.snapshot;
   const startRaw: Record<TuneAxis, number> = {

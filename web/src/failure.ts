@@ -47,7 +47,6 @@ const REFUSALS: [RegExp, string][] = [
   ],
 ];
 
-/** What the operator reads when a request failed, in words with a next step where there is one. */
 export function failureMessage(e: unknown): string {
   if (e instanceof ApiRequestError) {
     if (e.status === 0) {

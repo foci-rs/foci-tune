@@ -213,7 +213,6 @@ export interface LadderFieldErrors {
   thresholds: string | null;
 }
 
-/** What is wrong with the sweep's inputs, in plain words, keyed by the input it belongs to. */
 export function ladderFieldErrors(input: LadderInput, pwmHz: number | null, probe: boolean): LadderFieldErrors {
   const errors: LadderFieldErrors = { values: null, runs: null, thresholds: null };
   const hz = input.axis === "velocity_i_corner_hz";
@@ -310,9 +309,8 @@ export function buildLadderRequest(base: RunBody, input: LadderInput, pwmHz: num
 }
 
 /**
- * Default rungs from the current gains: velocity P two steps of 100 below and four above (the
- * current value itself is left out), position P from 20 below in six steps of +20, corners 25
- * to 100 Hz; every out-of-range rung omitted.
+ * Default rungs from the current gains; the current value itself and out-of-range rungs are
+ * left out.
  */
 export function defaultLadderValues(axis: LadderAxis, gains: OuterGains, pwmHz: number): number[] {
   const steps = [0, 1, 2, 3, 4, 5];
@@ -682,7 +680,6 @@ export function expectedProbeEdges(input: ProbeEdgeInput): number | null {
 
 export interface ProbeEdgeHint {
   tone: "ok" | "caution" | "warning";
-  /** Expected number of edges. */
   edges: number;
   text: string;
 }
@@ -714,7 +711,7 @@ export function suggestedProbeStrokes(input: Omit<ProbeEdgeInput, "strokes">): n
   return strokes <= PROBE_MAX_STROKES ? strokes : null;
 }
 
-/** The expected step responses as a note for the probe parameters; null when there is none to give. */
+/** Null when there is no estimate to give. */
 export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
   const m = edgeModel(input);
   if (m === null || !m.spacing.ok) return null;
@@ -782,7 +779,6 @@ export function sweepOrder<T extends { run: { request: { ladder_value: number | 
     .map((x) => x.e);
 }
 
-/** The stages of one run, in order. */
 export const RUN_STEPS = [
   "preparing",
   "writing_gains",
@@ -843,7 +839,6 @@ export interface RejectedRun {
   value: number;
   state: string;
   reason: string | null;
-  /** The verification checks that failed, by name. */
   failedChecks: string[];
 }
 
@@ -875,9 +870,7 @@ function rejectionCause(run: RejectedRun, tested: string, others: string[]): str
 }
 
 /**
- * Plain-English lines for the sweep values that have no result: what went wrong with each
- * rejected run, and which values did not run because the sweep stopped. `rejected` is in sweep
- * order, so its first value is where the sweep stopped.
+ * `rejected` is in sweep order, so its first value is where the sweep stopped.
  */
 export function sweepRejectionNotes(input: {
   rejected: RejectedRun[];
@@ -902,9 +895,8 @@ export interface Isolation {
   ok: boolean;
   /** What is wrong, in plain words; empty when the path is fine. */
   message: string;
-  /** The path turned about its middle onto the direction that moves only the tested motor, at its own length where it fits. */
+  /** The path turned about its middle onto the direction that moves only the tested motor. */
   snapped: Pattern;
-  /** The button that applies [`snapped`]. */
   snapLabel: string;
 }
 
@@ -989,9 +981,7 @@ export function patternIsolation(input: {
 const AXIS_UNIT: Record<string, string> = { velocity_i_corner_hz: "Hz" };
 
 /**
- * A run's skip reason in plain words. The sweep's stop rule writes its reasons as terse
- * sentences; they are recognised here so runs recorded earlier read the same. Anything else is
- * shown as it is.
+ * Unrecognised reasons are shown as they are.
  */
 export function skipReasonText(reason: string): string {
   const low = /^ladder stopped: median zeta ([\d.]+) below the floor ([\d.]+) at (\w+) ([\d.]+)$/.exec(reason);

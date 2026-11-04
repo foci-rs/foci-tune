@@ -16,7 +16,6 @@ const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 /** Capitalises the first word of a sentence, except an identifier such as a stepper name. */
 const startSentence = (text: string) => (/^\w+_\w+/.test(text) ? text : capital(text));
 
-/** A run's outcome in plain words. */
 export function outcomeLabel(state: string): string {
   switch (state) {
     case "done":
@@ -37,7 +36,6 @@ export function outcomeLabel(state: string): string {
   }
 }
 
-/** The title and unit of the results column for a kind of test. */
 export function resultColumn(type: RunType): { title: string; unit: string } {
   if (type === "probe") return { title: "Damping", unit: "" };
   if (type === "tracking") return { title: "Position error", unit: "μm" };
@@ -57,7 +55,6 @@ const FILTER_LABELS: [keyof GainRow, string][] = [
   ["position_hz", "Position"],
 ];
 
-/** One gain or filter value as a table or line shows it. */
 export function settingText(key: keyof GainRow, row: GainRow, pwmHz: number | null): string {
   if (key === "velocity_i") {
     return pwmHz === null ? String(row.velocity_i) : `${formatNumber(cornerHz(row.velocity_i, pwmHz), 1)} Hz`;
@@ -106,7 +103,6 @@ export function dampingBar(
   return { fraction, tone: zeta < floor ? "low" : zeta < marginal ? "marginal" : "good" };
 }
 
-/** What a run measured, one plain line per figure. */
 export function measuredLines(run: Run, type: RunType): string[] {
   const m = declaredMetrics(run);
   if (m === null) return ["Nothing was measured."];
@@ -140,7 +136,6 @@ export function measuredLines(run: Run, type: RunType): string[] {
   ];
 }
 
-/** The checks a run went through, each as a plain sentence. */
 export function checkLines(run: Run, tested: string, others: string[]): { passed: boolean; text: string }[] {
   const moved = others.length === 1 ? others[0] : "Another motor";
   return run.verification.map((v) => {
