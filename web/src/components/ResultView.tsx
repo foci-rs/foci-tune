@@ -50,10 +50,6 @@ export function ResultView({ tune, block, live }: { tune: TuneDetail; block: str
         </div>
       </Card>
       <Card label="Printer config" action={<Button onClick={copy}>{copied ? "Copied" : "Copy"}</Button>}>
-        <p className="mb-3 text-sm">
-          To keep them after a restart, replace the [foci {tune.setup.stepper}] section of your printer config with
-          this.
-        </p>
         <pre className="overflow-x-auto font-mono text-xs">{block}</pre>
       </Card>
     </>

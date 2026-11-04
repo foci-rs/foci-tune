@@ -1020,18 +1020,14 @@ test("the finished Result keeps the checklist and adds a before and after table"
   ]);
 });
 
-test("the config block sits in its own card with how to use it and a Copy button", async () => {
+test("the config block sits in its own card with a Copy button and no instructions", async () => {
   finishedTune();
   listed = [{ id: "t1", state: "Done" }];
   const writeText = vi.fn(async () => undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   await resultStep();
   const card = screen.getByRole("region", { name: "Printer config" });
-  expect(
-    within(card).getByText(
-      "To keep them after a restart, replace the [foci stepper_x] section of your printer config with this.",
-    ),
-  ).toBeInTheDocument();
+  expect(within(card).queryByText(/after a restart/)).toBeNull();
   expect(within(card).queryByText(/using these gains now/)).toBeNull();
   expect(card).toHaveTextContent("pid_velocity_p: 1000");
   fireEvent.click(within(card).getByRole("button", { name: "Copy" }));
