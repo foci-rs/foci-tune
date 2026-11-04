@@ -65,7 +65,10 @@ export function RunQueueCard({
               {otherSession && <span className="ml-2 text-muted-foreground">in another session</span>}
             </Row>
             <Row label="Status">
-              <span className="text-emerald-300">{capital(runStatusLabel(current.state, kind))}</span>
+              <span className="text-emerald-300">
+                {capital(runStatusLabel(current.state, kind))}
+                {kind !== undefined && ` (${capital(kind)})`}
+              </span>
               {"reason" in current && <span className="ml-2 text-muted-foreground">{current.reason}</span>}
             </Row>
             {progress !== null && (

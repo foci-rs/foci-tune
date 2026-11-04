@@ -821,8 +821,8 @@ test("the standstill run of a step reads Measuring while it is in its motion sta
     engine: { current: { session: "c", run: "run1", state: "moving" }, queue: [] },
   } as unknown as PrinterView;
   render(<GuidedTune printer={standstillRunning} />);
-  expect(await screen.findByText("Measuring")).toBeInTheDocument();
-  expect(screen.queryByText("Moving")).toBeNull();
+  expect(await screen.findByText("Measuring (Standstill)")).toBeInTheDocument();
+  expect(screen.queryByText(/^Moving/)).toBeNull();
 });
 
 test("the pause decisions are in the bar, after Abandon, with Continue last", async () => {

@@ -100,7 +100,7 @@ test("between two runs the sweep row is still there", () => {
 
 test("a standstill run reads Measuring in its motion stage, a probe run Moving", () => {
   const { rerender } = show({ current: current("moving"), kind: "standstill" });
-  expect(screen.getByRole("region", { name: "Run queue" })).toHaveTextContent("Measuring");
+  expect(screen.getByText("Measuring (Standstill)")).toBeInTheDocument();
   rerender(
     <RunQueueCard
       current={current("moving")}
@@ -114,5 +114,28 @@ test("a standstill run reads Measuring in its motion stage, a probe run Moving",
       queued={0}
     />,
   );
-  expect(screen.getByRole("region", { name: "Run queue" })).toHaveTextContent("Moving");
+  expect(screen.getByText("Moving (Probe)")).toBeInTheDocument();
+});
+
+test("every stage names the kind of run, so a slow verifying can be told by test", () => {
+  show({ current: current("verifying"), kind: "probe" });
+  expect(screen.getByText("Verifying (Probe)")).toBeInTheDocument();
+});
+
+test("a tracking run reads Moving (Tracking), and without a known kind the stage stands alone", () => {
+  const { rerender } = show({ current: current("moving"), kind: "tracking" });
+  expect(screen.getByText("Moving (Tracking)")).toBeInTheDocument();
+  rerender(
+    <RunQueueCard
+      current={current("moving")}
+      otherSession={false}
+      position={null}
+      steps={[]}
+      predictedS={null}
+      nowMs={0}
+      pending={[]}
+      queued={0}
+    />,
+  );
+  expect(screen.getByText("Moving")).toBeInTheDocument();
 });
