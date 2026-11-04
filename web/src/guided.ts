@@ -653,3 +653,25 @@ export function previewLadder(
   }
   return preview;
 }
+
+/** The axis' name as the steps header shows it, without its unit. */
+export const axisTitle = (axis: TuneAxis): string => GUIDED_STEPS.find((s) => s.id === AXIS_STEP[axis])?.label ?? axis;
+
+/** What a prepared step will try, in one sentence: how many gains, their range, the start and the repeats. */
+export function stepSentence(step: TuneStep): string {
+  const corner = step.axis === "VelocityICornerHz";
+  const gain = (shown: number, raw: number) => (corner ? `${shown.toFixed(1)} Hz` : String(raw));
+  const first = step.rungs[0];
+  const last = step.rungs[step.rungs.length - 1];
+  const times = step.repeats === 1 ? "once" : `${step.repeats} times`;
+  if (first === undefined || last === undefined) return "No gains to test.";
+  if (step.rungs.length === 1) return `1 gain, ${gain(first.shown, first.raw)}, tested ${times}.`;
+  const start = corner
+    ? step.seed_raw === 0
+      ? SEED_CORNER_HZ
+      : (cornerHz(step.seed_raw, step.pwm_hz) ?? SEED_CORNER_HZ)
+    : step.seed_raw;
+  const from = gain(first.shown, first.raw);
+  const to = gain(last.shown, last.raw);
+  return `${step.rungs.length} gains from ${from} to ${to}, around the starting gain of ${corner ? `${start.toFixed(1)} Hz` : start}, each tested ${times}.`;
+}

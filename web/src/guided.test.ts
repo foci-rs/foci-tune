@@ -13,6 +13,8 @@ import {
   liveSeed,
   prepareState,
   stepPercent,
+  stepSentence,
+  axisTitle,
   previewLadder,
   defaultProbeSpeed,
   expectedDurationSeconds,
@@ -913,5 +915,42 @@ describe("step size", () => {
     const control = { velocity_p: 1000, velocity_i: 50, position_p: 800, pwm_hz: 50000 };
     const state = prepareState("VelocityP", { ...DEFAULT_PREPARE, divisions: 2, lower: -2, upper: 2 }, control);
     expect(state.preview?.gains.map((g) => g.raw)).toEqual([500, 707, 1000, 1414, 2000]);
+  });
+});
+
+describe("stepSentence", () => {
+  const p = (raws: number[], over: Partial<TuneStep> = {}) =>
+    step({ seed_raw: 841, repeats: 3, rungs: raws.map((raw) => rung(0, { raw, shown: raw })), ...over });
+
+  test("says how many gains, from where to where, around what, and how often each is tested", () => {
+    expect(stepSentence(p([421, 530, 668, 841, 1060, 1335, 1682]))).toBe(
+      "7 gains from 421 to 1682, around the starting gain of 841, each tested 3 times.",
+    );
+  });
+  test("one repeat is tested once", () => {
+    expect(stepSentence(p([421, 841], { repeats: 1 }))).toBe(
+      "2 gains from 421 to 841, around the starting gain of 841, each tested once.",
+    );
+  });
+  test("a single gain is not a range", () => {
+    expect(stepSentence(p([841]))).toBe("1 gain, 841, tested 3 times.");
+  });
+  test("a corner ladder is in Hz, and a zero seed starts at 50 Hz", () => {
+    const corner = step({
+      axis: "VelocityICornerHz",
+      seed_raw: 0,
+      repeats: 2,
+      rungs: [25, 50, 100].map((shown) => rung(0, { shown, raw: 1 })),
+    });
+    expect(stepSentence(corner)).toBe(
+      "3 gains from 25.0 Hz to 100.0 Hz, around the starting gain of 50.0 Hz, each tested 2 times.",
+    );
+  });
+});
+
+describe("axisTitle", () => {
+  test("names the axis without its unit", () => {
+    expect(axisTitle("VelocityICornerHz")).toBe("Velocity I corner");
+    expect(axisTitle("VelocityP")).toBe("Velocity P");
   });
 });

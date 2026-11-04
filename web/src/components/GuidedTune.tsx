@@ -28,6 +28,7 @@ import {
   availableActions,
   axisLabel,
   axisOfStep,
+  axisTitle,
   currentGuidedStep,
   currentStep,
   driftCheckRunning,
@@ -38,6 +39,7 @@ import {
   nextAxis,
   recommendedGain,
   rungView,
+  stepSentence,
   stepSummary,
   DEFAULT_PREPARE,
   liveControlFor,
@@ -532,15 +534,14 @@ function StepCard({
   const perRepeat = tune.setup.speeds_mm_s.length + 2;
 
   return (
-    <Card label={`Step ${index + 1}: ${label}`}>
-      <dl className="mb-3 flex flex-wrap gap-x-8 gap-y-2">
-        <Field label="Seed (raw)">{step.seed_raw}</Field>
-        <Field label="Range">
-          k {step.lower_k} to {step.upper_k}
-        </Field>
-        <Field label="Repeats">{step.repeats}</Field>
-        <Field label="Chosen">{step.chosen_shown === null ? "not yet" : step.chosen_shown.toFixed(2)}</Field>
-      </dl>
+    <Card label={`${axisTitle(step.axis)} sweep`}>
+      <p className="mb-3 text-sm">{stepSentence(step)}</p>
+      {step.chosen_shown !== null && (
+        <p className="mb-3 text-sm">
+          Chosen gain:{" "}
+          {step.axis === "VelocityICornerHz" ? `${step.chosen_shown.toFixed(1)} Hz` : Math.round(step.chosen_shown)}
+        </p>
+      )}
       {summary.failed !== null && <p className="mb-2 text-sm text-amber-400">Stopped: {summary.failed}</p>}
       {summary.halt !== null && <p className="mb-2 text-sm text-amber-400">{summary.halt}</p>}
       <SweepResultsTable axis={step.axis} label={label} rows={rows} speeds={tune.setup.speeds_mm_s} />

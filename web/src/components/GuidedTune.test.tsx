@@ -628,3 +628,15 @@ test("a chosen step size is sent with the step", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() => expect(bodies[0]).toMatchObject({ octave_divisions: 6 }));
 });
+
+test("the step card is titled by its sweep and says in a sentence what it tries", async () => {
+  current = detail("Running");
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByRole("region", { name: "Velocity P sweep" })).toBeInTheDocument();
+  expect(
+    screen.getByText("3 gains from 800 to 1260, around the starting gain of 1000, each tested 2 times."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/Step 1/)).toBeNull();
+  expect(screen.queryByText(/Seed \(raw\)/)).toBeNull();
+  expect(screen.queryByText(/^k /)).toBeNull();
+});
