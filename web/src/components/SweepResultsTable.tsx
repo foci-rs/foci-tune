@@ -1,23 +1,9 @@
-import type { ReactNode } from "react";
 import type { TuneAxis } from "@/api";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RungView } from "@/guided";
 import { cn } from "@/lib/utils";
+import { Explained } from "./Explained";
 
 const fmt = (n: number | null, digits = 3) => (n === null ? "-" : n.toFixed(digits));
-
-function Explained({ tip, children }: { tip: string; children: ReactNode }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span tabIndex={0} className="cursor-help underline decoration-dotted">
-          {children}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{tip}</TooltipContent>
-    </Tooltip>
-  );
-}
 
 /** One row per gain of a sweep: its status, its score and the numbers the score comes from. */
 export function SweepResultsTable({

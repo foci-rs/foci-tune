@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render as renderPlain, screen, within } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { FitOutcome, Pause, ProbeRecord, RepeatResult, Run, Series, Tune } from "@/api";
 import { PausePanel } from "./PausePanel";
@@ -47,6 +48,8 @@ const probeRecord = (velocity: FitOutcome, edges: number): ProbeRecord => ({
 });
 
 const result = (sd: number): RepeatResult => ({ zeta: "Unassessable", p99_by_speed: [3.5, 4.5], worst_torque_sd: sd });
+
+const render = (ui: React.ReactElement) => renderPlain(<TooltipProvider>{ui}</TooltipProvider>);
 
 function runWith(id: string, metrics: Run["metrics"]): Run {
   return { id, declared_channel: 0, metrics, state: "done" } as unknown as Run;
@@ -151,8 +154,8 @@ test("plots the paused rung's repeats and dims the previous rung's", async () =>
 
 test("a standstill pause counts every emitted rest and shows a placeholder for a missing sd", async () => {
   render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} />);
-  expect(await screen.findByText(/3 of 3 rests qualified/)).toBeInTheDocument();
-  expect(screen.getByText(/worst torque sd 7\.500/)).toBeInTheDocument();
+  expect(await screen.findByText(/3 of 3 rest periods usable/)).toBeInTheDocument();
+  expect(screen.getByText(/standstill noise 7\.500/)).toBeInTheDocument();
   expect(screen.getByText("2.500")).toBeInTheDocument();
   expect(screen.getByText("3.500")).toBeInTheDocument();
   const nullRest = screen.getByText(/^rest 3:/);
@@ -170,7 +173,7 @@ test("a run that did not finish well gives its reason beside the repeat", async 
   expect(await screen.findByText(/channel 0 did not move/)).toBeInTheDocument();
 });
 
-test("shows this and the previous rung's median p99 per speed and worst torque sd", async () => {
+test("the medians are listed per gain, as error at each speed and standstill noise", async () => {
   const tune = pausedTune();
   tune.steps[0].assessment = {
     verdicts: [],
@@ -185,14 +188,60 @@ test("shows this and the previous rung's median p99 per speed and worst torque s
     ],
   };
   render(<PausePanel tune={tune} step={0} />);
-  const table = await screen.findByRole("table", { name: "Rung medians" });
-  const [, thisRung, previousRung] = within(table).getAllByRole("row");
+  const table = await screen.findByRole("table", { name: "Medians per gain" });
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((c) => c.textContent),
+  ).toEqual(["Gain", "Error at 50 mm/s (μm)", "Error at 100 mm/s (μm)", "Standstill noise"]);
+  const [, thisGain, previousGain] = within(table).getAllByRole("row");
   const cells = (row: HTMLElement) =>
     within(row)
       .getAllByRole("cell")
       .map((c) => c.textContent);
-  expect(cells(thisRung)).toEqual(["2", "3.125", "4.750", "6.500"]);
-  expect(cells(previousRung)).toEqual(["1", "5.500", "6.250", "9.125"]);
+  expect(cells(thisGain)).toEqual(["1260", "3.125", "4.750", "6.500"]);
+  expect(cells(previousGain)).toEqual(["1000", "5.500", "6.250", "9.125"]);
+});
+
+test("the repeats table uses plain column names and numbers its rows by gain", async () => {
+  render(<PausePanel tune={pausedTune()} step={0} />);
+  const table = await screen.findByRole("table", { name: "Probe repeats" });
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((c) => c.textContent),
+  ).toEqual([
+    "Repeat",
+    "Gain",
+    "Damping (speed response)",
+    "Valid fits",
+    "Step responses",
+    "Fit error",
+    "Damping (torque response)",
+  ]);
+  const first = within(table).getAllByRole("row")[1];
+  expect(within(first).getAllByRole("cell")[1]).toHaveTextContent("1260");
+});
+
+test("standstill noise explains itself", async () => {
+  const tune = pausedTune();
+  tune.steps[0].assessment = {
+    verdicts: [],
+    halt: null,
+    best: null,
+    runner_up: null,
+    tie: [],
+    spreads: [],
+    medians: [
+      { zeta: 0.1, p99_by_speed: [5.5, 6.25], worst_torque_sd: 9.125 },
+      { zeta: 0.2, p99_by_speed: [3.125, 4.75], worst_torque_sd: 6.5 },
+    ],
+  };
+  render(<PausePanel tune={tune} step={0} />);
+  fireEvent.focus(await screen.findByText("Standstill noise"));
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(
+    "How much the motor's torque jitters while holding still. Lower is quieter.",
+  );
 });
 
 test("a failed fetch is reported on one line", async () => {

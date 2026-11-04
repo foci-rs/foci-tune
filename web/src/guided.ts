@@ -116,11 +116,14 @@ export interface StepSummary {
   driftLines: string[];
 }
 
-const gainAt = (step: TuneStep, index: number): string => {
-  const shown = step.rungs[index]?.shown;
-  if (shown === undefined) return `${index + 1}`;
-  return step.axis === "VelocityICornerHz" ? `${shown.toFixed(1)} Hz` : String(Math.round(shown));
-};
+/** A rung's gain as the operator reads it: the written value, or Hz for a corner. */
+export function gainText(rung: TuneStep["rungs"][number] | undefined, axis: TuneAxis): string {
+  if (rung === undefined) return "-";
+  return axis === "VelocityICornerHz" ? `${rung.shown.toFixed(1)} Hz` : String(Math.round(rung.shown));
+}
+
+const gainAt = (step: TuneStep, index: number): string =>
+  step.rungs[index] === undefined ? `${index + 1}` : gainText(step.rungs[index], step.axis);
 
 export function noteText(note: RungNote): string {
   if ("OutOfRange" in note) return `${note.OutOfRange} left out: outside the writable range`;

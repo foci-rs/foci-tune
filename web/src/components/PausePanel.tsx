@@ -10,9 +10,10 @@ import {
   type Tune,
 } from "@/api";
 import { failureMessage } from "@/failure";
-import { fitReasonText, stepSummary } from "@/guided";
+import { fitReasonText, gainText, stepSummary } from "@/guided";
 import { declaredMetrics } from "@/tune";
 import { EnsemblePlot } from "./EnsemblePlot";
+import { Explained } from "./Explained";
 import { PALETTE } from "./PlotPanel";
 import type { OverlayRun } from "./TracePanels";
 import { Card } from "./ui";
@@ -139,19 +140,19 @@ export function PausePanel({ tune, step }: { tune: Tune; step: number }) {
           <thead className="text-xs text-muted-foreground">
             <tr>
               <th className="pr-3 align-top font-medium">Repeat</th>
-              <th className="pr-3 align-top font-medium">Rung</th>
-              <th className="pr-3 align-top font-medium">Velocity fit</th>
-              <th className="pr-3 align-top font-medium">Admissible starts</th>
-              <th className="pr-3 align-top font-medium">Edges</th>
-              <th className="pr-3 align-top font-medium">Std error at peak</th>
-              <th className="pr-3 align-top font-medium">Torque zeta</th>
+              <th className="pr-3 align-top font-medium">Gain</th>
+              <th className="pr-3 align-top font-medium">Damping (speed response)</th>
+              <th className="pr-3 align-top font-medium">Valid fits</th>
+              <th className="pr-3 align-top font-medium">Step responses</th>
+              <th className="pr-3 align-top font-medium">Fit error</th>
+              <th className="pr-3 align-top font-medium">Damping (torque response)</th>
             </tr>
           </thead>
           <tbody className="font-mono">
             {rows.map(({ r, probe, loading, probeProblem }) => (
               <tr key={r.probeId} className={r.rung === pausedRung ? "" : "text-muted-foreground"}>
                 <td className="pr-3">{r.repeat + 1}</td>
-                <td className="pr-3">{r.rung + 1}</td>
+                <td className="pr-3">{gainText(s.rungs[r.rung], s.axis)}</td>
                 <td className="pr-3 font-sans">
                   {probe === null
                     ? loading
@@ -173,22 +174,26 @@ export function PausePanel({ tune, step }: { tune: Tune; step: number }) {
 
       {medians !== undefined && (
         <div className="mt-4 overflow-x-auto">
-          <table aria-label="Rung medians" className="w-full text-left text-sm">
+          <table aria-label="Medians per gain" className="w-full text-left text-sm">
             <thead className="text-xs text-muted-foreground">
               <tr>
-                <th className="pr-3 align-top font-medium">Rung</th>
+                <th className="pr-3 align-top font-medium">Gain</th>
                 {speeds.map((v) => (
-                  <th key={v} className="pr-3">
+                  <th key={v} className="pr-3 align-top font-medium">
                     Error at {v} mm/s (μm)
                   </th>
                 ))}
-                <th className="pr-3 align-top font-medium">Worst torque sd</th>
+                <th className="pr-3 align-top font-medium">
+                  <Explained tip="How much the motor's torque jitters while holding still. Lower is quieter.">
+                    Standstill noise
+                  </Explained>
+                </th>
               </tr>
             </thead>
             <tbody className="font-mono">
               {(pausedRung > 0 ? [pausedRung, pausedRung - 1] : [pausedRung]).map((rung) => (
                 <tr key={rung}>
-                  <td className="pr-3">{rung + 1}</td>
+                  <td className="pr-3">{gainText(s.rungs[rung], s.axis)}</td>
                   {speeds.map((v, i) => (
                     <td key={v} className="pr-3">
                       {fixed(medians[rung]?.p99_by_speed[i])}
@@ -207,9 +212,9 @@ export function PausePanel({ tune, step }: { tune: Tune; step: number }) {
           {restsByRepeat.map(({ r, rests, problem }) => (
             <div key={r.probeId}>
               <p>
-                Repeat {r.repeat + 1}: worst torque sd{" "}
+                Repeat {r.repeat + 1}: standstill noise{" "}
                 {fixed(s.rungs[pausedRung].repeat_values[r.repeat]?.worst_torque_sd)}
-                {rests !== null && `, ${rests.length} of ${required} rests qualified`}
+                {rests !== null && `, ${rests.length} of ${required} rest periods usable`}
               </p>
               {problem !== null && <p className="text-xs text-amber-400">Standstill run {problem}</p>}
               {rests !== null && rests.length > 0 && (
