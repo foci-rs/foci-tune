@@ -1243,7 +1243,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 step.assessment = None;
                 record.notes.push(TuneNote::now(format!(
                     "operator continued past rung {}: {}",
-                    paused.rung,
+                    paused.rung + 1,
                     pause_text(paused.reason)
                 )));
                 let setup = record.setup.clone();

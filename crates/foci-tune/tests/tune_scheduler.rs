@@ -1705,6 +1705,16 @@ async fn standstill_baseline_pause_continue_disables_the_gate() {
 
     let step = &tune.steps[0];
     assert!(step.standstill_gate_off.is_some());
+    let note = tune
+        .notes
+        .iter()
+        .find(|n| n.text.contains("continued"))
+        .expect("the decision is noted");
+    assert!(
+        note.text.contains("continued past rung 1:"),
+        "the first rung is rung 1, as in the stop note: {}",
+        note.text
+    );
     assert_eq!(
         step.rungs[0].waived.as_ref().map(|w| w.reason),
         Some(Pause::StandstillBaselineUnassessable)
