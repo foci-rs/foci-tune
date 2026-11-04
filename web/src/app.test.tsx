@@ -153,7 +153,7 @@ test("the manual tune page labels Run as Running while a run is in flight, witho
     },
   ] as unknown as PrinterView["steppers"];
   respond(view);
-  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+  render(<RouterProvider router={createTestRouter("/tune/manual?step=prepare")} />);
   const run = await screen.findByRole("button", { name: "Running" });
   expect(run).toBeDisabled();
   expect(screen.queryByText(/run is in flight/i)).toBeNull();
@@ -492,7 +492,7 @@ test("a custom path off the isolating diagonal is flagged and blocks Run", async
   await vi.waitFor(() => expect(screen.queryByText(message)).toBeNull());
 });
 
-test("pressing Run shows Running at once, with no flash of warning and no queued message", async () => {
+test("pressing Run switches to the Run step at once, with no flash of warning and no queued message", async () => {
   const control = {
     pwm_hz: 50_000,
     encoder_counts_per_rev: 4000,
@@ -556,7 +556,99 @@ test("pressing Run shows Running at once, with no flash of warning and no queued
     fireEvent.click(run);
   });
 
-  expect(await screen.findByRole("button", { name: "Running" })).toBeDisabled();
+  expect(await screen.findByRole("button", { name: "Set up another run" })).toBeInTheDocument();
   expect(screen.queryByText(/waiting for the engine/i)).toBeNull();
   expect(screen.queryByText(/queued/i)).toBeNull();
+});
+
+function stepperPage(over: Partial<PrinterView> = {}) {
+  const control = {
+    pwm_hz: 50_000,
+    encoder_counts_per_rev: 4000,
+    velocity_p: 841,
+    velocity_i: 412,
+    position_p: 120,
+    position_i: 4,
+    torque_p: 300,
+    torque_i: 20,
+    flux_p: 310,
+    flux_i: 21,
+    velocity_filter_hz: 200,
+    torque_filter_hz: 1000,
+    position_filter_hz: 300,
+    flux_filter_hz: 1000,
+  };
+  const stepper = {
+    name: "stepper_x",
+    mcu: "ouroboros",
+    channel: 0,
+    serial: "AAA",
+    axis: "x",
+    kinematics: "corexy",
+    position_min: 0,
+    position_max: 300,
+    motor_rotation_distance_mm: 40,
+    homing_current_a: null,
+    electrical_model_present: true,
+    unusable: null,
+    proposal: { pattern: { start: [100.5, 104], end: [200.5, 204] }, refusal: null },
+  } as unknown as StepperView;
+  return {
+    ...printerView({ homed_axes: "xyz" }),
+    steppers: [stepper, { ...stepper, name: "stepper_y", axis: "y", channel: 1 } as StepperView],
+    boards: [
+      board({
+        serial: "AAA",
+        channels: [
+          { channel: 0, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+          { channel: 1, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+        ] as never,
+      }),
+    ],
+    preconditions: [
+      { stepper: "stepper_x", ok: true, failing: [] },
+      { stepper: "stepper_y", ok: true, failing: [] },
+    ],
+    ...over,
+  } as PrinterView;
+}
+
+test("the manual page opens on Prepare, with two steps and the setup cards", async () => {
+  respond(stepperPage());
+  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+  expect(await screen.findByRole("region", { name: "Test setup" })).toBeInTheDocument();
+  const steps = screen.getByRole("navigation", { name: "Steps" });
+  expect(within(steps).getByRole("button", { name: /Prepare/ })).toHaveAttribute("aria-current", "step");
+  expect(within(steps).getByRole("button", { name: /Run/ })).not.toHaveAttribute("aria-current");
+  expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
+});
+
+test("the Run step shows no setup cards, and Set up another run goes back with everything kept", async () => {
+  respond(stepperPage());
+  render(<RouterProvider router={createTestRouter("/tune/manual?step=run")} />);
+  expect(await screen.findByRole("button", { name: "Set up another run" })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Test setup" })).toBeNull();
+  expect(screen.getByRole("button", { name: /Run/, description: "" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Set up another run" }));
+  expect(await screen.findByRole("region", { name: "Test setup" })).toBeInTheDocument();
+});
+
+test("a run in flight lands on the Run step with its queue card, and a step can be picked", async () => {
+  respond(
+    stepperPage({
+      engine: { current: { session: "s", run: "r1", state: "moving" }, queue: ["r2"], unconfirmed_kill: null },
+    } as Partial<PrinterView>),
+  );
+  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+  expect(await screen.findByRole("region", { name: "Run queue" })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Test setup" })).toBeNull();
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Prepare/ }));
+  expect(await screen.findByRole("region", { name: "Test setup" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Running" })).toBeDisabled();
+});
+
+test("with nothing run yet, the Run step says so", async () => {
+  respond(stepperPage());
+  render(<RouterProvider router={createTestRouter("/tune/manual?step=run")} />);
+  expect(await screen.findByText(/Nothing has run yet/)).toBeInTheDocument();
 });

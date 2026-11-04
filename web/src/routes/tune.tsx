@@ -1,4 +1,4 @@
-import { createRoute, Outlet, redirect } from "@tanstack/react-router";
+import { createRoute, Outlet, redirect, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiRequestError,
@@ -27,6 +27,7 @@ import { EdgeHintLine } from "@/components/EdgeHint";
 import { RunDetails } from "@/components/RunDetails";
 import { RunQueueCard } from "@/components/RunQueueCard";
 import { SessionCard } from "@/components/SessionCard";
+import { Steps } from "@/components/Steps";
 import { sweepLadderEntries, sweepNotesFor } from "@/sweep";
 import { TestCard } from "@/components/TestCard";
 import { LadderCard, PatternCard, RunBar, type PatternNote } from "@/components/WorkbenchCards";
@@ -92,9 +93,13 @@ export const Route = createRoute({
   component: TunePage,
 });
 
+export type ManualStep = "prepare" | "run";
+
 export const ManualRoute = createRoute({
   getParentRoute: () => Route,
   path: "manual",
+  validateSearch: (search: Record<string, unknown>): { step?: ManualStep } =>
+    search.step === "prepare" || search.step === "run" ? { step: search.step } : {},
   component: ManualTune,
 });
 
@@ -486,6 +491,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
     const done = (id: SessionId, runs: string[]) => {
       setLink({ id, setup: started });
       setAwaiting(runs);
+      goTo("run");
       refresh();
     };
     const request =
@@ -525,6 +531,10 @@ function Workbench({ printer }: { printer: PrinterView }) {
   };
 
   const busyEngine = current !== null || queue.length > 0;
+  const search = ManualRoute.useSearch();
+  const navigate = useNavigate();
+  const step: ManualStep = search.step ?? (busyEngine ? "run" : "prepare");
+  const goTo = (next: string) => navigate({ to: "/tune/manual", search: { step: next as ManualStep } });
   const recording =
     current !== null && shown !== null && current.session === shown.id && RECORDING_STATES.has(current.state);
   const recordingStepper = shown === null ? undefined : printer.steppers.find((s) => s.name === shown.setup.stepper);
@@ -536,115 +546,135 @@ function Workbench({ printer }: { printer: PrinterView }) {
 
   const changedSetup = link !== null && active === null;
 
+  const hasRun = busyEngine || (view !== null && view.session !== null);
   return (
     <div className="space-y-4">
       <h1 className="sr-only">Tune</h1>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <TestCard
-          steppers={printer.steppers}
-          stepperName={stepperName}
-          type={type}
-          disabled={busy}
-          onStepper={setStepperName}
-          onType={setType}
-        >
-          {setup !== null && (
-            <ParametersBlock
+      <Steps
+        steps={[
+          { id: "prepare", label: "Prepare" },
+          { id: "run", label: "Run" },
+        ]}
+        current={step}
+        onSelect={goTo}
+      />
+      {step === "prepare" ? (
+        <>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <TestCard
+              steppers={printer.steppers}
+              stepperName={stepperName}
               type={type}
-              setup={setup}
-              speedsText={speedsText}
               disabled={busy}
-              onSpeedsText={setSpeedsText}
-              onSetup={updateSetup}
+              onStepper={setStepperName}
+              onType={setType}
+            >
+              {setup !== null && (
+                <ParametersBlock
+                  type={type}
+                  setup={setup}
+                  speedsText={speedsText}
+                  disabled={busy}
+                  onSpeedsText={setSpeedsText}
+                  onSetup={updateSetup}
+                />
+              )}
+              {edgeHint !== null && <EdgeHintLine hint={edgeHint} />}
+            </TestCard>
+            <PatternCard
+              limits={limits}
+              pattern={pattern}
+              proposal={stepper?.proposal.pattern ?? null}
+              mode={mode}
+              isolation={isolation.ok ? null : isolation}
+              refusal={stepper?.proposal.refusal ?? null}
+              error={patternError}
+              notes={patternNotes}
+              disabled={busy}
+              onPattern={setPattern}
+              onMode={chooseMode}
+            />
+            <GainsCard
+              gains={gains}
+              positionI={view?.session != null ? view.session.gains.position_i : (channel?.control.position_i ?? 0)}
+              live={channel?.control}
+              pwmHz={pwmHz}
+              disabled={busy}
+              sweptAxis={ladderOn ? ladder.axis : null}
+              canLoadLive={channel !== undefined}
+              onGains={setGains}
+              onLoadLive={loadLiveGains}
+            />
+            <FiltersCard
+              filters={filters}
+              disabled={busy}
+              canLoadLive={channel !== undefined}
+              onFilters={setFilters}
+              onLoadLive={loadLiveFilters}
+            />
+          </div>
+          <LadderCard
+            on={ladderOn}
+            ladder={ladder}
+            errors={sweepErrors}
+            defaultsFor={defaultsForAxis}
+            probe={type === "probe"}
+            disabled={busy}
+            onToggle={toggleSweep}
+            onLadder={setLadder}
+          />
+        </>
+      ) : (
+        <>
+          {!hasRun && (
+            <p className="text-sm text-muted-foreground">Nothing has run yet. Set up a run first, then press Run.</p>
+          )}
+          {(current !== null || queue.length > 0) && (
+            <RunQueueCard
+              current={current}
+              otherSession={current !== null && active !== null && current.session !== active.id}
+              position={position}
+              steps={currentRecord?.steps ?? []}
+              predictedS={currentRecord?.predicted_s ?? null}
+              nowMs={nowMs}
+              pending={pending.map((r) => ({ id: r.id, state: r.state, value: r.run?.request.ladder_value ?? null }))}
+              queued={queue.length}
             />
           )}
-          {edgeHint !== null && <EdgeHintLine hint={edgeHint} />}
-        </TestCard>
-        <PatternCard
-          limits={limits}
-          pattern={pattern}
-          proposal={stepper?.proposal.pattern ?? null}
-          mode={mode}
-          isolation={isolation.ok ? null : isolation}
-          refusal={stepper?.proposal.refusal ?? null}
-          error={patternError}
-          notes={patternNotes}
-          disabled={busy}
-          onPattern={setPattern}
-          onMode={chooseMode}
-        />
-        <GainsCard
-          gains={gains}
-          positionI={view?.session != null ? view.session.gains.position_i : (channel?.control.position_i ?? 0)}
-          live={channel?.control}
-          pwmHz={pwmHz}
-          disabled={busy}
-          sweptAxis={ladderOn ? ladder.axis : null}
-          canLoadLive={channel !== undefined}
-          onGains={setGains}
-          onLoadLive={loadLiveGains}
-        />
-        <FiltersCard
-          filters={filters}
-          disabled={busy}
-          canLoadLive={channel !== undefined}
-          onFilters={setFilters}
-          onLoadLive={loadLiveFilters}
-        />
-      </div>
-      <LadderCard
-        on={ladderOn}
-        ladder={ladder}
-        errors={sweepErrors}
-        defaultsFor={defaultsForAxis}
-        probe={type === "probe"}
-        disabled={busy}
-        onToggle={toggleSweep}
-        onLadder={setLadder}
-      />
+
+          {recording && recordingStepper !== undefined && current !== null && (
+            <Card label="Live">
+              <LivePanels key={current.run} stepper={recordingStepper} runRegime={currentRecord?.regime ?? null} />
+            </Card>
+          )}
+
+          {sessionError !== null && <p className="text-sm text-red-400">Session: {sessionError}</p>}
+          {view !== null && view.session !== null && (
+            <>
+              <SessionCard
+                view={view}
+                canRestore={active !== null && !busyEngine}
+                onRestore={revert}
+                newSessionNext={changedSetup}
+                notes={sweepNotesFor(view, printer)}
+              />
+              <SessionResults view={view} />
+            </>
+          )}
+        </>
+      )}
       <RunBar
         runLabel={busyEngine || awaiting !== null ? "Running" : ladderOn ? "Run sweep" : "Run"}
-        blocked={uniqueBlocked}
-        holdRun={!isolation.ok || awaiting !== null}
+        blocked={step === "run" ? [] : uniqueBlocked}
+        holdRun={!isolation.ok || awaiting !== null || busyEngine}
+        mode={step}
+        onBack={() => goTo("prepare")}
         busy={busy}
         onRun={submit}
         running={current !== null}
         onAbort={abort}
         message={message}
       />
-
-      {(current !== null || queue.length > 0) && (
-        <RunQueueCard
-          current={current}
-          otherSession={current !== null && active !== null && current.session !== active.id}
-          position={position}
-          steps={currentRecord?.steps ?? []}
-          predictedS={currentRecord?.predicted_s ?? null}
-          nowMs={nowMs}
-          pending={pending.map((r) => ({ id: r.id, state: r.state, value: r.run?.request.ladder_value ?? null }))}
-          queued={queue.length}
-        />
-      )}
-
-      {recording && recordingStepper !== undefined && current !== null && (
-        <Card label="Live">
-          <LivePanels key={current.run} stepper={recordingStepper} runRegime={currentRecord?.regime ?? null} />
-        </Card>
-      )}
-
-      {sessionError !== null && <p className="text-sm text-red-400">Session: {sessionError}</p>}
-      {view !== null && view.session !== null && (
-        <>
-          <SessionCard
-            view={view}
-            canRestore={active !== null && !busyEngine}
-            onRestore={revert}
-            newSessionNext={changedSetup}
-            notes={sweepNotesFor(view, printer)}
-          />
-          <SessionResults view={view} />
-        </>
-      )}
     </div>
   );
 }
