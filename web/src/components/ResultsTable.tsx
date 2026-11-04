@@ -1,4 +1,5 @@
 import { ChevronDownIcon } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { Run, RunEntry } from "@/api";
 import { Button } from "@/components/ui/button";
 import { dampingBar, outcomeLabel, resultColumn, runOutcomeReason, settingText, settingsLines } from "@/results";
@@ -198,12 +199,12 @@ export function ResultsTable({
               return (
                 <tr key={entry.id} className="border-t align-top">
                   <td className="py-2 pr-2">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       aria-label={`Overlay run ${time(finishedMs(entry))}`}
                       checked={isChecked}
                       disabled={entry.state === "skipped" || (!isChecked && full)}
-                      onChange={(e) => onToggle(entry.id, e.target.checked)}
+                      onCheckedChange={(on) => onToggle(entry.id, on === true)}
+                      className="align-middle"
                     />
                     {slot !== undefined && (
                       <span

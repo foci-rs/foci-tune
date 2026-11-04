@@ -1,5 +1,5 @@
 import { RouterProvider } from "@tanstack/react-router";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionView } from "../api";
 import { createTestRouter } from "../router";
@@ -150,6 +150,16 @@ test("a skipped run has no data to overlay, so its checkbox is disabled", async 
   const boxes = await screen.findAllByRole("checkbox", { name: /Overlay run/ });
   expect(boxes).toHaveLength(3);
   expect(boxes.filter((b) => (b as HTMLInputElement).disabled)).toHaveLength(1);
+});
+
+test("a run's checkbox adds it to the overlay and takes it off again", async () => {
+  openReviewed();
+  const [first] = await screen.findAllByRole("checkbox", { name: /Overlay run/ });
+  expect(first).toHaveAttribute("aria-checked", "false");
+  fireEvent.click(first);
+  await waitFor(() => expect(first).toHaveAttribute("aria-checked", "true"));
+  fireEvent.click(first);
+  await waitFor(() => expect(first).toHaveAttribute("aria-checked", "false"));
 });
 
 /** The results table, not the plot's data table. */
