@@ -46,6 +46,7 @@ import {
   plannedRuns,
   acceptGain,
   extensionOffer,
+  gainChecklist,
   measuredGains,
   nextGuidedStep,
   prepareState,
@@ -287,7 +288,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
             <pre className="overflow-x-auto font-mono text-xs">{detail.config_block}</pre>
           </Card>
         ) : (
-          <ResultPlaceholder chosen={detail.steps.filter((s) => s.chosen !== null).length} />
+          <ResultPlaceholder items={gainChecklist(detail)} />
         ))}
 
       {!(shown === "setup" && setupEditable) && (

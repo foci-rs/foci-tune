@@ -15,6 +15,7 @@ import {
   stepPercent,
   skipText,
   nextGuidedStep,
+  gainChecklist,
   acceptGain,
   measuredGains,
   manualProblem,
@@ -1192,5 +1193,22 @@ describe("nextGuidedStep", () => {
     expect(nextGuidedStep("velocity-i", "velocity-i")).toBeNull();
     expect(nextGuidedStep("position-p", "velocity-i")).toBeNull();
     expect(nextGuidedStep("result", "result")).toBeNull();
+  });
+});
+
+describe("gainChecklist", () => {
+  test("lists the three axes in order, each marked done once it has a chosen gain", () => {
+    const t = tune("Ready", [
+      step({ axis: "VelocityP", chosen: 1000 }),
+      step({ axis: "VelocityICornerHz", chosen: null }),
+    ]);
+    expect(gainChecklist(t)).toEqual([
+      { label: "Velocity P", done: true },
+      { label: "Velocity I", done: false },
+      { label: "Position P", done: false },
+    ]);
+  });
+  test("a tune with no step has nothing done", () => {
+    expect(gainChecklist(tune("Ready", [])).map((i) => i.done)).toEqual([false, false, false]);
   });
 });

@@ -502,10 +502,12 @@ test("the result step explains that there is no result before the tune is done",
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("button", { name: "More ways to choose" });
   fireEvent.click(screen.getByRole("button", { name: /Result/ }));
+  const list = screen.getByRole("list", { name: "Gains chosen" });
   expect(
-    screen.getByText("Choose a gain for each of the three steps, and the result appears here."),
-  ).toBeInTheDocument();
-  expect(screen.getByText("0 of 3 gains chosen.")).toBeInTheDocument();
+    within(list)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent),
+  ).toEqual(["Velocity P: not chosen yet", "Velocity I: not chosen yet", "Position P: not chosen yet"]);
   expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThan(0);
   expect(screen.queryByText(/no result yet/i)).toBeNull();
 });
@@ -632,9 +634,7 @@ test("a finished tune opened by link shows its steps and result", async () => {
   current = detail("Done");
   listed = [{ id: "t1", state: "Done" }];
   render(<GuidedTune printer={printer} initialTune="t1" />);
-  expect(
-    await screen.findByText("Choose a gain for each of the three steps, and the result appears here."),
-  ).toBeInTheDocument();
+  expect(await screen.findByRole("list", { name: "Gains chosen" })).toBeInTheDocument();
 });
 
 test("before any step the Setup step is the editable form, with Abandon beside Next", async () => {
@@ -905,12 +905,19 @@ test("the third step is called Velocity I in the header and on its card", async 
   expect(await screen.findByRole("region", { name: "Velocity I sweep" })).toBeInTheDocument();
 });
 
-test("the waiting result counts the gains chosen so far", async () => {
+test("the waiting result ticks off the axes that have a chosen gain", async () => {
   current = detail("Ready");
   current.steps[0].chosen = 1000;
   render(<GuidedTune printer={printer} />);
   fireEvent.click(
     within(await screen.findByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Result/ }),
   );
-  expect(screen.getByText("1 of 3 gains chosen.")).toBeInTheDocument();
+  const items = within(screen.getByRole("list", { name: "Gains chosen" })).getAllByRole("listitem");
+  expect(items.map((li) => li.textContent)).toEqual([
+    "Velocity P: chosen",
+    "Velocity I: not chosen yet",
+    "Position P: not chosen yet",
+  ]);
+  expect(items[0]).toHaveAttribute("data-done", "true");
+  expect(items[1]).toHaveAttribute("data-done", "false");
 });

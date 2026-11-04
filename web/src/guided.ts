@@ -821,3 +821,11 @@ export function extensionOffer(tune: Tune, index: number): ExtensionOffer | null
     text: `The best gain, ${gainAt(step, best)}, is at the ${below ? "low" : "high"} end of what was tried, so a ${below ? "lower" : "higher"} gain may be better. Try ${gain}: ${runs} more runs.`,
   };
 }
+
+/** The three axes in order, each marked done once the tune has a chosen gain for it. */
+export function gainChecklist(tune: Tune): { label: string; done: boolean }[] {
+  return AXIS_ORDER.map((axis) => ({
+    label: axisTitle(axis),
+    done: tune.steps.some((s) => s.axis === axis && s.chosen !== null),
+  }));
+}
