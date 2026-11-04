@@ -3,6 +3,7 @@ import {
   getTune,
   getTunes,
   postTuneAbandon,
+  postTuneApply,
   postTuneChoice,
   postTuneConfirm,
   postTuneDecision,
@@ -17,7 +18,7 @@ import {
   type TuneId,
   type TuneSummary,
 } from "@/api";
-import { ArrowRightIcon, PlayIcon, PlusIcon } from "lucide-react";
+import { ArrowRightIcon, PlayIcon, PlusIcon, ZapIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
@@ -35,6 +36,7 @@ import {
   GUIDED_STEPS,
   nextAxis,
   recommendedGain,
+  resultRows,
   rungView,
   stepSentence,
   standstillCheckNote,
@@ -299,7 +301,7 @@ function TuneView({
 
       {shown === "result" &&
         (detail.config_block !== null ? (
-          <ResultView tune={detail} block={detail.config_block} live={liveControlFor(printer, detail.setup.stepper)} />
+          <ResultView tune={detail} block={detail.config_block} live={liveControl} />
         ) : (
           <ResultPlaceholder items={gainChecklist(detail)} />
         ))}
@@ -316,6 +318,14 @@ function TuneView({
               New tune
             </UiButton>
           )}
+          {detail.state === "Done" &&
+            liveControl !== null &&
+            resultRows(detail, liveControl).some((r) => r.after !== "-" && !r.active) && (
+              <UiButton disabled={frozen} onClick={() => run("apply", () => postTuneApply(id))}>
+                <ZapIcon />
+                Apply
+              </UiButton>
+            )}
           {choosing && last !== null && (
             <>
               {offer !== null && (

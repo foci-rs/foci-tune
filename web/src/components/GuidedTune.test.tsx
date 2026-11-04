@@ -1049,3 +1049,35 @@ test("while the result is not ready the checklist still shows in the Result card
   ).toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Printer config" })).toBeNull();
 });
+
+test("a finished tune whose gains are not all active offers Apply, to the right of New tune", async () => {
+  finishedTune();
+  listed = [{ id: "t1", state: "Done" }];
+  render(<GuidedTune printer={printer} initialTune="t1" />);
+  const apply = await screen.findByRole("button", { name: "Apply" });
+  const names = within(apply.closest(".sticky") as HTMLElement)
+    .getAllByRole("button")
+    .map((b) => b.textContent);
+  expect(names).toEqual(["New tune", "Apply"]);
+  fireEvent.click(apply);
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/apply"]));
+});
+
+test("when every chosen gain is already active there is nothing to apply", async () => {
+  finishedTune();
+  current.steps[2].chosen = 800;
+  current.steps[2].chosen_shown = 800;
+  listed = [{ id: "t1", state: "Done" }];
+  render(<GuidedTune printer={printer} initialTune="t1" />);
+  await screen.findByRole("region", { name: "Result" });
+  expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+});
+
+test("without live values from the printer Apply is not offered", async () => {
+  finishedTune();
+  listed = [{ id: "t1", state: "Done" }];
+  const silent = { ...printer, boards: [] } as unknown as PrinterView;
+  render(<GuidedTune printer={silent} initialTune="t1" />);
+  await screen.findByRole("region", { name: "Result" });
+  expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+});

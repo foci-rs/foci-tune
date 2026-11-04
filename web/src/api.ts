@@ -736,6 +736,8 @@ export const getTunes = () => request<TuneSummary[]>("GET", "/api/tunes");
 
 export const getTune = (id: TuneId) => request<TuneDetail>("GET", tunePath(id));
 
+export const postTuneApply = (id: TuneId) => request<unknown>("POST", tunePath(id, "/apply"));
+
 export const postTuneStepCancel = (id: TuneId) => request<Tune>("POST", tunePath(id, "/steps/cancel"));
 
 export const postTuneStep = (id: TuneId, body: TuneStepRequest) =>

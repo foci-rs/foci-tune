@@ -561,6 +561,7 @@ export type GuidedAction =
   | "setup"
   | "prepare"
   | "adjust"
+  | "apply"
   | "start"
   | "choose"
   | "extend"
@@ -574,6 +575,7 @@ const OVER_REASON: Record<GuidedAction, string> = {
   restore: "there is nothing to restore",
   prepare: "nothing more can be done with it",
   adjust: "there is no step to adjust",
+  apply: "there are no gains to apply",
   start: "nothing more can be done with it",
   choose: "nothing more can be done with it",
   extend: "nothing more can be done with it",
