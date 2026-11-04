@@ -739,3 +739,73 @@ export function skipText(reason: string): { text: string; detail: string | null 
   if (body === "standstill baseline unassessable") return { text: "noise not measured", detail: null };
   return { text: "step stopped", detail: body };
 }
+
+const measuredRows = (tune: Tune, index: number) =>
+  rungView(tune, index).filter((r) => r.skipped === null && r.repeatsDone >= tune.steps[index].repeats);
+
+/** The gain the Accept button takes, as the operator reads it; null while there is no recommendation. */
+export function acceptGain(tune: Tune, index: number): string | null {
+  const step = tune.steps[index];
+  const choice = step.recommendation?.choice;
+  if (choice === undefined) return null;
+  const text = (shown: number) =>
+    step.axis === "VelocityICornerHz" ? `${shown.toFixed(1)} Hz` : String(Math.round(shown));
+  if ("Measured" in choice) return gainAt(step, choice.Measured.rung);
+  if ("Interpolated" in choice) return text(choice.Interpolated.shown);
+  return null;
+}
+
+/** The gains that finished measuring, for picking one by hand; the recommended one is marked. */
+export function measuredGains(tune: Tune, index: number): { index: number; label: string; recommended: boolean }[] {
+  const step = tune.steps[index];
+  return measuredRows(tune, index).map((r) => ({
+    index: r.index,
+    label: gainAt(step, r.index),
+    recommended: r.recommended === "measured",
+  }));
+}
+
+/** Why a typed gain cannot be used, as a sentence; null when it can. */
+export function manualProblem(axis: TuneAxis, value: number, pwmHz: number): string | null {
+  if (!Number.isFinite(value)) return "Enter a number.";
+  if (!(value > 0)) return "The gain must be above zero.";
+  const corner = axis === "VelocityICornerHz";
+  if (corner && !(pwmHz > 0)) return "The PWM frequency is unknown, so a corner can't be converted.";
+  const raw = corner ? velocityIRaw(value, pwmHz) : Math.round(value);
+  if (raw < 1 || raw > PID_GAIN_MAX_RAW) return "That gain is outside what the stepper accepts.";
+  return null;
+}
+
+export interface ExtensionOffer {
+  direction: "below" | "above";
+  /** The gain the extension would try. */
+  gain: string;
+  /** How many more runs it makes. */
+  runs: number;
+  text: string;
+}
+
+/** The one more gain the step offers beyond the end of its range, when the best gain is at that end. */
+export function extensionOffer(tune: Tune, index: number): ExtensionOffer | null {
+  const step = tune.steps[index];
+  const extend = stepSummary(tune, index).extend;
+  const best = step.assessment?.best;
+  if (extend === null || best === null || best === undefined) return null;
+  const corner = step.axis === "VelocityICornerHz";
+  const base = corner
+    ? step.seed_raw === 0
+      ? SEED_CORNER_HZ
+      : (cornerHz(step.seed_raw, step.pwm_hz) ?? SEED_CORNER_HZ)
+    : step.seed_raw;
+  const below = extend === "Below";
+  const k = below ? step.lower_k - 1 : step.upper_k + 1;
+  const shown = base * 2 ** (k / step.octave_divisions);
+  const gain = corner ? `${shown.toFixed(1)} Hz` : String(Math.round(shown));
+  const runs = step.repeats * (tune.setup.speeds_mm_s.length + 2);
+  return {
+    direction: below ? "below" : "above",
+    gain,
+    runs,
+    text: `The best gain, ${gainAt(step, best)}, is at the ${below ? "low" : "high"} end of what was tried, so a ${below ? "lower" : "higher"} gain may be better. Try ${gain}: ${runs} more runs.`,
+  };
+}

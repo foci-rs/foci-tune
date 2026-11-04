@@ -14,6 +14,10 @@ import {
   prepareState,
   stepPercent,
   skipText,
+  acceptGain,
+  measuredGains,
+  manualProblem,
+  extensionOffer,
   fitReasonText,
   standstillCheckNote,
   sweepProgress,
@@ -1060,5 +1064,125 @@ describe("the status of a scored gain", () => {
     expect(rows[1].verdict).toBe("Scored");
     expect(rows[2].verdict).toBe("Recommended");
     expect(rows[3].verdict).toBe("Scored");
+  });
+});
+
+describe("choosing a gain", () => {
+  const done = { zeta: { Assessed: 0.1 }, p99_by_speed: [3, 4], worst_torque_sd: 1 };
+  const finished = (choice: NonNullable<TuneStep["recommendation"]>["choice"], over: Partial<TuneStep> = {}) =>
+    tune("AwaitingChoice", [
+      step({
+        repeats: 1,
+        seed_raw: 841,
+        rungs: [
+          rung(0, { raw: 421, shown: 421, repeat_values: [done] }),
+          rung(1, { raw: 530, shown: 530, repeat_values: [done] }),
+          rung(2, { raw: 668, shown: 668, skipped: "not run: damping unassessable" }),
+        ],
+        assessment: {
+          verdicts: [none, none, none],
+          medians: [medians([]), medians([]), medians([])],
+          halt: null,
+          best: 1,
+          runner_up: null,
+          tie: [1],
+          spreads: [],
+        },
+        recommendation: { choice, extend: null },
+        ...over,
+      }),
+    ]);
+
+  test("Accept names the recommended gain: a measured one, or an interpolated value", () => {
+    expect(acceptGain(finished({ Measured: { rung: 1 } }), 0)).toBe("530");
+    expect(acceptGain(finished({ Interpolated: { shown: 480.4, between: [0, 1] } }), 0)).toBe("480");
+  });
+  test("with no recommendation there is nothing to accept", () => {
+    expect(acceptGain(finished({ None: "NoScoredRung" }), 0)).toBeNull();
+    expect(acceptGain(tune("Running", [step()]), 0)).toBeNull();
+  });
+  test("a corner's accepted gain is in Hz", () => {
+    const t = finished(
+      { Measured: { rung: 0 } },
+      { axis: "VelocityICornerHz", rungs: [rung(0, { raw: 4200, shown: 50.04, repeat_values: [done] })] },
+    );
+    expect(acceptGain(t, 0)).toBe("50.0 Hz");
+  });
+
+  test("the dropdown lists the gains that finished measuring, with the recommended one marked", () => {
+    expect(measuredGains(finished({ Measured: { rung: 1 } }), 0)).toEqual([
+      { index: 0, label: "421", recommended: false },
+      { index: 1, label: "530", recommended: true },
+    ]);
+  });
+  test("an interpolated recommendation marks no gain of the list", () => {
+    expect(
+      measuredGains(finished({ Interpolated: { shown: 480, between: [0, 1] } }), 0).some((g) => g.recommended),
+    ).toBe(false);
+  });
+
+  test.each([
+    ["VelocityP", 1060, null],
+    ["VelocityP", 0, /above zero/],
+    ["VelocityP", -5, /above zero/],
+    ["VelocityP", 40000, /outside what the stepper accepts/],
+    ["VelocityP", Number.NaN, /number/],
+    ["PositionP", 800.4, null],
+  ] as const)("a typed %s gain of %s: %s", (axis, value, problem) => {
+    const result = manualProblem(axis, value, 50000);
+    if (problem === null) expect(result).toBeNull();
+    else expect(result).toMatch(problem);
+  });
+  test("a corner needs the PWM frequency and stays within what the stepper accepts", () => {
+    expect(manualProblem("VelocityICornerHz", 50, 50000)).toBeNull();
+    expect(manualProblem("VelocityICornerHz", 50, 0)).toMatch(/PWM frequency/);
+    expect(manualProblem("VelocityICornerHz", 100000, 50000)).toMatch(/outside what the stepper accepts/);
+  });
+});
+
+describe("extensionOffer", () => {
+  const speeds2 = (extend: "Below" | "Above" | null, bestRung: number) => {
+    const t = tune("AwaitingChoice", [
+      step({
+        repeats: 3,
+        seed_raw: 841,
+        lower_k: -3,
+        upper_k: 3,
+        octave_divisions: 3,
+        rungs: [
+          rung(0, { raw: 421, shown: 421 }),
+          rung(1, { raw: 530, shown: 530 }),
+          rung(2, { raw: 668, shown: 668 }),
+        ],
+        assessment: {
+          verdicts: [none, none, none],
+          medians: [medians([]), medians([]), medians([])],
+          halt: null,
+          best: bestRung,
+          runner_up: null,
+          tie: [bestRung],
+          spreads: [],
+        },
+        recommendation: { choice: { Measured: { rung: bestRung } }, extend: extend },
+      }),
+    ]);
+    return t;
+  };
+  test("nothing to offer when the best gain is not at an edge", () => {
+    expect(extensionOffer(speeds2(null, 1), 0)).toBeNull();
+  });
+  test("a best gain at the low end offers a lower one, with its gain and the runs it adds", () => {
+    expect(extensionOffer(speeds2("Below", 0), 0)).toEqual({
+      direction: "below",
+      gain: "334",
+      runs: 12,
+      text: "The best gain, 421, is at the low end of what was tried, so a lower gain may be better. Try 334: 12 more runs.",
+    });
+  });
+  test("a best gain at the high end offers a higher one", () => {
+    const offer = extensionOffer(speeds2("Above", 2), 0)!;
+    expect(offer.direction).toBe("above");
+    expect(offer.gain).toBe("2119");
+    expect(offer.text).toMatch(/high end.*a higher gain may be better/);
   });
 });
