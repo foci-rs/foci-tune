@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard, broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::config_block;
-use crate::engine::{CommandError, Engine, EngineEvent, Precondition};
+use crate::engine::{ApplyError, CommandError, Engine, EngineEvent, Precondition};
 pub use crate::model::TuneId;
 use crate::model::{
     ChannelMetrics, ControlSnapshot, FORMAT_VERSION, Filters, Gains, ProbeRecord, Run, RunId,
@@ -1096,17 +1096,22 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         }
         let stepper = record.setup.stepper.clone();
         s.refuse_locked(&stepper)?;
-        let control = s.read_control_state(&stepper).await?;
-        let mut gains = snapshot_of(&control).0;
-        for step in &record.steps {
-            if let Some(raw) = step.chosen {
-                gains = with_axis(gains, step.axis, raw);
-            }
-        }
         s.engine
-            .apply_gains(&stepper, gains)
+            .apply_over_live(&stepper, |control| {
+                record
+                    .steps
+                    .iter()
+                    .filter_map(|step| step.chosen.map(|raw| (step.axis, raw)))
+                    .fold(snapshot_of(control).0, |gains, (axis, raw)| {
+                        with_axis(gains, axis, raw)
+                    })
+            })
             .await
-            .map_err(TuneError::Engine)
+            .map_err(|e| match e {
+                ApplyError::Read(CommandError::Precondition(p)) => TuneError::Precondition(p),
+                ApplyError::Read(other) => TuneError::NoControlState(other.to_string()),
+                ApplyError::Write(text) => TuneError::Engine(text),
+            })
     }
 
     /// Discards the announced step before anything has run, so its settings can be changed and

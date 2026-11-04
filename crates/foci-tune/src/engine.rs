@@ -267,6 +267,17 @@ pub enum CommandError {
     NoControlState(String),
 }
 
+/// Why [`Engine::apply_over_live`] wrote nothing, or could not confirm its write.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ApplyError {
+    /// The live control state could not be read, or the engine refused before anything was sent.
+    #[error(transparent)]
+    Read(#[from] CommandError),
+    /// The write was out of range, refused or unconfirmed; the text is meant for display.
+    #[error("{0}")]
+    Write(String),
+}
+
 /// Why a restore lock is not durable.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LockError {
@@ -1132,27 +1143,7 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         let s = &self.shared;
         let _guard = s.begin_write()?;
         let resolved = s.resolve(stepper).await?;
-        let rx = s.frames.subscribe();
-        let prior = s.trace_mode(&resolved.stepper.serial);
-        s.gcode(&format!(
-            "FOCI_TRACE_MODE STEPPER={} MODE=critical",
-            resolved.stepper.name
-        ))
-        .await
-        .map_err(CommandError::Gcode)?;
-        let found = s.wait_baseline(rx, &resolved.stepper).await;
-        if prior == TraceMode::Dormant {
-            let line = format!(
-                "FOCI_TRACE_MODE STEPPER={} MODE=dormant",
-                resolved.stepper.name
-            );
-            if let Err(e) = s.gcode_bounded(&line).await {
-                tracing::warn!(stepper, error = %e, "trace mode not restored to dormant");
-            }
-        }
-        found
-            .map(|c| ControlSnapshot::from(&c))
-            .map_err(CommandError::NoControlState)
+        s.read_baseline(&resolved.stepper).await
     }
 
     /// Writes `gains` to `stepper` through the confirmed write path after range-checking every
@@ -1168,6 +1159,30 @@ impl<M: MoonrakerApi + 'static> Engine<M> {
         let resolved = s.resolve(stepper).await.map_err(|p| p.to_string())?;
         s.gcode("M400").await?;
         s.write_gains(&resolved.stepper, &gains).await
+    }
+
+    /// Reads `stepper`'s control state and writes the gains `change` makes of it through the
+    /// confirmed write path, all under one write guard so no other write can land between the
+    /// read and the write. Refused like [`Engine::read_control_state`].
+    ///
+    /// # Errors
+    /// [`ApplyError::Read`] when the control state cannot be read, [`ApplyError::Write`] with
+    /// the reason meant for display, as for [`Engine::apply_gains`].
+    pub async fn apply_over_live(
+        &self,
+        stepper: &str,
+        change: impl FnOnce(&ControlSnapshot) -> Gains,
+    ) -> Result<(), ApplyError> {
+        let s = &self.shared;
+        let _guard = s.begin_write().map_err(CommandError::from)?;
+        let resolved = s.resolve(stepper).await.map_err(CommandError::from)?;
+        let live = s.read_baseline(&resolved.stepper).await?;
+        let gains = change(&live);
+        check_gains(&gains).map_err(ApplyError::Write)?;
+        s.gcode("M400").await.map_err(ApplyError::Write)?;
+        s.write_gains(&resolved.stepper, &gains)
+            .await
+            .map_err(ApplyError::Write)
     }
 
     /// Writes `gains` and `filters` to `stepper` through the confirmed write path, like
@@ -1752,6 +1767,27 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 return true;
             }
         }
+    }
+
+    async fn read_baseline(&self, stepper: &Stepper) -> Result<ControlSnapshot, CommandError> {
+        let rx = self.frames.subscribe();
+        let prior = self.trace_mode(&stepper.serial);
+        self.gcode(&format!(
+            "FOCI_TRACE_MODE STEPPER={} MODE=critical",
+            stepper.name
+        ))
+        .await
+        .map_err(CommandError::Gcode)?;
+        let found = self.wait_baseline(rx, stepper).await;
+        if prior == TraceMode::Dormant {
+            let line = format!("FOCI_TRACE_MODE STEPPER={} MODE=dormant", stepper.name);
+            if let Err(e) = self.gcode_bounded(&line).await {
+                tracing::warn!(stepper = %stepper.name, error = %e, "trace mode not restored to dormant");
+            }
+        }
+        found
+            .map(|c| ControlSnapshot::from(&c))
+            .map_err(CommandError::NoControlState)
     }
 
     async fn write_gains(&self, stepper: &Stepper, g: &Gains) -> Result<(), String> {

@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use bytes::Bytes;
 
-use foci_tune::engine::{CommandError, Engine, EngineEvent, LadderRejected, Lock, Precondition};
+use foci_tune::engine::{
+    ApplyError, CommandError, Engine, EngineEvent, LadderRejected, Lock, Precondition,
+};
 use foci_tune::model::{Filters, Gains, RunState};
 use foci_tune_analysis::ladder::PID_GAIN_MAX_RAW;
 use rig::*;
@@ -145,6 +147,66 @@ async fn apply_gains_writes_and_confirms() {
         rig.engine.apply_gains("stepper_x", unconfirmed).await,
         Err("gain write unconfirmed".to_owned())
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn apply_over_live_writes_a_change_of_the_gains_it_has_just_read() {
+    let rig = rig().await;
+    rig.engine
+        .apply_gains("stepper_x", snapshot().0)
+        .await
+        .unwrap();
+
+    rig.engine
+        .apply_over_live("stepper_x", |live| Gains {
+            velocity_p: live.velocity_p + 1,
+            ..snapshot().0
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        rig.a.sim.lock().unwrap().channels[0].gains,
+        [901, 40, 120, 0]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn apply_over_live_refused_while_run_in_flight_and_rejects_out_of_range() {
+    let rig = rig().await;
+    let out_of_range = Gains {
+        velocity_p: PID_GAIN_MAX_RAW + 1,
+        ..snapshot().0
+    };
+    let rejected = rig
+        .engine
+        .apply_over_live("stepper_x", |_| out_of_range)
+        .await;
+    assert!(
+        matches!(rejected, Err(ApplyError::Write(_))),
+        "{rejected:?}"
+    );
+
+    let gate = rig.hold_stimulus();
+    let mut events = rig.engine.events();
+    let id = rig.engine.submit(rig.request(tracking())).await.unwrap();
+    rig.wait_moving(&mut events, &id).await;
+    let sent = rig.scripts().len();
+
+    let refused = rig
+        .engine
+        .apply_over_live("stepper_x", |_| snapshot().0)
+        .await;
+
+    assert_eq!(
+        refused,
+        Err(ApplyError::Read(CommandError::Precondition(
+            Precondition::Busy
+        )))
+    );
+    assert_eq!(rig.scripts().len(), sent);
+    gate.notify_one();
+    rig.finish(&id).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
