@@ -43,9 +43,6 @@ import {
   type PrepareForm,
   type RungView,
 } from "@/guided";
-import { PlusIcon } from "lucide-react";
-import { Button as UiButton } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
@@ -97,31 +94,9 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
   }
   const open = summaries.filter((s) => !isOver(s));
   const current = selected ?? open[0]?.id ?? "new";
-  const listed = summaries.filter((s) => !isOver(s) || s.id === current);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {listed.length > 0 && (
-          <Select value={current === "new" ? "" : current} onValueChange={(v) => setSelected(v)}>
-            <SelectTrigger aria-label="Tune" className="w-72">
-              <SelectValue placeholder="Choose a tune" />
-            </SelectTrigger>
-            <SelectContent>
-              {listed.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.stepper}
-                  <span className="text-muted-foreground">{stateText(s.state).split(":")[0]}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        <UiButton variant="outline" onClick={() => setSelected("new")}>
-          <PlusIcon />
-          New tune
-        </UiButton>
-      </div>
       {listError !== null && <p className="text-sm text-red-400">{listError}</p>}
       {current === "new" ? (
         <NewTune

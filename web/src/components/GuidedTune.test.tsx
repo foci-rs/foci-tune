@@ -426,13 +426,12 @@ test("the prepare form speaks of steps, not rungs", async () => {
 });
 
 test("a new tune shows the steps with Setup open, and the later ones wait for the tune", async () => {
-  current = detail("AwaitingChoice");
+  current = detail("Done");
+  listed = [{ id: "t1", state: "Done" }];
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept the recommendation" });
-  fireEvent.click(screen.getByRole("button", { name: "New tune" }));
+  await screen.findByText("setup form");
   const steps = within(screen.getByRole("navigation", { name: "Steps" }));
   expect(steps.getByRole("button", { name: /Setup/ })).toHaveAttribute("aria-current", "step");
-  expect(screen.getByText("setup form")).toBeInTheDocument();
   fireEvent.click(steps.getByRole("button", { name: /Position P/ }));
   expect(screen.getByText(/create the tune first/i)).toBeInTheDocument();
   expect(screen.getByText("setup form")).not.toBeVisible();
@@ -448,14 +447,6 @@ test("finished and abandoned tunes are not listed: with only those, the page ope
   ];
   render(<GuidedTune printer={printer} />);
   expect(await screen.findByText("setup form")).toBeInTheDocument();
-  expect(screen.queryByRole("combobox", { name: "Tune" })).not.toBeInTheDocument();
-});
-
-test("an open tune is picked from a select next to the New tune button", async () => {
-  current = detail("AwaitingChoice");
-  render(<GuidedTune printer={printer} />);
-  expect(await screen.findByRole("combobox", { name: "Tune" })).toHaveTextContent("stepper_x");
-  expect(screen.getByRole("button", { name: "New tune" })).toBeInTheDocument();
 });
 
 test("a finished tune opened by link shows its steps and result", async () => {
@@ -463,5 +454,4 @@ test("a finished tune opened by link shows its steps and result", async () => {
   listed = [{ id: "t1", state: "Done" }];
   render(<GuidedTune printer={printer} initialTune="t1" />);
   expect(await screen.findByText(/no result yet/i)).toBeInTheDocument();
-  expect(screen.getByRole("combobox", { name: "Tune" })).toHaveTextContent("stepper_x");
 });
