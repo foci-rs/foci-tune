@@ -109,7 +109,7 @@ export function LadderCard({
       label="Gain sweep"
       action={<Switch aria-label="Gain sweep" checked={on} disabled={disabled} onCheckedChange={onToggle} />}
     >
-      {on ? (
+      {on && (
         <LadderFields
           ladder={ladder}
           defaultsFor={defaultsFor}
@@ -118,8 +118,6 @@ export function LadderCard({
           disabled={disabled}
           onLadder={onLadder}
         />
-      ) : (
-        <p className="text-sm text-muted-foreground">Off: a run uses the gains above as they are.</p>
       )}
     </Card>
   );

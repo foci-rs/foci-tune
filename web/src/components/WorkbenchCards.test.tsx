@@ -122,6 +122,7 @@ test("the sweep card is one line while off and shows its setup when on", () => {
   const sw = screen.getByRole("switch", { name: "Gain sweep" });
   expect(sw).toHaveAttribute("aria-checked", "false");
   expect(screen.queryByText("Runs per value")).toBeNull();
+  expect(screen.queryByText(/Off:/)).toBeNull();
   fireEvent.click(sw);
   expect(onToggle).toHaveBeenCalledWith(true);
   rerender(sweepCard({ onToggle }));

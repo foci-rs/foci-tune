@@ -10,12 +10,12 @@ export function Card({
 }: {
   label: string;
   action?: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
   className?: string;
 }) {
   return (
     <section aria-label={label} className={cn("rounded-xl border bg-card p-4 text-card-foreground", className)}>
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className={cn("flex items-center justify-between gap-2", children != null && "mb-3")}>
         <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</h2>
         {action}
       </div>
