@@ -29,6 +29,8 @@ export function RunQueueCard({
   nowMs,
   pending,
   queued,
+  sweep,
+  showQueue = true,
 }: {
   current: CurrentRunView | null;
   otherSession: boolean;
@@ -40,6 +42,9 @@ export function RunQueueCard({
   nowMs: number;
   pending: QueuedRun[];
   queued: number;
+  /** The runs of the whole sweep: how many are finished and how many there will be. */
+  sweep?: { done: number; total: number };
+  showQueue?: boolean;
 }) {
   const progress = current === null ? null : runProgress({ state: current.state, steps, predictedS, nowMs });
   return (
@@ -86,19 +91,43 @@ export function RunQueueCard({
             )}
           </>
         )}
-        <Row label="Queue">
-          <span className="text-muted-foreground">{queued} queued</span>
-          {pending.length > 0 && (
-            <ol aria-label="Queue" className="mt-1 flex flex-wrap gap-2 text-xs">
-              {pending.map((r) => (
-                <li key={r.id} className="rounded border px-2 py-0.5 font-mono">
-                  {r.value !== null ? `${r.value} · ` : ""}
-                  {stateLabel(r.state)}
-                </li>
-              ))}
-            </ol>
-          )}
-        </Row>
+        {sweep !== undefined && sweep.total > 0 && (
+          <Row label="Sweep">
+            <div className="flex items-center gap-3">
+              <div
+                role="progressbar"
+                aria-label="Sweep progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(Math.min(1, (sweep.done + (progress?.fraction ?? 0)) / sweep.total) * 100)}
+                className="h-2 w-48 overflow-hidden rounded-full bg-muted"
+              >
+                <div
+                  className="h-full bg-emerald-500"
+                  style={{ width: `${Math.min(1, (sweep.done + (progress?.fraction ?? 0)) / sweep.total) * 100}%` }}
+                />
+              </div>
+              <span className="text-muted-foreground">
+                {sweep.done} of {sweep.total} runs
+              </span>
+            </div>
+          </Row>
+        )}
+        {showQueue && (
+          <Row label="Queue">
+            <span className="text-muted-foreground">{queued} queued</span>
+            {pending.length > 0 && (
+              <ol aria-label="Queue" className="mt-1 flex flex-wrap gap-2 text-xs">
+                {pending.map((r) => (
+                  <li key={r.id} className="rounded border px-2 py-0.5 font-mono">
+                    {r.value !== null ? `${r.value} · ` : ""}
+                    {stateLabel(r.state)}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Row>
+        )}
       </dl>
     </Card>
   );

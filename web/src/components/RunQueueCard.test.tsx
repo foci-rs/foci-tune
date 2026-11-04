@@ -82,3 +82,18 @@ test("with nothing running only the queue shows", () => {
   expect(within(card).queryByRole("progressbar")).toBeNull();
   expect(within(card).queryByText("Status")).toBeNull();
 });
+
+test("a sweep row shows the whole step's progress next to the run's, counting the run in flight", () => {
+  show({ current: current("preparing"), sweep: { done: 10, total: 100 } });
+  const card = screen.getByRole("region", { name: "Run queue" });
+  const bar = within(card).getByRole("progressbar", { name: "Sweep progress" });
+  expect(bar).toHaveAttribute("aria-valuenow", "10");
+  expect(card).toHaveTextContent("10 of 100 runs");
+  expect(within(card).getByRole("progressbar", { name: "Run progress" })).toBeInTheDocument();
+});
+
+test("between two runs the sweep row is still there", () => {
+  show({ current: null, sweep: { done: 10, total: 100 }, showQueue: false });
+  expect(screen.getByRole("progressbar", { name: "Sweep progress" })).toHaveAttribute("aria-valuenow", "10");
+  expect(screen.queryByText("Queue")).toBeNull();
+});

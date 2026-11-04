@@ -4,7 +4,16 @@ import { useNow } from "@/useNow";
 import { RunQueueCard } from "./RunQueueCard";
 
 /** The run in flight, when it belongs to one of the given sessions; nothing otherwise. */
-export function TuneRunCard({ engine, sessions }: { engine: EngineView; sessions: SessionId[] }) {
+export function TuneRunCard({
+  engine,
+  sessions,
+  sweep,
+}: {
+  engine: EngineView;
+  sessions: SessionId[];
+  /** The whole step's runs, shown even between two runs while the step is running. */
+  sweep?: { done: number; total: number };
+}) {
   const current = engine.current !== null && sessions.includes(engine.current.session) ? engine.current : null;
   const [record, setRecord] = useState<Run | null>(null);
   const run = current?.run;
@@ -25,7 +34,7 @@ export function TuneRunCard({ engine, sessions }: { engine: EngineView; sessions
     };
   }, [session, run, state]);
   const nowMs = useNow(current !== null);
-  if (current === null) return null;
+  if (current === null && sweep === undefined) return null;
   return (
     <RunQueueCard
       current={current}
@@ -36,6 +45,8 @@ export function TuneRunCard({ engine, sessions }: { engine: EngineView; sessions
       nowMs={nowMs}
       pending={[]}
       queued={engine.queue.length}
+      sweep={sweep}
+      showQueue={false}
     />
   );
 }

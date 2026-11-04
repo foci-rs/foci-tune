@@ -39,6 +39,8 @@ import {
   recommendedGain,
   rungView,
   stepSentence,
+  standstillCheckNote,
+  sweepProgress,
   stepSummary,
   DEFAULT_PREPARE,
   liveControlFor,
@@ -407,7 +409,11 @@ function AxisStep({
   const sessions = lastAxis === axis && last !== null ? Object.values(tune.steps[last].sessions) : [];
   return (
     <>
-      <TuneRunCard engine={engine} sessions={sessions} />
+      <TuneRunCard
+        engine={engine}
+        sessions={sessions}
+        sweep={tune.state === "Running" && lastAxis === axis && last !== null ? sweepProgress(tune, last) : undefined}
+      />
       {indices.map((i) => (
         <div key={i} className="space-y-4">
           {!(announcing && i === last) && (
@@ -558,6 +564,9 @@ function StepCard({
       {summary.failed !== null && <p className="mb-2 text-sm text-amber-400">Stopped: {summary.failed}</p>}
       {summary.halt !== null && <p className="mb-2 text-sm text-amber-400">{summary.halt}</p>}
       <SweepResultsTable axis={step.axis} label={label} rows={rows} speeds={tune.setup.speeds_mm_s} />
+      {standstillCheckNote(tune, index) !== null && (
+        <p className="mt-2 text-xs text-muted-foreground">{standstillCheckNote(tune, index)}</p>
+      )}
       {driftCheckRunning(tune, index) && (
         <p className="mt-1 text-xs text-muted-foreground">
           Drift check running: the seed rung is repeated once more, so the machine is still moving.

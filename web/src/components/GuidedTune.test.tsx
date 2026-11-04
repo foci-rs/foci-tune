@@ -707,3 +707,42 @@ test("the editable Setup step leaves Next to the setup form, which saves", async
   expect(screen.getByText("setup form editable")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
 });
+
+test("while a rung is being run its row says Running with its runs, not Pending", async () => {
+  current = detail("Running");
+  current.steps[0].rungs[0].started_unix_ms = 1;
+  current.steps[0].rungs[0].run_ids = ["r1", "r2"];
+  render(<GuidedTune printer={printer} />);
+  const table = await screen.findByRole("table", { name: /results/ });
+  const rows = within(table).getAllByRole("row").slice(1);
+  expect(rows[0]).toHaveTextContent("Running: 2 of 8 runs");
+  expect(rows[1]).toHaveTextContent("Pending");
+});
+
+test("the standstill check being off is said once under the table, not in every row", async () => {
+  current = detail("Running");
+  render(<GuidedTune printer={printer} />);
+  const table = await screen.findByRole("table", { name: /results/ });
+  expect(within(table).queryByText(/standstill/i)).toBeNull();
+  expect(screen.getAllByText(/The standstill noise check is off for this step/)).toHaveLength(1);
+});
+
+test("a running step shows the sweep's progress, also between two runs", async () => {
+  current = detail("Running");
+  current.steps[0].run_count = 24;
+  current.steps[0].rungs[0].run_times = [
+    { id: "r1", started_unix_ms: 0, ended_unix_ms: 1 },
+    { id: "r2", started_unix_ms: 1, ended_unix_ms: 2 },
+  ];
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByRole("progressbar", { name: "Sweep progress" })).toHaveAttribute("aria-valuenow", "8");
+  expect(screen.getByText("2 of 24 runs")).toBeInTheDocument();
+});
+
+test("the rows are numbered", async () => {
+  current = detail("Running");
+  render(<GuidedTune printer={printer} />);
+  const table = await screen.findByRole("table", { name: /results/ });
+  const rows = within(table).getAllByRole("row").slice(1);
+  expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["1", "2", "3"]);
+});
