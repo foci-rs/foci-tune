@@ -1,6 +1,6 @@
 import type { LadderAxis, Pattern } from "@/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PlayIcon, TriangleAlertIcon } from "lucide-react";
+import { PlayIcon, TriangleAlertIcon, WandSparklesIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -26,6 +26,7 @@ export function PatternCard({
   pattern,
   proposal,
   mode,
+  isolation,
   refusal,
   error,
   notes,
@@ -37,6 +38,8 @@ export function PatternCard({
   pattern: Pattern | null;
   proposal: Pattern | null;
   mode: PatternMode;
+  /** Set when the path would move a motor other than the tested one. */
+  isolation: { message: string; snapLabel: string; snapped: Pattern } | null;
   refusal: string | null;
   error: string | null;
   notes: PatternNote[];
@@ -73,6 +76,15 @@ export function PatternCard({
           <p role="alert" className="text-sm text-amber-400">
             Path refused: {error}
           </p>
+        )}
+        {isolation !== null && (
+          <div role="note" className="space-y-2 rounded border border-amber-500/60 px-2 py-2 text-xs text-amber-300">
+            <p>{isolation.message}</p>
+            <UiButton variant="outline" size="sm" disabled={disabled} onClick={() => onPattern(isolation.snapped)}>
+              <WandSparklesIcon />
+              {isolation.snapLabel}
+            </UiButton>
+          </div>
         )}
         {notes.map((n) => (
           <p key={n.text} role="note" className={NOTE_CLASS[n.tone]}>
@@ -141,9 +153,12 @@ export function RunBar({
   running,
   onAbort,
   message,
+  holdRun = false,
 }: {
   runLabel: string;
   blocked: string[];
+  /** Keeps Run disabled without a reason of its own, for a problem another card already explains. */
+  holdRun?: boolean;
   busy: boolean;
   onRun: () => void;
   running: boolean;
@@ -152,7 +167,7 @@ export function RunBar({
 }) {
   const runButton = (
     <UiButton
-      disabled={blocked.length > 0 || busy}
+      disabled={blocked.length > 0 || holdRun || busy}
       onClick={onRun}
       className="border border-emerald-600 bg-emerald-700 text-white hover:bg-emerald-600"
     >

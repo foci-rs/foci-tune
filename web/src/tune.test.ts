@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ApiRequestError, type LiveChannel, type Pattern, type Run, type RunKind, type SessionView } from "./api";
 import {
-  highlightChanges,
   alignSeries,
   appendLive,
   assignColors,
@@ -1105,22 +1104,5 @@ describe("skipReasonText", () => {
   test("any other reason is shown as it is", () => {
     expect(skipReasonText("ladder floor reached")).toBe("ladder floor reached");
     expect(skipReasonText("run.json: truncated")).toBe("run.json: truncated");
-  });
-});
-
-describe("highlightChanges", () => {
-  const row = (velocity_p: number, position_p: number) => ({
-    velocity_p,
-    velocity_i: 412,
-    position_p,
-    velocity_hz: 500,
-    torque_hz: 1000,
-    position_hz: 500,
-    flux_hz: 1000,
-  });
-
-  test("marks only the gains that differ from the previous row", () => {
-    const marks = highlightChanges([row(800, 140), row(850, 140), row(850, 150), row(850, 150)]);
-    expect(marks.map((m) => [...m].sort())).toEqual([[], ["velocity_p"], ["position_p"], []]);
   });
 });

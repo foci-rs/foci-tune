@@ -24,7 +24,10 @@ import { ParametersBlock } from "@/components/ParametersBlock";
 import { EnsemblePlot } from "@/components/EnsemblePlot";
 import { FiltersCard, gainProblems, GainsCard, ladderAxisLabel } from "@/components/GainsBlock";
 import { EdgeHintLine } from "@/components/EdgeHint";
+import { RunDetails } from "@/components/RunDetails";
+import { RunQueueCard } from "@/components/RunQueueCard";
 import { SessionCard } from "@/components/SessionCard";
+import { sweepLadderEntries, sweepNotesFor } from "@/sweep";
 import { TestCard } from "@/components/TestCard";
 import { LadderCard, PatternCard, RunBar, type PatternNote } from "@/components/WorkbenchCards";
 import { GuidedTune } from "@/components/GuidedTune";
@@ -35,7 +38,7 @@ import { PsdPlot } from "@/components/PsdPlot";
 import { RestBars } from "@/components/RestBars";
 import { finishedMs, ResultsTable } from "@/components/ResultsTable";
 import { TracePanels, type OverlayRun } from "@/components/TracePanels";
-import { Button, Card } from "@/components/ui";
+import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { workbench, type WorkbenchState } from "@/workbench";
 import {
@@ -47,10 +50,9 @@ import {
   fallbackPattern,
   DEFAULT_PARAMETERS,
   defaultLadderValues,
-  headlineMetric,
-  ladderMedians,
   ladderFieldErrors,
   loadPattern,
+  patternIsolation,
   patternMode,
   nextSession,
   parseNumberList,
@@ -62,11 +64,13 @@ import {
   restoreStillApplies,
   type RestoreBasis,
   sessionForRun,
+  queueInOrder,
+  runPosition,
   setupOfSession,
+  sweepOrder,
   RECORDING_STATES,
   runTypeOfKind,
   savePattern,
-  stateLabel,
   TERMINAL_STATES,
   toggleSpacingProblem,
   type LadderInput,
@@ -110,6 +114,9 @@ const DEFAULT_LADDER: LadderInput = {
 
 const AWAIT_PICKUP_MS = 10_000;
 
+/** The engine's own wording for a refused run while another is in flight. */
+const ENGINE_BUSY = "a run is in flight";
+
 /** State kept in the module-level workbench store, so it survives leaving the page. */
 function useStored<K extends keyof WorkbenchState>(
   key: K,
@@ -122,6 +129,18 @@ function useStored<K extends keyof WorkbenchState>(
     workbench[key] = value;
   }, [key, value]);
   return [value, setValue];
+}
+
+/** The current time in ms, refreshed every second while `active`. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
 }
 
 function errorText(e: unknown): string {
@@ -249,6 +268,19 @@ function Workbench({ printer }: { printer: PrinterView }) {
     if (next === "default" && stepper.proposal.pattern !== null) setPattern(stepper.proposal.pattern);
     else if (pattern !== null) setPattern(pattern);
   };
+  const otherSteppers =
+    stepper === undefined
+      ? []
+      : printer.steppers.filter((s) => s.serial === stepper.serial && s.name !== stepper.name).map((s) => s.name);
+  const isolation =
+    stepper === undefined || pattern === null
+      ? { ok: true, message: "", snapped: { start: [0, 0], end: [0, 0] } as Pattern, snapLabel: "" }
+      : patternIsolation({
+          pattern,
+          stepper,
+          others: otherSteppers,
+          limits,
+        });
   const patternError = pattern !== null && limits !== null ? patternProblem(pattern, limits) : null;
 
   const speeds = parseNumberList(speedsText, "the speed set");
@@ -377,8 +409,9 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const precondition = printer.preconditions.find((p) => p.stepper === stepperName);
 
   const blocked: string[] = [];
-  if (awaiting !== null) blocked.push("waiting for the engine to take up the queued run");
-  if (precondition !== undefined && !precondition.ok) blocked.push(...precondition.failing);
+  if (precondition !== undefined && !precondition.ok) {
+    blocked.push(...precondition.failing.filter((reason) => reason !== ENGINE_BUSY));
+  }
   if (stepper?.unusable) blocked.push(stepper.unusable);
   if (limits === null) blocked.push("bed limits need stepper_x and stepper_y in the config");
   if (patternError !== null) blocked.push(patternError);
@@ -453,7 +486,6 @@ function Workbench({ printer }: { printer: PrinterView }) {
     const done = (id: SessionId, runs: string[]) => {
       setLink({ id, setup: started });
       setAwaiting(runs);
-      setMessage({ tone: "ok", text: runs.length === 1 ? "Run queued" : `${runs.length} runs queued` });
       refresh();
     };
     const request =
@@ -496,7 +528,10 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const recording =
     current !== null && shown !== null && current.session === shown.id && RECORDING_STATES.has(current.state);
   const recordingStepper = shown === null ? undefined : printer.steppers.find((s) => s.name === shown.setup.stepper);
-  const pending = (view?.runs ?? []).filter((r) => !TERMINAL_STATES.has(r.state));
+  const pending = queueInOrder(queue, view?.runs ?? []);
+  const nowMs = useNow(current !== null);
+  const position =
+    current === null || view === null || current.session !== view.id ? null : runPosition(view.runs, current.run);
   const currentRecord = current === null ? null : (view?.runs.find((r) => r.id === current.run)?.run ?? null);
 
   const changedSetup = link !== null && active === null;
@@ -530,6 +565,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
           pattern={pattern}
           proposal={stepper?.proposal.pattern ?? null}
           mode={mode}
+          isolation={isolation.ok ? null : isolation}
           refusal={stepper?.proposal.refusal ?? null}
           error={patternError}
           notes={patternNotes}
@@ -567,8 +603,9 @@ function Workbench({ printer }: { printer: PrinterView }) {
         onLadder={setLadder}
       />
       <RunBar
-        runLabel={ladderOn ? "Run sweep" : "Run"}
+        runLabel={busyEngine || awaiting !== null ? "Running" : ladderOn ? "Run sweep" : "Run"}
         blocked={uniqueBlocked}
+        holdRun={!isolation.ok || awaiting !== null}
         busy={busy}
         onRun={submit}
         running={current !== null}
@@ -577,31 +614,16 @@ function Workbench({ printer }: { printer: PrinterView }) {
       />
 
       {(current !== null || queue.length > 0) && (
-        <Card label="Run queue">
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            {current !== null && (
-              <span>
-                Run <span className="font-mono">{current.run}</span>:{" "}
-                <span className="text-emerald-300">{stateLabel(current.state)}</span>
-                {"reason" in current && <span className="text-muted-foreground"> ({current.reason})</span>}
-                {active !== null && current.session !== active.id && (
-                  <span className="text-muted-foreground"> in another session</span>
-                )}
-              </span>
-            )}
-            <span className="text-muted-foreground">{queue.length} queued</span>
-          </div>
-          {pending.length > 0 && (
-            <ol aria-label="Queue" className="mt-2 flex flex-wrap gap-2 text-xs">
-              {pending.map((r) => (
-                <li key={r.id} className="rounded border px-2 py-0.5 font-mono">
-                  {r.run?.request.ladder_value != null ? `${r.run.request.ladder_value}: ` : ""}
-                  {stateLabel(r.state)}
-                </li>
-              ))}
-            </ol>
-          )}
-        </Card>
+        <RunQueueCard
+          current={current}
+          otherSession={current !== null && active !== null && current.session !== active.id}
+          position={position}
+          steps={currentRecord?.steps ?? []}
+          predictedS={currentRecord?.predicted_s ?? null}
+          nowMs={nowMs}
+          pending={pending.map((r) => ({ id: r.id, state: r.state, value: r.run?.request.ladder_value ?? null }))}
+          queued={queue.length}
+        />
       )}
 
       {recording && recordingStepper !== undefined && current !== null && (
@@ -618,6 +640,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
             canRestore={active !== null && !busyEngine}
             onRestore={revert}
             newSessionNext={changedSetup}
+            notes={sweepNotesFor(view, printer)}
           />
           <SessionResults view={view} />
         </>
@@ -634,12 +657,21 @@ function setupType(view: SessionView): RunType {
 /** Ladder plot, results table, overlay plots and Accept for one session. */
 export function SessionResults({ view }: { view: SessionView }) {
   const type = setupType(view);
-  const entries = useMemo(() => view.runs.filter((r) => TERMINAL_STATES.has(r.state)), [view]);
+  const entries = useMemo(
+    () =>
+      sweepOrder(
+        view.runs.filter((r) => TERMINAL_STATES.has(r.state)).sort((a, b) => finishedMs(a) - finishedMs(b)),
+        view.session?.ladder?.values ?? null,
+      ),
+    [view],
+  );
   const [checked, setChecked] = useState<string[]>([]);
   const [colors, setColors] = useState<Map<string, number>>(new Map());
   const [series, setSeries] = useState<Record<string, Series | { error: string }>>({});
   const [config, setConfig] = useState<{ run: string; text: string } | { error: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [openRun, setOpenRun] = useState<string | null>(null);
+  const { printer } = useFeed();
 
   useEffect(() => {
     setChecked([]);
@@ -664,25 +696,8 @@ export function SessionResults({ view }: { view: SessionView }) {
   }, [checked, series]);
 
   const ladder = view.session?.ladder ?? null;
-  const ladderEntries = useMemo(
-    () =>
-      [...entries]
-        .filter(
-          (e) =>
-            e.run !== null && e.run.request.ladder_value !== null && e.state !== "skipped" && e.state !== "aborted",
-        )
-        .sort((a, b) => finishedMs(a) - finishedMs(b))
-        .map((e) => ({
-          value: e.run?.request.ladder_value ?? null,
-          metric: e.run === null ? null : headlineMetric(e.run, type).value,
-          assessable: e.state === "done",
-        })),
-    [entries, type],
-  );
+  const ladderEntries = useMemo(() => sweepLadderEntries(entries, type), [entries, type]);
   const repeats = ladder?.repeats ?? 1;
-  const unassessable = ladderMedians(ladderEntries, repeats)
-    .filter((m) => m.unassessable)
-    .map((m) => m.value);
   const headlineLabel =
     type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (μm)" : "Worst torque sd";
 
@@ -715,9 +730,7 @@ export function SessionResults({ view }: { view: SessionView }) {
   }, [overlay]);
   const { trace, ensembles, psd, rests } = plots;
 
-  const accept = () => {
-    if (checked.length !== 1) return;
-    const run = checked[0];
+  const accept = (run: string) => {
     getConfigBlock(run).then(
       (text) => {
         setConfig({ run, text });
@@ -738,12 +751,14 @@ export function SessionResults({ view }: { view: SessionView }) {
     }
   };
 
-  const acceptedEntry = config !== null && "run" in config ? entries.find((e) => e.id === config.run) : undefined;
+  const tested = view.session?.stepper ?? "";
+  const board = printer?.steppers.find((s) => s.name === tested)?.serial;
+  const others = (printer?.steppers ?? []).filter((s) => s.serial === board && s.name !== tested).map((s) => s.name);
 
   return (
     <>
       {ladderEntries.length > 0 && (
-        <Card label="Ladder">
+        <Card label="Sweep results">
           <LadderPlot
             entries={ladderEntries}
             repeats={repeats}
@@ -752,14 +767,20 @@ export function SessionResults({ view }: { view: SessionView }) {
             floor={type === "probe" && ladder !== null ? ladder.floor : null}
             marginal={type === "probe" && ladder !== null ? ladder.marginal : null}
           />
-          {type === "probe" && unassessable.length > 0 && (
-            <p className="mt-2 text-sm text-amber-400">
-              No median for {unassessable.join(", ")}: a repeat did not finish done with a metric, so the value is
-              unassessable.
-            </p>
-          )}
         </Card>
       )}
+      <RunDetails
+        entry={entries.find((e) => e.id === openRun) ?? null}
+        type={type}
+        ladderAxis={ladder?.axis ?? null}
+        tested={tested}
+        others={others}
+        config={config}
+        copied={copied}
+        onAccept={accept}
+        onCopy={copy}
+        onClose={() => setOpenRun(null)}
+      />
       <Card label={`Results, ${view.session?.name ?? view.id}`}>
         <ResultsTable
           entries={entries}
@@ -767,35 +788,14 @@ export function SessionResults({ view }: { view: SessionView }) {
           ladderAxis={ladder?.axis ?? null}
           checked={new Set(checked)}
           colors={colors}
+          tested={tested}
+          others={others}
+          limits={{ floor: ladder?.floor ?? 0.05, marginal: ladder?.marginal ?? 0.08 }}
           onToggle={toggle}
+          onOpen={setOpenRun}
         />
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button disabled={checked.length !== 1} onClick={accept}>
-            Accept
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {checked.length === 1
-              ? "Shows the config block for the checked run."
-              : "Check exactly one run to accept it."}
-            {checked.length >= MAX_OVERLAY && ` At most ${MAX_OVERLAY} runs overlay at once.`}
-          </span>
-        </div>
-        {config !== null && "error" in config && <p className="mt-2 text-sm text-red-400">Accept: {config.error}</p>}
-        {config !== null && "text" in config && (
-          <div className="mt-3 space-y-2">
-            {acceptedEntry !== undefined && acceptedEntry.state !== "done" && (
-              <p className="text-sm text-amber-400">
-                This run is {stateLabel(acceptedEntry.state)}; check its gains before using them.
-              </p>
-            )}
-            <pre
-              aria-label="Config block"
-              className="overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs select-all"
-            >
-              {config.text}
-            </pre>
-            <Button onClick={() => copy(config.text)}>{copied ? "Copied" : "Copy"}</Button>
-          </div>
+        {checked.length >= MAX_OVERLAY && (
+          <p className="mt-2 text-xs text-muted-foreground">At most {MAX_OVERLAY} runs overlay at once.</p>
         )}
       </Card>
       {checked.length > 0 && (

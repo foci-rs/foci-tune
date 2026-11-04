@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { BoardView, PrinterView, StepperView } from "./api";
 import { connectionDetails, connectionStatuses, homedTone } from "./components/header";
 import { createTestRouter } from "./router";
+import { workbench } from "./workbench";
 
 class StubSocket {
   static last: StubSocket | null = null;
@@ -126,6 +127,36 @@ test("the Tune page opens on the manual workbench", async () => {
   await screen.findByRole("banner");
   await vi.waitFor(() => expect(router.state.location.pathname).toBe("/tune/manual"));
   expect(screen.queryByRole("radiogroup", { name: "Tune mode" })).toBeNull();
+});
+
+test("the manual tune page labels Run as Running while a run is in flight, without the reason", async () => {
+  const view = {
+    ...printerView(),
+    engine: { current: { session: "s", run: "r", state: "moving" }, queue: [], unconfirmed_kill: null },
+    preconditions: [{ stepper: "stepper_x", ok: false, failing: ["a run is in flight"] }],
+  } as unknown as PrinterView;
+  view.steppers = [
+    {
+      name: "stepper_x",
+      mcu: "ouroboros",
+      channel: 0,
+      serial: "AAA",
+      axis: "x",
+      kinematics: "corexy",
+      position_min: 0,
+      position_max: 300,
+      motor_rotation_distance_mm: 40,
+      homing_current_a: null,
+      electrical_model_present: true,
+      unusable: null,
+      proposal: { pattern: { start: [50, 50], end: [250, 50] }, refusal: null },
+    },
+  ] as unknown as PrinterView["steppers"];
+  respond(view);
+  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+  const run = await screen.findByRole("button", { name: "Running" });
+  expect(run).toBeDisabled();
+  expect(screen.queryByText(/run is in flight/i)).toBeNull();
 });
 
 test("kill needs a second click and posts once", async () => {
@@ -401,4 +432,131 @@ test("the manual tune page lays out Test, Pattern, Gains, Filters and Ladder abo
   expect(
     within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem").length,
   ).toBeGreaterThan(0);
+});
+
+test("a custom path off the isolating diagonal is flagged and blocks Run", async () => {
+  const control = {
+    pwm_hz: 50_000,
+    encoder_counts_per_rev: 4000,
+    velocity_p: 841,
+    velocity_i: 412,
+    position_p: 120,
+    position_i: 4,
+    torque_p: 300,
+    torque_i: 20,
+    flux_p: 310,
+    flux_i: 21,
+    velocity_filter_hz: 200,
+    torque_filter_hz: 1000,
+    position_filter_hz: 300,
+    flux_filter_hz: 1000,
+  };
+  const stepper = (name: string, axis: string, channel: number) =>
+    ({
+      name,
+      mcu: "ouroboros",
+      channel,
+      serial: "AAA",
+      axis,
+      kinematics: "corexy",
+      position_min: 0,
+      position_max: 300,
+      motor_rotation_distance_mm: 40,
+      homing_current_a: null,
+      electrical_model_present: true,
+      unusable: null,
+      proposal: { pattern: { start: [100.5, 104], end: [200.5, 204] }, refusal: null },
+    }) as unknown as StepperView;
+  respond({
+    ...printerView(),
+    steppers: [stepper("stepper_x", "x", 0), stepper("stepper_y", "y", 1)],
+    boards: [
+      board({
+        serial: "AAA",
+        channels: [
+          { channel: 0, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+          { channel: 1, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+        ] as never,
+      }),
+    ],
+  } as PrinterView);
+  workbench.stepperName = "stepper_x";
+  workbench.patterns = { stepper_x: { start: [22.7, 18.7], end: [262.2, 273.7] } };
+  workbench.patternModes = { stepper_x: "custom" };
+  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+
+  const message = /This path is not on the diagonal that moves only stepper_x\. stepper_y would move 15\.5 mm/;
+  expect(await screen.findAllByText(message)).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Fix the path" }));
+  await vi.waitFor(() => expect(screen.queryByText(message)).toBeNull());
+});
+
+test("pressing Run shows Running at once, with no flash of warning and no queued message", async () => {
+  const control = {
+    pwm_hz: 50_000,
+    encoder_counts_per_rev: 4000,
+    velocity_p: 841,
+    velocity_i: 412,
+    position_p: 120,
+    position_i: 4,
+    torque_p: 300,
+    torque_i: 20,
+    flux_p: 310,
+    flux_i: 21,
+    velocity_filter_hz: 200,
+    torque_filter_hz: 1000,
+    position_filter_hz: 300,
+    flux_filter_hz: 1000,
+  };
+  const stepper = {
+    name: "stepper_x",
+    mcu: "ouroboros",
+    channel: 0,
+    serial: "AAA",
+    axis: "x",
+    kinematics: "corexy",
+    position_min: 0,
+    position_max: 300,
+    motor_rotation_distance_mm: 40,
+    homing_current_a: null,
+    electrical_model_present: true,
+    unusable: null,
+    proposal: { pattern: { start: [100.5, 104], end: [200.5, 204] }, refusal: null },
+  } as unknown as StepperView;
+  const view = {
+    ...printerView({ homed_axes: "xyz" }),
+    steppers: [stepper, { ...stepper, name: "stepper_y", axis: "y", channel: 1 } as StepperView],
+    boards: [
+      board({
+        serial: "AAA",
+        channels: [
+          { channel: 0, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+          { channel: 1, control, velocity_i_corner_hz: 3, quantum_units: 16 },
+        ] as never,
+      }),
+    ],
+    preconditions: [
+      { stepper: "stepper_x", ok: true, failing: [] },
+      { stepper: "stepper_y", ok: true, failing: [] },
+    ],
+  } as PrinterView;
+  fetchMock.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/api/printer") return new Response(JSON.stringify(view));
+    if (path === "/api/runs" && init?.method === "POST") {
+      return new Response(JSON.stringify({ session: "20261104-aaa", run: "r1" }));
+    }
+    return new Promise<Response>(() => {});
+  });
+  render(<RouterProvider router={createTestRouter("/tune/manual")} />);
+  const run = await screen.findByRole("button", { name: "Run" });
+  await vi.waitFor(() => expect(run).toBeEnabled());
+
+  await act(async () => {
+    fireEvent.click(run);
+  });
+
+  expect(await screen.findByRole("button", { name: "Running" })).toBeDisabled();
+  expect(screen.queryByText(/waiting for the engine/i)).toBeNull();
+  expect(screen.queryByText(/queued/i)).toBeNull();
 });

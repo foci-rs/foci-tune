@@ -147,19 +147,6 @@ export function parseLadderList(text: string): Parsed<number[]> {
 
 export type GainRow = OuterGains & Filters;
 
-/** For each row, the keys whose value differs from the row before it. */
-export function highlightChanges<T extends { [K in keyof T]: number }>(rows: T[]): Set<keyof T>[] {
-  return rows.map((row, k) => {
-    const changed = new Set<keyof T>();
-    if (k === 0) return changed;
-    const prev = rows[k - 1];
-    for (const key of Object.keys(row) as (keyof T)[]) {
-      if (prev[key] !== row[key]) changed.add(key);
-    }
-    return changed;
-  });
-}
-
 export function declaredMetrics(run: Run): ChannelMetrics | null {
   const channels = run.metrics?.channels ?? [];
   return channels.find((c) => c.declared) ?? channels.find((c) => c.channel === run.declared_channel) ?? null;

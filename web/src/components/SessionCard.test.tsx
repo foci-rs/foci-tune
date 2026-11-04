@@ -24,7 +24,7 @@ const view = {
 const show = (over: Partial<Parameters<typeof SessionCard>[0]> = {}) =>
   render(
     <TooltipProvider>
-      <SessionCard view={view} canRestore onRestore={() => {}} newSessionNext={false} {...over} />
+      <SessionCard view={view} canRestore onRestore={() => {}} newSessionNext={false} notes={[]} {...over} />
     </TooltipProvider>,
   );
 
@@ -46,7 +46,7 @@ test("Restore starting values lives on the session card and follows canRestore",
   expect(onRestore).toHaveBeenCalledTimes(1);
   rerender(
     <TooltipProvider>
-      <SessionCard view={view} canRestore={false} onRestore={onRestore} newSessionNext={false} />
+      <SessionCard view={view} canRestore={false} onRestore={onRestore} newSessionNext={false} notes={[]} />
     </TooltipProvider>,
   );
   expect(screen.getByRole("button", { name: "Restore starting values" })).toBeDisabled();
@@ -65,4 +65,16 @@ test("a changed setup is flagged as a new session on the next run", async () => 
 test("no session means no card", () => {
   const { container } = show({ view: { ...view, session: null } as SessionView });
   expect(container).toBeEmptyDOMElement();
+});
+
+test("what happened to the session's runs is listed under the summary", () => {
+  show({
+    notes: [
+      "The run at 25 Hz was rejected: stepper_y moved while stepper_x was being tested, so the result can't be trusted.",
+      "The sweep stopped after 25 Hz, so 50, 75 and 100 Hz did not run.",
+    ],
+  });
+  const card = screen.getByRole("region", { name: "Session 20261102-aaa" });
+  expect(within(card).getByText(/stepper_y moved while stepper_x was being tested/)).toBeInTheDocument();
+  expect(within(card).getByText(/The sweep stopped after 25 Hz/)).toBeInTheDocument();
 });

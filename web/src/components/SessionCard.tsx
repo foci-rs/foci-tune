@@ -16,11 +16,14 @@ export function SessionCard({
   canRestore,
   onRestore,
   newSessionNext,
+  notes,
 }: {
   view: SessionView;
   canRestore: boolean;
   onRestore: () => void;
   newSessionNext: boolean;
+  /** What happened to the session's runs, such as a rejected run or a sweep that stopped. */
+  notes: string[];
 }) {
   const session = view.session;
   if (session === null) return null;
@@ -60,6 +63,11 @@ export function SessionCard({
           <span className="font-mono text-foreground">Velocity I {gains.velocity_i}</span> ·{" "}
           <span className="font-mono text-foreground">Position P {gains.position_p}</span>
         </p>
+        {notes.map((line) => (
+          <p key={line} className="text-amber-400">
+            {line}
+          </p>
+        ))}
       </div>
     </Card>
   );

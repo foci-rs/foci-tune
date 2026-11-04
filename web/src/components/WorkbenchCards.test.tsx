@@ -16,6 +16,7 @@ function patternCard(over: Partial<Parameters<typeof PatternCard>[0]> = {}) {
       pattern={pattern}
       proposal={proposal}
       mode="default"
+      isolation={null}
       refusal={null}
       error={null}
       notes={[]}
@@ -48,6 +49,27 @@ test("the dropdown sits between the map and the coordinates", () => {
   const start = screen.getByRole("group", { name: "Start" });
   expect(map.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(select.compareDocumentPosition(start) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("an off-diagonal path is explained on the card with a button that snaps it", () => {
+  const onPattern = vi.fn();
+  const snapped: Pattern = { start: [50, 50], end: [200, 200] };
+  render(
+    patternCard({
+      mode: "custom",
+      onPattern,
+      isolation: {
+        message:
+          "This path is not on the diagonal that moves only stepper_x. stepper_y would move 15.5 mm, and the run would be rejected.",
+        snapLabel: "Fix the path",
+        snapped,
+      },
+    }),
+  );
+  const card = screen.getByRole("region", { name: "Path" });
+  expect(within(card).getByText(/stepper_y would move 15.5 mm/)).toBeInTheDocument();
+  fireEvent.click(within(card).getByRole("button", { name: "Fix the path" }));
+  expect(onPattern).toHaveBeenCalledWith(snapped);
 });
 
 test("Default locks the coordinates and Custom unlocks them", () => {
@@ -218,6 +240,13 @@ test("a blocked run bar shows the first reason as a sentence and counts the rest
   expect(run).toBeDisabled();
   fireEvent.click(run);
   expect(onRun).not.toHaveBeenCalled();
+});
+
+test("a run held back silently stays disabled without adding a warning", () => {
+  render(bar({ holdRun: true }));
+  expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+  expect(screen.queryByRole("list")).toBeNull();
+  expect(screen.queryByText(/more$/)).toBeNull();
 });
 
 test("every reason stays available to screen readers as a list", () => {
