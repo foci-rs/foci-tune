@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
 import type { TuneAxis } from "@/api";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupText } from "@/components/ui/input-group";
@@ -121,6 +122,7 @@ export function NextStepCard({
   form,
   state,
   live,
+  footer,
   onForm,
 }: {
   axis: TuneAxis;
@@ -129,6 +131,8 @@ export function NextStepCard({
   state: PrepareState;
   /** The stepper's live value on this axis, to go back to; null when it reports none. */
   live: number | null;
+  /** Shown under the ladder. */
+  footer?: ReactNode;
   onForm: (form: PrepareForm) => void;
 }) {
   const corner = axis === "VelocityICornerHz";
@@ -185,6 +189,7 @@ export function NextStepCard({
         <StepSelect label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
       </div>
       {state.preview !== null && <LadderTable preview={state.preview} corner={corner} divisions={form.divisions} />}
+      {footer}
     </Card>
   );
 }

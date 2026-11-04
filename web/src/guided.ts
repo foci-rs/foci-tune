@@ -547,13 +547,23 @@ export function liveControlFor(printer: PrinterView, stepperName: string): LiveC
   return { velocity_p, velocity_i, position_p, pwm_hz };
 }
 
-export type GuidedAction = "setup" | "prepare" | "start" | "choose" | "extend" | "decide" | "abandon" | "restore";
+export type GuidedAction =
+  | "setup"
+  | "prepare"
+  | "adjust"
+  | "start"
+  | "choose"
+  | "extend"
+  | "decide"
+  | "abandon"
+  | "restore";
 
 const OVER_REASON: Record<GuidedAction, string> = {
   abandon: "there is nothing to abandon",
   setup: "its setup can't change any more",
   restore: "there is nothing to restore",
   prepare: "nothing more can be done with it",
+  adjust: "there is no step to adjust",
   start: "nothing more can be done with it",
   choose: "nothing more can be done with it",
   extend: "nothing more can be done with it",

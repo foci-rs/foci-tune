@@ -9,6 +9,7 @@ import {
   postTuneExtension,
   postTuneRestore,
   postTuneStep,
+  postTuneStepCancel,
   type EngineView,
   type PrinterView,
   type Tune,
@@ -16,10 +17,9 @@ import {
   type TuneDecision,
   type TuneDetail,
   type TuneId,
-  type TuneStepPlan,
   type TuneSummary,
 } from "@/api";
-import { ArrowRightIcon } from "lucide-react";
+import { ArrowRightIcon, PlayIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
@@ -32,9 +32,9 @@ import {
   currentGuidedStep,
   currentStep,
   driftCheckRunning,
-  durationText,
   expectedDurationSeconds,
   failureText,
+  formFromStep,
   GUIDED_STEPS,
   nextAxis,
   recommendedGain,
@@ -45,6 +45,7 @@ import {
   liveControlFor,
   liveSeed,
   prepareState,
+  runSentence,
   type GuidedAction,
   type GuidedStepId,
   type PrepareForm,
@@ -58,7 +59,7 @@ import { Steps } from "./Steps";
 import { SweepResultsTable } from "./SweepResultsTable";
 import { TuneRunCard } from "./TuneRunCard";
 import { ActionBar } from "./WorkbenchCards";
-import { Button, Card, Field, NumberField } from "./ui";
+import { Button, Card, NumberField } from "./ui";
 
 const isOver = (s: TuneSummary) => s.state === "Done" || s.state === "Abandoned";
 
@@ -195,7 +196,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const { detail, error, refresh } = useTune(id);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [plan, setPlan] = useState<TuneStepPlan | null>(null);
   const announced = detail?.state === "Announced";
   const earlier = useEarlierTunes(id, announced);
   const [prepare, setPrepare] = useState<PrepareForm>(DEFAULT_PREPARE);
@@ -240,6 +240,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const prepared = preparing && next !== null ? prepareState(next, prepare, liveControl) : null;
   const prepareBlocked = prepared?.problem ?? null;
   const setupEditable = actions.prepare && detail.steps.length === 0;
+  const announcedStep = starting && last !== null ? detail.steps[last] : null;
   const abandon = actions.abandon ? (
     <Button disabled={frozen} onClick={() => run("abandon", () => postTuneAbandon(id))}>
       Abandon tune
@@ -290,7 +291,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           prepareAxis={actions.prepare ? next : null}
           actions={actions}
           busy={frozen}
-          plan={plan}
           earlier={earlier}
           engine={printer.engine}
           announced={announced}
@@ -330,7 +330,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
                     lower_k: prepare.lower,
                     upper_k: prepare.upper,
                     octave_divisions: prepare.divisions,
-                  }).then(setPlan),
+                  }),
                 )
               }
             >
@@ -338,19 +338,32 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
               <ArrowRightIcon />
             </UiButton>
           )}
-          {starting && (
-            <Button
-              disabled={frozen}
-              onClick={() =>
-                run(
-                  "start",
-                  () => postTuneConfirm(id),
-                  () => setPlan(null),
-                )
-              }
-            >
-              Start the step
-            </Button>
+          {starting && announcedStep !== null && (
+            <>
+              <UiButton
+                variant="outline"
+                disabled={frozen}
+                onClick={() => {
+                  setPrepare(
+                    formFromStep(
+                      announcedStep,
+                      liveControl === null ? null : liveSeed(announcedStep.axis, liveControl),
+                    ),
+                  );
+                  run("adjust", () => postTuneStepCancel(id));
+                }}
+              >
+                Adjust
+              </UiButton>
+              <UiButton
+                disabled={frozen}
+                onClick={() => run("start", () => postTuneConfirm(id))}
+                className="border border-emerald-600 bg-emerald-700 text-white hover:bg-emerald-600"
+              >
+                <PlayIcon />
+                Run
+              </UiButton>
+            </>
           )}
         </ActionBar>
       )}
@@ -366,7 +379,6 @@ function AxisStep({
   prepareAxis,
   actions,
   busy,
-  plan,
   earlier,
   engine,
   announced,
@@ -385,7 +397,6 @@ function AxisStep({
   prepareAxis: ReturnType<typeof nextAxis>;
   actions: ReturnType<typeof availableActions>;
   busy: boolean;
-  plan: TuneStepPlan | null;
   earlier: Tune[];
   engine: EngineView;
   announced: boolean;
@@ -409,24 +420,61 @@ function AxisStep({
       <TuneRunCard engine={engine} sessions={sessions} />
       {indices.map((i) => (
         <div key={i} className="space-y-4">
-          <StepCard
-            tune={tune}
-            index={i}
-            active={i === last}
-            busy={busy}
-            canChoose={actions.choose && i === last}
-            canExtend={actions.extension && i === last}
-            onChoose={onChoose}
-            onExtend={onExtend}
-          />
+          {!(announcing && i === last) && (
+            <StepCard
+              tune={tune}
+              index={i}
+              active={i === last}
+              busy={busy}
+              canChoose={actions.choose && i === last}
+              canExtend={actions.extension && i === last}
+              onChoose={onChoose}
+              onExtend={onExtend}
+            />
+          )}
           {actions.decide && i === last && <PausePanel tune={tune} step={i} busy={busy} onDecide={onDecide} />}
         </div>
       ))}
-      {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} />}
+      {announcing && last !== null && (
+        <AnnouncedStep tune={tune} step={tune.steps[last]} earlier={earlier} live={live} />
+      )}
       {preparing && prepared !== null && (
         <NextStepCard axis={axis} busy={busy} form={prepare} state={prepared} live={live} onForm={onPrepare} />
       )}
     </>
+  );
+}
+
+/** A prepared step as it will run: its settings locked, and what running it does. */
+function AnnouncedStep({
+  tune,
+  step,
+  earlier,
+  live,
+}: {
+  tune: TuneDetail;
+  step: TuneDetail["steps"][number];
+  earlier: Tune[];
+  live: number | null;
+}) {
+  const form = formFromStep(step, live);
+  const control = { velocity_p: 0, velocity_i: 0, position_p: 0, pwm_hz: step.pwm_hz };
+  const announcement = announcementOf(tune);
+  const seconds = announcement === null ? null : expectedDurationSeconds([tune, ...earlier], announcement.runCount);
+  return (
+    <NextStepCard
+      axis={step.axis}
+      busy
+      form={form}
+      state={prepareState(step.axis, form, control)}
+      live={live}
+      onForm={() => undefined}
+      footer={
+        announcement === null ? null : (
+          <p className="mt-4 text-sm">{runSentence(tune.setup.stepper, announcement.runCount, seconds)}</p>
+        )
+      }
+    />
   );
 }
 
@@ -467,30 +515,6 @@ function LockBanner({
         )}
       </div>
     </div>
-  );
-}
-
-function AnnouncementPanel({ tune, plan, earlier }: { tune: Tune; plan: TuneStepPlan | null; earlier: Tune[] }) {
-  const a = announcementOf(tune);
-  if (a === null) return null;
-  const duration = durationText(expectedDurationSeconds([tune, ...earlier], a.runCount));
-  return (
-    <Card label="Announcement" className="border-emerald-500/60">
-      <dl className="flex flex-wrap gap-x-8 gap-y-2">
-        <Field label="Stepper">{a.stepper}</Field>
-        <Field label="Axis">{axisLabel(a.axis)}</Field>
-        <Field label="Rungs">
-          {a.firstGain.toFixed(a.axis === "VelocityICornerHz" ? 1 : 0)} to{" "}
-          {a.lastGain.toFixed(a.axis === "VelocityICornerHz" ? 1 : 0)}
-        </Field>
-        <Field label="Runs" sub={`${a.rungs} rungs, ${a.repeats} repeats`}>
-          {a.runCount}
-        </Field>
-        <Field label="Expected duration">{duration}</Field>
-      </dl>
-      <p className="mt-3 text-sm font-medium">The machine will move once you start this step.</p>
-      {plan !== null && <p className="mt-1 text-xs text-muted-foreground">{plan.announcement}</p>}
-    </Card>
   );
 }
 
