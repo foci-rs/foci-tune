@@ -1230,14 +1230,14 @@ describe("resultRows", () => {
     return t;
   };
   test("lists each axis with its gain before and after and how it changed", () => {
-    expect(resultRows(finishedTune([841, 406, 141]))).toEqual([
-      { label: "Velocity P", before: "841", after: "841", change: "unchanged" },
-      { label: "Velocity I", before: "31.1 Hz", after: "49.3 Hz", change: "+59%" },
-      { label: "Position P", before: "141", after: "141", change: "unchanged" },
+    expect(resultRows(finishedTune([841, 406, 141]), null)).toEqual([
+      { label: "Velocity P", before: "841", after: "841", change: "unchanged", active: false },
+      { label: "Velocity I", before: "31.1 Hz", after: "49.3 Hz", change: "+59%", active: false },
+      { label: "Position P", before: "141", after: "141", change: "unchanged", active: false },
     ]);
   });
   test("a lower gain shows a negative change", () => {
-    const rows = resultRows(finishedTune([600, 256, 100]));
+    const rows = resultRows(finishedTune([600, 256, 100]), null);
     expect(rows[0].change).toBe("-29%");
     expect(rows[2].change).toBe("-29%");
     expect(rows[1].change).toBe("unchanged");
@@ -1246,6 +1246,28 @@ describe("resultRows", () => {
     const t = finishedTune([841, 406, 141]);
     t.steps[2].chosen = null;
     t.steps[2].chosen_shown = null;
-    expect(resultRows(t)[2]).toEqual({ label: "Position P", before: "141", after: "-", change: "" });
+    expect(resultRows(t, null)[2]).toEqual({
+      label: "Position P",
+      before: "141",
+      after: "-",
+      change: "",
+      active: false,
+    });
+  });
+  test("a gain is active when the stepper's live value is the chosen one", () => {
+    const live = { velocity_p: 841, velocity_i: 256, position_p: 141, pwm_hz: 50000 };
+    expect(resultRows(finishedTune([841, 406, 141]), live).map((r) => r.active)).toEqual([true, false, true]);
+    expect(resultRows(finishedTune([841, 406, 141]), { ...live, velocity_i: 406 }).map((r) => r.active)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+  test("a gain with nothing chosen is never active", () => {
+    const t = finishedTune([841, 406, 141]);
+    t.steps[2].chosen = null;
+    t.steps[2].chosen_shown = null;
+    const live = { velocity_p: 841, velocity_i: 406, position_p: 141, pwm_hz: 50000 };
+    expect(resultRows(t, live)[2].active).toBe(false);
   });
 });

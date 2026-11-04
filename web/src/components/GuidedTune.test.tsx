@@ -1004,7 +1004,7 @@ test("the finished Result keeps the checklist and adds a before and after table"
     within(table)
       .getAllByRole("columnheader")
       .map((c) => c.textContent),
-  ).toEqual(["Gain", "Before", "After", "Change"]);
+  ).toEqual(["Gain", "Before", "After", "Change", "Active"]);
   const rows = within(table)
     .getAllByRole("row")
     .slice(1)
@@ -1014,9 +1014,9 @@ test("the finished Result keeps the checklist and adds a before and after table"
         .map((c) => c.textContent),
     );
   expect(rows).toEqual([
-    ["Velocity P", "1000", "1000", "unchanged"],
-    ["Velocity I", "6.1 Hz", "6.1 Hz", "unchanged"],
-    ["Position P", "800", "900", "+13%"],
+    ["Velocity P", "1000", "1000", "unchanged", "Active"],
+    ["Velocity I", "6.1 Hz", "6.1 Hz", "unchanged", "Active"],
+    ["Position P", "800", "900", "+13%", "Not active"],
   ]);
 });
 
@@ -1029,9 +1029,10 @@ test("the config block sits in its own card with how to use it and a Copy button
   const card = screen.getByRole("region", { name: "Printer config" });
   expect(
     within(card).getByText(
-      "The stepper is using these gains now. To keep them after a restart, replace the values in the [foci stepper_x] section of your printer config with this block.",
+      "To keep them after a restart, replace the [foci stepper_x] section of your printer config with this.",
     ),
   ).toBeInTheDocument();
+  expect(within(card).queryByText(/using these gains now/)).toBeNull();
   expect(card).toHaveTextContent("pid_velocity_p: 1000");
   fireEvent.click(within(card).getByRole("button", { name: "Copy" }));
   await waitFor(() => expect(writeText).toHaveBeenCalledWith(CONFIG));

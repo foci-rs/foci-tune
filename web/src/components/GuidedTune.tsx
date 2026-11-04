@@ -299,7 +299,7 @@ function TuneView({
 
       {shown === "result" &&
         (detail.config_block !== null ? (
-          <ResultView tune={detail} block={detail.config_block} />
+          <ResultView tune={detail} block={detail.config_block} live={liveControlFor(printer, detail.setup.stepper)} />
         ) : (
           <ResultPlaceholder items={gainChecklist(detail)} />
         ))}

@@ -835,10 +835,12 @@ export interface ResultRow {
   before: string;
   after: string;
   change: string;
+  /** Whether the stepper is running the chosen gain right now. */
+  active: boolean;
 }
 
 /** What the tune changed, per axis: the gain it started with, the one chosen and how far apart they are. */
-export function resultRows(tune: Tune): ResultRow[] {
+export function resultRows(tune: Tune, live: LiveControl | null): ResultRow[] {
   const [gains] = tune.snapshot;
   const startRaw: Record<TuneAxis, number> = {
     VelocityP: gains.velocity_p,
@@ -852,7 +854,7 @@ export function resultRows(tune: Tune): ResultRow[] {
     const before = corner ? (beforeHz === null ? "-" : `${beforeHz.toFixed(1)} Hz`) : String(startRaw[axis]);
     const chosen = step?.chosen ?? null;
     if (step === undefined || chosen === null || step.chosen_shown === null) {
-      return { label: axisTitle(axis), before, after: "-", change: "" };
+      return { label: axisTitle(axis), before, after: "-", change: "", active: false };
     }
     const after = corner ? `${step.chosen_shown.toFixed(1)} Hz` : String(chosen);
     let change = "changed";
@@ -861,6 +863,11 @@ export function resultRows(tune: Tune): ResultRow[] {
       const percent = Math.round((chosen / startRaw[axis] - 1) * 100);
       change = percent > 0 ? `+${percent}%` : `${percent}%`;
     }
-    return { label: axisTitle(axis), before, after, change };
+    const liveRaw: Record<TuneAxis, number | undefined> = {
+      VelocityP: live?.velocity_p,
+      VelocityICornerHz: live?.velocity_i,
+      PositionP: live?.position_p,
+    };
+    return { label: axisTitle(axis), before, after, change, active: liveRaw[axis] === chosen };
   });
 }
