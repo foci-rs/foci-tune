@@ -1353,6 +1353,36 @@ async fn applying_a_finished_tune_writes_all_three_chosen_gains_over_whatever_th
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_choice_keeps_the_earlier_choices_when_the_stepper_was_reset_between_steps() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    rig.a.sim(|s| {
+        s.lag_by_velocity_p.insert(1060, 40);
+    });
+    let id = first_step_done(&rig, &sched).await;
+    sched.choose(&id, Choice::Rung(0)).await.unwrap();
+    let first = rig.store.read_tune(&id).unwrap().steps[0].chosen.unwrap();
+    rig.engine.apply_gains("stepper_x", BASE.0).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+    let before = rig.scripts().len();
+
+    sched.choose(&id, Choice::Value(60.0)).await.unwrap();
+
+    let scripts = rig.scripts();
+    let line = scripts[before..]
+        .iter()
+        .rfind(|s| s.starts_with("FOCI_SET_GAINS"))
+        .expect("the gains were written");
+    assert_eq!(
+        (float(line, "VELOCITY_P") * 256.0).round() as i32,
+        first,
+        "the first choice survived the reset"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_gains_of_a_tune_that_is_not_finished_cannot_be_applied() {
     let rig = rig().await;
     let sched = scheduler(&rig);

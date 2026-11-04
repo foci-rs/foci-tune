@@ -1357,8 +1357,9 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         }
     }
 
-    /// Takes `choice` as the value of the step that awaits it: writes the step's gains with
-    /// the swept axis set to it through the engine's confirmed write, records it on the step
+    /// Takes `choice` as the value of the step that awaits it: writes the step's gains, with
+    /// the earlier steps' choices laid over them and the swept axis set to `choice`, through
+    /// the engine's confirmed write, records it on the step
     /// and readies the next step, whose live seed then reads it, or ends the tune after
     /// position P. The filters and the other gains are left as the step ran them.
     ///
@@ -1378,12 +1379,18 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         }
         let stepper = record.setup.stepper.clone();
         let done = record.steps.len() >= AXES.len();
-        let Some(step) = record.steps.last_mut() else {
+        let Some((step, earlier)) = record.steps.split_last_mut() else {
             return Err(TuneError::OutOfOrder("the tune has no step".to_owned()));
         };
         let value = chosen_value(step, choice)?;
+        let gains = earlier
+            .iter()
+            .filter_map(|before| before.chosen.map(|raw| (before.axis, raw)))
+            .fold(step.base.0, |gains, (axis, raw)| {
+                with_axis(gains, axis, raw)
+            });
         s.engine
-            .apply_gains(&stepper, with_axis(step.base.0, step.axis, value.raw))
+            .apply_gains(&stepper, with_axis(gains, step.axis, value.raw))
             .await
             .map_err(TuneError::Engine)?;
         step.chosen = Some(value.raw);
