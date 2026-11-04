@@ -688,6 +688,7 @@ export function SessionResults({ view }: { view: SessionView }) {
   const [openRun, setOpenRun] = useState<string | null>(null);
   const { printer } = useFeed();
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: view.id is a trigger: a different session clears the overlay.
   useEffect(() => {
     setChecked([]);
     setColors(new Map());

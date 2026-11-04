@@ -35,6 +35,7 @@ export function SyncedPanels({
   const syncing = useRef(false);
   const panelKey = panels.map((p) => p.label).join("|");
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: panelKey stands in for panels, so the options rebuild only when a panel label changes.
   const options = useMemo<PlotOptions[]>(
     () =>
       panels.map((p) => ({
@@ -73,6 +74,7 @@ export function SyncedPanels({
     },
     [],
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the callbacks depend on the panel count, not on the panel objects.
   const callbacks = useMemo(() => panels.map((_, k) => onCreate(k)), [panels.length, onCreate]);
 
   return (
@@ -99,6 +101,7 @@ export function useStableSeries(runs: { id: string; label: string; color: string
   const key = runs.map((r) => `${r.id}:${r.label}:${r.color}`).join("|");
   const latest = useRef(runs);
   latest.current = runs;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: key stands in for runs, and latest holds the current value.
   return useMemo(() => runSeries(latest.current, dash), [key, dash]);
 }
 

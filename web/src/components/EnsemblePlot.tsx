@@ -49,6 +49,7 @@ export function ensembleOptions(runs: OverlayRun<ProbePlot>[], signal: Signal): 
 export function EnsemblePlot({ runs }: { runs: OverlayRun<ProbePlot>[] }) {
   const [signal, setSignal] = useState<Signal>("velocity");
   const key = runs.map((r) => `${r.id}:${r.label}:${r.color}:${r.value[signal].fit === null ? 0 : 1}`).join("|");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: key stands in for runs, so the options rebuild only when a run's identity or fit changes.
   const options = useMemo<PlotOptions>(() => ensembleOptions(runs, signal), [key, signal]);
   const data = useMemo(
     () =>

@@ -141,6 +141,7 @@ export function GuidedSetup({
 
   const speeds = parseNumberList(speedsText, "the speed set");
   const maxVelocity = printer.moonraker.max_velocity;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the dependencies are the parsed parts of the inputs, so the default recomputes on a changed value and not on a new object.
   const derived = useMemo(
     () =>
       speeds.ok && pattern !== null && stepper !== undefined

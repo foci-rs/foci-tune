@@ -74,6 +74,7 @@ export function PausePanel({ tune, step }: { tune: Tune; step: number }) {
   const [loaded, setLoaded] = useState<Loaded>({ runs: {}, series: {} });
   const [error, setError] = useState<string | null>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: idKey stands in for refs, so the fetch repeats only when the set of runs changes.
   useEffect(() => {
     let live = true;
     setError(null);

@@ -23,6 +23,7 @@ export function TuneRunCard({
   const run = current?.run;
   const state = current?.state;
   const session = current?.session;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: state is a trigger: the stored run is read again when the run's state changes.
   useEffect(() => {
     if (session === undefined) {
       setRecord(null);

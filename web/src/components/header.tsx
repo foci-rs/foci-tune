@@ -111,6 +111,7 @@ export function Header() {
 
   const [homing, setHoming] = useState(false);
   const [homeError, setHomeError] = useState<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: klippy is a trigger: a new Klippy state clears the home error.
   useEffect(() => setHomeError(null), [klippy]);
   const home = () => {
     setHoming(true);

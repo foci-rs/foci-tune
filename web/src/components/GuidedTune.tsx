@@ -199,6 +199,7 @@ function TuneView({
   const [prepare, setPrepare] = useState<PrepareForm>(DEFAULT_PREPARE);
   const [picked, setPicked] = useState<GuidedStepId | null>(null);
   const followed = detail === null ? null : currentGuidedStep(detail);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: followed is a trigger: moving to another step clears the picked one.
   useEffect(() => setPicked(null), [followed]);
 
   const run = (kind: GuidedAction, action: () => Promise<unknown>, after?: () => void) => {
