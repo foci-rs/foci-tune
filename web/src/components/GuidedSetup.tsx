@@ -249,7 +249,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               </SelectContent>
             </Select>
           </label>
-          <p className="text-sm text-muted-foreground">Tracking</p>
+          <p className="text-sm font-semibold text-muted-foreground">Tracking</p>
           {trackingSetup !== null && (
             <ParametersBlock
               type="tracking"
@@ -260,7 +260,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               onSetup={(s) => s.type === "tracking" && setTrackingStrokes(s.parameters.strokes)}
             />
           )}
-          <p className="text-sm text-muted-foreground">Probe</p>
+          <p className="text-sm font-semibold text-muted-foreground">Probe</p>
           {probeSetup !== null && (
             <ParametersBlock
               type="probe"
@@ -276,7 +276,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               }}
             />
           )}
-          <p className="text-sm text-muted-foreground">Standstill</p>
+          <p className="text-sm font-semibold text-muted-foreground">Standstill</p>
           {standstillSetup !== null && (
             <ParametersBlock
               type="standstill"
@@ -287,7 +287,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               onSetup={(s) => s.type === "standstill" && setStandstill(s.parameters)}
             />
           )}
-          <p className="text-sm text-muted-foreground">Limits</p>
+          <p className="text-sm font-semibold text-muted-foreground">Limits</p>
           <div className="flex flex-wrap items-end gap-3">
             {gateField("Damping stop limit", "damping_floor", 0.01)}
             {gateField("Low damping below", "marginal", 0.01)}
