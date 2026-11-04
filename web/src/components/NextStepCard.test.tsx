@@ -131,3 +131,20 @@ test("without a ladder there is no Sweep title", () => {
   render(card({ ...DEFAULT_PREPARE, seed: 0 }));
   expect(screen.queryByText("Sweep")).toBeNull();
 });
+
+test("the step size is a dropdown of the offered sizes and reports the choice", () => {
+  const onForm = vi.fn();
+  render(card(DEFAULT_PREPARE, { onForm }));
+  expect(screen.getByRole("combobox", { name: "Step size" })).toHaveTextContent("26%");
+  fireEvent.click(screen.getByRole("combobox", { name: "Step size" }));
+  expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["12%", "19%", "26%", "41%"]);
+  fireEvent.click(screen.getByRole("option", { name: "12%" }));
+  expect(onForm).toHaveBeenCalledWith({ ...DEFAULT_PREPARE, divisions: 6 });
+});
+
+test("the change from the seed follows the step size", () => {
+  const form = { ...DEFAULT_PREPARE, divisions: 6 };
+  render(card(form, { state: prepareState("VelocityP", form, control) }));
+  expect(rowsOf()[2]).toEqual(["vs seed", "-29%", "-21%", "-11%", "0%", "+12%", "+26%", "+41%"]);
+  expect(rowsOf()[1]).toEqual(["Gain", "707", "794", "891", "1000", "1122", "1260", "1414"]);
+});

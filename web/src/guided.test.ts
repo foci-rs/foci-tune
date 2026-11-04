@@ -12,6 +12,7 @@ import {
   liveControlFor,
   liveSeed,
   prepareState,
+  stepPercent,
   previewLadder,
   defaultProbeSpeed,
   expectedDurationSeconds,
@@ -52,6 +53,7 @@ function step(over: Partial<TuneStep> = {}): TuneStep {
     repeats: 1,
     lower_k: 0,
     upper_k: 3,
+    octave_divisions: 3,
     pwm_hz: 50000,
     base: [gains, filters],
     sessions: { probe: "s1", tracking: "s2", standstill: "s3" },
@@ -894,5 +896,22 @@ describe("liveControlFor", () => {
   test("is null for an unknown stepper or a board that is not reporting", () => {
     expect(liveControlFor(printer, "stepper_y")).toBeNull();
     expect(liveControlFor({ ...printer, boards: [] } as unknown as PrinterView, "stepper_x")).toBeNull();
+  });
+});
+
+describe("step size", () => {
+  test("the offered divisions are 12%, 19%, 26% and 41% apart", () => {
+    expect([6, 4, 3, 2].map(stepPercent)).toEqual([12, 19, 26, 41]);
+  });
+
+  test("a finer division spaces the same steps closer", () => {
+    const r = previewLadder("VelocityP", 1000, 50000, -3, 3, 6);
+    expect("problem" in r ? [] : r.gains.map((g) => g.raw)).toEqual([707, 794, 891, 1000, 1122, 1260, 1414]);
+  });
+
+  test("the form's division is what the ladder is built with", () => {
+    const control = { velocity_p: 1000, velocity_i: 50, position_p: 800, pwm_hz: 50000 };
+    const state = prepareState("VelocityP", { ...DEFAULT_PREPARE, divisions: 2, lower: -2, upper: 2 }, control);
+    expect(state.preview?.gains.map((g) => g.raw)).toEqual([500, 707, 1000, 1414, 2000]);
   });
 });

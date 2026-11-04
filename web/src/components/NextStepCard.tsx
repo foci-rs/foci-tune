@@ -4,7 +4,14 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupText } from "@
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { axisLabel, type LadderPreview, type PrepareForm, type PrepareState } from "@/guided";
+import {
+  axisLabel,
+  STEP_DIVISIONS,
+  stepPercent,
+  type LadderPreview,
+  type PrepareForm,
+  type PrepareState,
+} from "@/guided";
 import { Card, NumberField } from "./ui";
 
 const STEPS = Array.from({ length: 19 }, (_, i) => i - 9);
@@ -41,13 +48,13 @@ function StepSelect({
 
 const shownLive = (live: number, corner: boolean) => (corner ? `${live.toFixed(1)} Hz` : String(Math.round(live)));
 
-const change = (step: number) => {
-  const percent = Math.round((2 ** (step / 3) - 1) * 100);
+const change = (step: number, divisions: number) => {
+  const percent = Math.round((2 ** (step / divisions) - 1) * 100);
   return percent > 0 ? `+${percent}%` : `${percent}%`;
 };
 
 /** The ladder's steps from low to high: the step, the gain it gives and how far that is from the seed. */
-function LadderTable({ preview, corner }: { preview: LadderPreview; corner: boolean }) {
+function LadderTable({ preview, corner, divisions }: { preview: LadderPreview; corner: boolean; divisions: number }) {
   const columns = [
     ...preview.gains.map((g) => ({
       step: g.step,
@@ -91,7 +98,7 @@ function LadderTable({ preview, corner }: { preview: LadderPreview; corner: bool
               </th>
               {columns.map((c) => (
                 <td key={c.step} className={`${cell(c)} text-xs text-muted-foreground`}>
-                  {change(c.step)}
+                  {change(c.step, divisions)}
                 </td>
               ))}
             </tr>
@@ -159,10 +166,25 @@ export function NextStepCard({
           Repeats
           <NumberField label="Repeats" value={form.repeats} disabled={busy} onValue={(repeats) => set({ repeats })} />
         </label>
+        <div className="flex flex-col text-xs text-muted-foreground">
+          Step size
+          <Select value={String(form.divisions)} disabled={busy} onValueChange={(v) => set({ divisions: Number(v) })}>
+            <SelectTrigger aria-label="Step size" className="w-24 font-mono text-foreground">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STEP_DIVISIONS.map((d) => (
+                <SelectItem key={d} value={String(d)} className="font-mono">
+                  {stepPercent(d)}%
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         <StepSelect label="Lowest step" value={form.lower} disabled={busy} onValue={(lower) => set({ lower })} />
         <StepSelect label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
       </div>
-      {state.preview !== null && <LadderTable preview={state.preview} corner={corner} />}
+      {state.preview !== null && <LadderTable preview={state.preview} corner={corner} divisions={form.divisions} />}
     </Card>
   );
 }

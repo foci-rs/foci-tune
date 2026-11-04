@@ -52,6 +52,7 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
             repeats: 2,
             lower_k: -1,
             upper_k: 1,
+            octave_divisions: 3,
             pwm_hz: 50000,
             base: [gains, filters],
             sessions: { probe: "a", tracking: "b", standstill: "c" },
@@ -470,7 +471,7 @@ test("a typed seed and a changed range are what Next sends", async () => {
   fireEvent.click(screen.getByRole("option", { name: "5" }));
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps"]));
-  expect(bodies[0]).toEqual({ seed: { typed: 1200 }, repeats: 3, lower_k: -3, upper_k: 5 });
+  expect(bodies[0]).toEqual({ seed: { typed: 1200 }, repeats: 3, lower_k: -3, upper_k: 5, octave_divisions: 3 });
 });
 
 test("reload puts the live seed back and Next sends live again", async () => {
@@ -617,4 +618,13 @@ test("Start is the rightmost button of the bar, after Abandon", async () => {
     .getAllByRole("button")
     .map((b) => b.textContent);
   expect(names).toEqual(["Abandon tune", "Start the step"]);
+});
+
+test("a chosen step size is sent with the step", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(await screen.findByRole("combobox", { name: "Step size" }));
+  fireEvent.click(screen.getByRole("option", { name: "12%" }));
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(bodies[0]).toMatchObject({ octave_divisions: 6 }));
 });

@@ -545,6 +545,8 @@ export interface TuneStep {
   repeats: number;
   lower_k: number;
   upper_k: number;
+  /** Divisions of an octave between neighbouring gains. */
+  octave_divisions: number;
   pwm_hz: number;
   base: [TuneGains, Filters];
   sessions: { probe: SessionId; tracking: SessionId; standstill: SessionId };
@@ -604,6 +606,7 @@ export interface TuneStepRequest {
   repeats: number;
   lower_k: number;
   upper_k: number;
+  octave_divisions?: number;
 }
 
 export interface TuneStepPlan {

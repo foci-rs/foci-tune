@@ -492,9 +492,17 @@ export interface PrepareForm {
   repeats: number;
   lower: number;
   upper: number;
+  /** Divisions of an octave between neighbouring gains. */
+  divisions: number;
 }
 
-export const DEFAULT_PREPARE: PrepareForm = { seed: null, repeats: 3, lower: -3, upper: 3 };
+export const DEFAULT_PREPARE: PrepareForm = { seed: null, repeats: 3, lower: -3, upper: 3, divisions: 3 };
+
+/** The step sizes on offer, as divisions of an octave, from the finest to the coarsest. */
+export const STEP_DIVISIONS = [6, 4, 3, 2] as const;
+
+/** How much one step changes the gain, in percent. */
+export const stepPercent = (divisions: number): number => Math.round((2 ** (1 / divisions) - 1) * 100);
 
 export interface PrepareState {
   /** The seed the ladder starts from; null while there is neither a typed nor a live value. */
@@ -511,7 +519,9 @@ export function prepareState(axis: TuneAxis, form: PrepareForm, control: LiveCon
   const seed = form.seed ?? (control === null ? null : liveSeed(axis, control));
   const rangeOk = Number.isInteger(form.lower) && Number.isInteger(form.upper) && form.lower <= form.upper;
   const built =
-    seed === null || !rangeOk ? null : previewLadder(axis, seed, control?.pwm_hz ?? 0, form.lower, form.upper);
+    seed === null || !rangeOk
+      ? null
+      : previewLadder(axis, seed, control?.pwm_hz ?? 0, form.lower, form.upper, form.divisions);
   const preview = built === null || "problem" in built ? null : built;
   let problem: string | null = null;
   if (form.repeats < 1 || !Number.isInteger(form.repeats))
@@ -610,6 +620,7 @@ export function previewLadder(
   pwmHz: number,
   lower: number,
   upper: number,
+  divisions = 3,
 ): LadderPreview | { problem: string } {
   const corner = axis === "VelocityICornerHz";
   if (corner && !(pwmHz > 0)) return { problem: "The PWM frequency is unknown, so a corner can't be converted." };
@@ -628,7 +639,7 @@ export function previewLadder(
   const base = corner ? (seedRaw === 0 ? SEED_CORNER_HZ : (cornerHz(seedRaw, pwmHz) as number)) : seedRaw;
   const preview: LadderPreview = { gains: [], left: [] };
   for (let step = lower; step <= upper; step += 1) {
-    const shown = base * 2 ** (step / 3);
+    const shown = base * 2 ** (step / divisions);
     const raw = toRaw(shown);
     if (!writable(shown, raw)) {
       preview.left.push({ step, shown, reason: "is outside what the stepper accepts" });

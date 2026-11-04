@@ -328,6 +328,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
                     repeats: prepare.repeats,
                     lower_k: prepare.lower,
                     upper_k: prepare.upper,
+                    octave_divisions: prepare.divisions,
                   }).then(setPlan),
                 )
               }
