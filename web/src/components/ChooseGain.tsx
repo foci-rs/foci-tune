@@ -17,6 +17,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { manualProblem } from "@/guided";
 import { NumberField } from "./ui";
 
@@ -40,7 +41,7 @@ export function ChooseGain({
   accept: string | null;
   /** The number the dialog starts with. */
   initial: number | null;
-  gains: { index: number; label: string; recommended: boolean }[];
+  gains: { index: number; label: string }[];
   pwmHz: number;
   busy: boolean;
   onAccept: () => void;
@@ -53,9 +54,20 @@ export function ChooseGain({
   return (
     <>
       <div className="inline-flex rounded-md shadow-xs">
-        <Button className="rounded-r-none" disabled={busy || accept === null} onClick={onAccept}>
-          {accept === null ? "Accept" : `Accept ${accept}`}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span tabIndex={-1} className="inline-flex">
+              <Button className="rounded-r-none" disabled={busy || accept === null} onClick={onAccept}>
+                Accept
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            {accept === null
+              ? "No gain was scored, so there is nothing to accept."
+              : `Take the recommended gain, ${accept}.`}
+          </TooltipContent>
+        </Tooltip>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -69,7 +81,7 @@ export function ChooseGain({
           <DropdownMenuContent align="end">
             {gains.map((g) => (
               <DropdownMenuItem key={g.index} onSelect={() => onPick(g.index)}>
-                {g.recommended ? `${g.label} (recommended)` : g.label}
+                {`Rung ${g.index + 1}: ${g.label}`}
               </DropdownMenuItem>
             ))}
             {gains.length > 0 && <DropdownMenuSeparator />}

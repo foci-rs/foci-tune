@@ -1109,16 +1109,11 @@ describe("choosing a gain", () => {
     expect(acceptGain(t, 0)).toBe("50.0 Hz");
   });
 
-  test("the dropdown lists the gains that finished measuring, with the recommended one marked", () => {
+  test("the dropdown lists the gains that finished measuring, by their row", () => {
     expect(measuredGains(finished({ Measured: { rung: 1 } }), 0)).toEqual([
-      { index: 0, label: "421", recommended: false },
-      { index: 1, label: "530", recommended: true },
+      { index: 0, label: "421" },
+      { index: 1, label: "530" },
     ]);
-  });
-  test("an interpolated recommendation marks no gain of the list", () => {
-    expect(
-      measuredGains(finished({ Interpolated: { shown: 480, between: [0, 1] } }), 0).some((g) => g.recommended),
-    ).toBe(false);
   });
 
   test.each([

@@ -755,14 +755,10 @@ export function acceptGain(tune: Tune, index: number): string | null {
   return null;
 }
 
-/** The gains that finished measuring, for picking one by hand; the recommended one is marked. */
-export function measuredGains(tune: Tune, index: number): { index: number; label: string; recommended: boolean }[] {
+/** The gains that finished measuring, for picking one by hand. */
+export function measuredGains(tune: Tune, index: number): { index: number; label: string }[] {
   const step = tune.steps[index];
-  return measuredRows(tune, index).map((r) => ({
-    index: r.index,
-    label: gainAt(step, r.index),
-    recommended: r.recommended === "measured",
-  }));
+  return measuredRows(tune, index).map((r) => ({ index: r.index, label: gainAt(step, r.index) }));
 }
 
 /** Why a typed gain cannot be used, as a sentence; null when it can. */

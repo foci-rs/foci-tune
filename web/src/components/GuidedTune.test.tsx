@@ -280,7 +280,7 @@ test("Accept takes the recommended gain, named on the button", async () => {
   scoredStep();
   current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
   render(<GuidedTune printer={printer} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Accept 1000" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/choice"]));
   expect(bodies[0]).toEqual({ choice: "recommended" });
 });
@@ -291,7 +291,7 @@ test("a measured gain is picked from the menu", async () => {
   current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
   render(<GuidedTune printer={printer} />);
   fireEvent.keyDown(await screen.findByRole("button", { name: "More ways to choose" }), { key: "Enter" });
-  fireEvent.click(screen.getByRole("menuitem", { name: "1260" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Rung 3: 1260" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/choice"]));
   expect(bodies[0]).toEqual({ choice: { rung: 2 } });
 });
@@ -301,7 +301,7 @@ test("a typed gain is sent from the dialog, which starts at the recommendation",
   scoredStep();
   current.steps[0].recommendation = { choice: { Interpolated: { shown: 1100.4, between: [1, 2] } }, extend: null };
   render(<GuidedTune printer={printer} />);
-  expect(await screen.findByRole("button", { name: "Accept 1100" })).toBeInTheDocument();
+  await screen.findByRole("button", { name: "Accept" });
   fireEvent.keyDown(screen.getByRole("button", { name: "More ways to choose" }), { key: "Enter" });
   fireEvent.click(screen.getByRole("menuitem", { name: "Enter a value…" }));
   const input = screen.getByRole("spinbutton", { name: "Gain" });
@@ -322,7 +322,7 @@ test("when the best gain is at an edge the bar offers a lower or higher one, and
   const names = within(extend.closest(".sticky") as HTMLElement)
     .getAllByRole("button")
     .map((b) => b.textContent);
-  expect(names).toEqual(["Abandon tune", "Try a lower gain", "Accept 800", ""]);
+  expect(names).toEqual(["Abandon tune", "Try a lower gain", "Accept", ""]);
   expect(
     screen.getByText(/is at the low end of what was tried, so a lower gain may be better\. Try \d+: 8 more runs\./),
   ).toBeInTheDocument();
@@ -336,7 +336,7 @@ test("there is no extension button when the best gain is inside the range", asyn
   scoredStep();
   current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept 1000" });
+  await screen.findByRole("button", { name: "Accept" });
   expect(screen.queryByRole("button", { name: /Try a (lower|higher) gain/ })).toBeNull();
 });
 
