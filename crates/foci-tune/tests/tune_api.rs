@@ -678,3 +678,61 @@ async fn starting_without_a_prepared_step_says_to_prepare_one() {
         reply.error()
     );
 }
+
+fn rung_raws(tune: &Value) -> Vec<i64> {
+    tune["steps"][0]["rungs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["raw"].as_i64().unwrap())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_step_without_a_step_size_uses_the_third_octave() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let body = json!({"seed": {"typed": 1000.0}, "repeats": 1, "lower_k": -3, "upper_k": 3});
+
+    let plan = post(&app, &format!("/api/tunes/{id}/steps"), body).await;
+
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.error());
+    let tune = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(tune["steps"][0]["octave_divisions"], 3);
+    assert_eq!(rung_raws(&tune), [500, 630, 794, 1000, 1260, 1587, 2000]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_finer_step_size_spaces_the_same_steps_closer_and_is_recorded() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let body = json!({
+        "seed": {"typed": 1000.0}, "repeats": 1, "lower_k": -3, "upper_k": 3, "octave_divisions": 6,
+    });
+
+    let plan = post(&app, &format!("/api/tunes/{id}/steps"), body).await;
+
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.error());
+    let tune = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(tune["steps"][0]["octave_divisions"], 6);
+    assert_eq!(rung_raws(&tune), [707, 794, 891, 1000, 1122, 1260, 1414]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_the_offered_step_sizes_are_accepted() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let body = json!({
+        "seed": "live", "repeats": 1, "lower_k": 0, "upper_k": 0, "octave_divisions": 5,
+    });
+
+    let reply = post(&app, &format!("/api/tunes/{id}/steps"), body).await;
+
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{}", reply.error());
+    assert!(reply.error().contains("step size"), "{}", reply.error());
+    let tune = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(tune["steps"], json!([]));
+}

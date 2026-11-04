@@ -56,6 +56,7 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
             repeats: 2,
             lower_k: -3,
             upper_k: 3,
+            octave_divisions: 3,
             pwm_hz: 50_000,
             base: (
                 Gains {

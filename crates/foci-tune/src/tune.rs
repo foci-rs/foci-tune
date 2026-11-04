@@ -10,7 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use foci_tune_analysis::ladder::{LadderAxis, LadderValue, RungOutcome, to_raw};
 use foci_tune_analysis::recommend::{Extension, Recommendation, Recommended, recommend};
-use foci_tune_analysis::rungs::{RungNote, Rungs, SeedRefused, rung_values, seed_from};
+use foci_tune_analysis::rungs::{
+    DEFAULT_OCTAVE_DIVISIONS, RungNote, Rungs, SeedRefused, rung_values, rung_values_in, seed_from,
+};
 use foci_tune_analysis::verdict::{
     DriftVerdict, Gates, Halt, LadderAssessment, Pause, RepeatResult, Waivers, assess_ladder_at,
     drift_verdict,
@@ -193,10 +195,14 @@ pub struct TuneStep {
     pub seed_raw: i32,
     /// Repeats per rung.
     pub repeats: u32,
-    /// Lowest rung exponent: rungs are the seed times `2^(k/3)`.
+    /// Lowest rung exponent: rungs are the seed times `2^(k/octave_divisions)`.
     pub lower_k: i32,
     /// Highest rung exponent.
     pub upper_k: i32,
+    /// Divisions of an octave between neighbouring rungs; records from before it was chosen
+    /// read as the third octave.
+    #[serde(default = "default_octave_divisions")]
+    pub octave_divisions: u32,
     /// PWM frequency the velocity I corners were converted with.
     pub pwm_hz: u32,
     /// Gains and filters every run starts from, the swept axis replaced per rung.
@@ -388,6 +394,17 @@ pub struct StepRequest {
     pub lower_k: i32,
     /// Highest rung exponent, at least `lower_k`.
     pub upper_k: i32,
+    /// Divisions of an octave between neighbouring rungs, one of [`OCTAVE_DIVISIONS`]; the third
+    /// octave when left out.
+    #[serde(default = "default_octave_divisions")]
+    pub octave_divisions: u32,
+}
+
+/// The divisions of an octave a step may use: rungs 41%, 26%, 19% or 12% apart.
+pub const OCTAVE_DIVISIONS: [u32; 4] = [2, 3, 4, 6];
+
+fn default_octave_divisions() -> u32 {
+    DEFAULT_OCTAVE_DIVISIONS
 }
 
 /// A prepared step, announced to the operator before it is confirmed.
@@ -935,6 +952,11 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                 "a step needs at least one repeat and lower_k at most upper_k".to_owned(),
             ));
         }
+        if !OCTAVE_DIVISIONS.contains(&request.octave_divisions) {
+            return Err(TuneError::InvalidRequest(
+                "The step size must be 12%, 19%, 26% or 41%.".to_owned(),
+            ));
+        }
         let stepper = record.setup.stepper.clone();
         s.refuse_locked(&stepper)?;
         let control = s.read_control_state(&stepper).await?;
@@ -943,10 +965,11 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             Seed::Live => live_seed(axis, &base.0, control.pwm_hz)?,
             Seed::Typed(shown) => seed_from(axis, shown, control.pwm_hz)?,
         };
-        let rungs = rung_values(
+        let rungs = rung_values_in(
             axis,
             seed_raw,
             control.pwm_hz,
+            request.octave_divisions,
             request.lower_k,
             request.upper_k,
         );
@@ -964,6 +987,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             repeats: request.repeats,
             lower_k: request.lower_k,
             upper_k: request.upper_k,
+            octave_divisions: request.octave_divisions,
             pwm_hz: control.pwm_hz,
             base,
             sessions,
@@ -1075,11 +1099,17 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             Extension::Below => step.lower_k - 1,
             Extension::Above => step.upper_k + 1,
         };
-        let Some(value) = rung_values(step.axis, step.seed_raw, step.pwm_hz, k, k)
-            .values
-            .first()
-            .copied()
-        else {
+        let Some(value) = rung_values_in(
+            step.axis,
+            step.seed_raw,
+            step.pwm_hz,
+            step.octave_divisions,
+            k,
+            k,
+        )
+        .values
+        .first()
+        .copied() else {
             return Err(TuneError::NoExtension(
                 "The next gain is outside what the stepper accepts, so the ladder can't be extended that way."
                     .to_owned(),

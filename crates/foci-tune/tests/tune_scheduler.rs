@@ -74,6 +74,7 @@ fn step(lower_k: i32, upper_k: i32, repeats: u32) -> StepRequest {
         repeats,
         lower_k,
         upper_k,
+        octave_divisions: 3,
     }
 }
 

@@ -40,6 +40,7 @@ const STEP: StepRequest = StepRequest {
     repeats: 1,
     lower_k: 1,
     upper_k: 1,
+    octave_divisions: 3,
 };
 
 async fn wait_tune_state(rig: &Rig, id: &TuneId, state: TuneState) {
@@ -209,6 +210,7 @@ async fn restart_while_paused_marks_restore_pending_and_locks() {
                 repeats: 1,
                 lower_k: 0,
                 upper_k: 0,
+                octave_divisions: 3,
             },
         )
         .await
