@@ -321,7 +321,11 @@ function TuneView({
           {detail.state === "Done" &&
             liveControl !== null &&
             resultRows(detail, liveControl).some((r) => r.after !== "-" && !r.active) && (
-              <UiButton disabled={frozen} onClick={() => run("apply", () => postTuneApply(id))}>
+              <UiButton
+                disabled={frozen}
+                onClick={() => run("apply", () => postTuneApply(id))}
+                className="border border-emerald-600 bg-emerald-700 text-white hover:bg-emerald-600"
+              >
                 <ZapIcon />
                 Apply
               </UiButton>

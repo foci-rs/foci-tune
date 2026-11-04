@@ -1059,6 +1059,7 @@ test("a finished tune whose gains are not all active offers Apply, to the right 
     .getAllByRole("button")
     .map((b) => b.textContent);
   expect(names).toEqual(["New tune", "Apply"]);
+  expect(apply.className).toContain("bg-emerald-700");
   fireEvent.click(apply);
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/apply"]));
 });
