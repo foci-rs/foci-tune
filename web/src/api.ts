@@ -310,6 +310,7 @@ export interface RunRecord {
   baselines: ChannelBaseline[];
   stream: StreamInfo | null;
   steps: StepTime[];
+  predicted_s?: number | null;
   clamped_speeds: [number, number][];
   applied_speeds: number[];
   capture: CaptureInfo | null;

@@ -755,6 +755,272 @@ export function probeEdgeHint(input: ProbeEdgeInput): ProbeEdgeHint | null {
   };
 }
 
+/** Which run of its session the current one is: finished runs before it plus one, out of all that will run. */
+export function runPosition(
+  runs: { id: string; state: string }[],
+  currentId: string,
+): { run: number; of: number } | null {
+  const counted = runs.filter((r) => r.state !== "skipped" && r.state !== "aborted");
+  if (counted.length < 2 || !counted.some((r) => r.id === currentId)) return null;
+  return { run: counted.filter((r) => TERMINAL_STATES.has(r.state)).length + 1, of: counted.length };
+}
+
+/** The queued runs in the order the engine will take them; ids that are not in the list are dropped. */
+export function queueInOrder<T extends { id: string }>(queue: string[], runs: T[]): T[] {
+  return queue.flatMap((id) => runs.filter((r) => r.id === id));
+}
+
+/**
+ * Runs in the order of the sweep: by the value's place in the sweep's own list, repeats of a
+ * value side by side in the order they ran. Runs without a known value keep their order, last.
+ */
+export function sweepOrder<T extends { run: { request: { ladder_value: number | null } } | null }>(
+  entries: T[],
+  values: number[] | null,
+): T[] {
+  if (values === null) return entries;
+  const place = (e: T) => {
+    const v = e.run?.request.ladder_value ?? null;
+    const i = v === null ? -1 : values.indexOf(v);
+    return i < 0 ? values.length : i;
+  };
+  return entries
+    .map((e, order) => ({ e, order }))
+    .sort((a, b) => place(a.e) - place(b.e) || a.order - b.order)
+    .map((x) => x.e);
+}
+
+/** The stages of one run, in order. */
+export const RUN_STEPS = [
+  "preparing",
+  "writing_gains",
+  "baseline",
+  "recording",
+  "moving",
+  "draining",
+  "verifying",
+  "analyzing",
+] as const;
+
+export interface RunProgress {
+  /** 0 to 1 along the whole run. */
+  fraction: number;
+  /** One-based place in [`RUN_STEPS`]. */
+  step: number;
+  /** Predicted seconds left of the motion; null outside it or without a prediction. */
+  secondsLeft: number | null;
+}
+
+const MOVING_AT = RUN_STEPS.indexOf("moving");
+const BEFORE_SHARE = 0.1;
+const AFTER_SHARE = 0.1;
+
+/**
+ * How far along a run is. The quick stages before the motion fill the first tenth and the last
+ * three the final tenth; the motion fills the rest as the predicted script time elapses, held
+ * short of the end until the run leaves it.
+ */
+export function runProgress(input: {
+  state: string;
+  steps: { step: string; unix_ms: number }[];
+  predictedS: number | null;
+  nowMs: number;
+}): RunProgress | null {
+  const index = (RUN_STEPS as readonly string[]).indexOf(input.state);
+  if (index < 0) return null;
+  const step = index + 1;
+  if (index < MOVING_AT) return { fraction: (index * BEFORE_SHARE) / MOVING_AT, step, secondsLeft: null };
+  if (index > MOVING_AT) {
+    const after = RUN_STEPS.length - MOVING_AT - 1;
+    return { fraction: 1 - AFTER_SHARE + ((index - MOVING_AT - 1) * AFTER_SHARE) / after, step, secondsLeft: null };
+  }
+  const started = [...input.steps].reverse().find((s) => s.step === "moving")?.unix_ms;
+  if (started === undefined || input.predictedS === null || input.predictedS <= 0) {
+    return { fraction: BEFORE_SHARE, step, secondsLeft: null };
+  }
+  const elapsedS = Math.max(0, (input.nowMs - started) / 1000);
+  const share = Math.min(0.99, elapsedS / input.predictedS);
+  return {
+    fraction: BEFORE_SHARE + (1 - BEFORE_SHARE - AFTER_SHARE) * share,
+    step,
+    secondsLeft: Math.max(0, Math.round(input.predictedS - elapsedS)),
+  };
+}
+
+export interface RejectedRun {
+  value: number;
+  state: string;
+  reason: string | null;
+  /** The verification checks that failed, by name. */
+  failedChecks: string[];
+}
+
+function valueList(values: number[], unit: string): string {
+  const shown = values.map(String);
+  const list = shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+  return unit === "" ? list : `${list} ${unit}`;
+}
+
+/** Why a run was rejected or failed, as a clause without a subject; the caller adds the run. */
+export function rejectionReason(run: RejectedRun, tested: string, others: string[]): string {
+  const moved = others.length === 1 ? others[0] : "Another motor";
+  if (run.state === "failed") return `${run.reason ?? "no reason was recorded"}.`;
+  if (run.failedChecks.includes("channel_moved")) {
+    return `${moved} moved while ${tested} was being tested, so the result can't be trusted.`;
+  }
+  if (run.failedChecks.includes("baseline_contiguous")) {
+    return "the gains changed during the run, so the result can't be trusted.";
+  }
+  if (run.failedChecks.includes("no_drop_gaps")) return "the recording lost data, so the result can't be trusted.";
+  if (run.failedChecks.includes("edge_count")) return "it recorded too few step responses to measure damping.";
+  if (run.state === "done") return "the recording shows no clear damping value.";
+  return "its result can't be trusted.";
+}
+
+function rejectionCause(run: RejectedRun, tested: string, others: string[]): string {
+  const reason = rejectionReason(run, tested, others);
+  return run.state === "failed" ? `failed: ${reason}` : `was rejected: ${reason}`;
+}
+
+/**
+ * Plain-English lines for the sweep values that have no result: what went wrong with each
+ * rejected run, and which values did not run because the sweep stopped. `rejected` is in sweep
+ * order, so its first value is where the sweep stopped.
+ */
+export function sweepRejectionNotes(input: {
+  rejected: RejectedRun[];
+  skippedValues: number[];
+  unit: string;
+  tested: string;
+  others: string[];
+}): string[] {
+  const lines = input.rejected.map((run) => {
+    return `The run at ${valueList([run.value], input.unit)} ${rejectionCause(run, input.tested, input.others)}`;
+  });
+  if (input.skippedValues.length > 0 && input.rejected.length > 0) {
+    const first = valueList([input.rejected[0].value], input.unit);
+    lines.push(`The sweep stopped after ${first}, so ${valueList(input.skippedValues, input.unit)} did not run.`);
+  }
+  return lines;
+}
+
+/**
+ * How far the path itself may move the other motor, in mm of its belt: a whole-number rounding
+ * of the coordinates. The engine's own allowance (2% of the tested motor's travel) is for the
+ * belt flexing during a run, so the geometry should use none of it.
+ */
+const GEOMETRY_TOLERANCE_MM = 1;
+
+export interface Isolation {
+  ok: boolean;
+  /** What is wrong, in plain words; empty when the path is fine. */
+  message: string;
+  /** The path turned about its middle onto the direction that moves only the tested motor, at its own length where it fits. */
+  snapped: Pattern;
+  /** The button that applies [`snapped`]. */
+  snapLabel: string;
+}
+
+/**
+ * Whether a stroke pattern moves only the tested stepper, the way the engine's "other motor
+ * moved" check needs: on a corexy the stepper's own diagonal, on a cartesian its own axis, to
+ * within a millimetre. Other kinematics and steppers are not checked.
+ */
+export function patternIsolation(input: {
+  pattern: Pattern;
+  stepper: { name: string; kinematics: string };
+  others: string[];
+  limits: Limits | null;
+}): Isolation {
+  const { pattern, stepper, others, limits } = input;
+  const unchecked: Isolation = { ok: true, message: "", snapped: pattern, snapLabel: "" };
+  const axis = stepper.name === "stepper_x" ? "x" : stepper.name === "stepper_y" ? "y" : null;
+  const corexy = stepper.kinematics === "corexy";
+  if (axis === null || (!corexy && stepper.kinematics !== "cartesian")) return unchecked;
+  const dx = pattern.end[0] - pattern.start[0];
+  const dy = pattern.end[1] - pattern.start[1];
+  const [, other] = corexy
+    ? axis === "x"
+      ? [Math.abs(dx + dy), Math.abs(dx - dy)]
+      : [Math.abs(dx - dy), Math.abs(dx + dy)]
+    : axis === "x"
+      ? [Math.abs(dx), Math.abs(dy)]
+      : [Math.abs(dy), Math.abs(dx)];
+  if (other <= GEOMETRY_TOLERANCE_MM) return unchecked;
+
+  const sign = (v: number) => (v < 0 ? -1 : 1);
+  const length = Math.hypot(dx, dy);
+  // The stroke's direction on the isolating line, and the reach per unit of half-length.
+  const dir: [number, number] = corexy
+    ? [sign(axis === "x" ? dx + dy : dx - dy), 0]
+    : axis === "x"
+      ? [sign(dx), 0]
+      : [0, sign(dy)];
+  if (corexy) dir[1] = axis === "x" ? dir[0] : -dir[0];
+  const centre: [number, number] = [
+    Math.round((pattern.start[0] + pattern.end[0]) / 2),
+    Math.round((pattern.start[1] + pattern.end[1]) / 2),
+  ];
+  const span = (c: number, half: number, step: number): [number, number] => [c - half * step, c + half * step];
+  const place = (half: number): Pattern | null => {
+    let [cx, cy] = centre;
+    if (limits !== null) {
+      const shift = (c: number, step: number, [lo, hi]: [number, number]): number | null => {
+        const min = lo + PATTERN_MARGIN_MM - Math.min(...span(c, half, step));
+        const max = hi - PATTERN_MARGIN_MM - Math.max(...span(c, half, step));
+        return min > max ? null : Math.min(Math.max(0, min), max);
+      };
+      const sx = shift(cx, dir[0], limits.x);
+      const sy = shift(cy, dir[1], limits.y);
+      if (sx === null || sy === null) return null;
+      cx += sx;
+      cy += sy;
+    }
+    return {
+      start: [cx - dir[0] * half, cy - dir[1] * half],
+      end: [cx + dir[0] * half, cy + dir[1] * half],
+    };
+  };
+  const reach = corexy ? Math.SQRT2 : 1;
+  let half = Math.max(1, Math.round(length / (2 * reach)));
+  let snapped = place(half);
+  while (snapped === null && half > 1) {
+    half -= 1;
+    snapped = place(half);
+  }
+  snapped ??= { start: pattern.start, end: pattern.end };
+  const who = others.length === 1 ? others[0] : "The other motor";
+  const where = corexy ? `the diagonal that moves only ${stepper.name}` : `the ${axis.toUpperCase()} axis`;
+  const prefix = corexy ? "on" : "along";
+  return {
+    ok: false,
+    message: `This path is not ${prefix} ${where}. ${who} would move ${other.toFixed(1)} mm, and the run would be rejected.`,
+    snapped,
+    snapLabel: "Fix the path",
+  };
+}
+
+const AXIS_UNIT: Record<string, string> = { velocity_i_corner_hz: "Hz" };
+
+/**
+ * A run's skip reason in plain words. The sweep's stop rule writes its reasons as terse
+ * sentences; they are recognised here so runs recorded earlier read the same. Anything else is
+ * shown as it is.
+ */
+export function skipReasonText(reason: string): string {
+  const low = /^ladder stopped: median zeta ([\d.]+) below the floor ([\d.]+) at (\w+) ([\d.]+)$/.exec(reason);
+  if (low !== null) {
+    const unit = AXIS_UNIT[low[3]];
+    return `The sweep stopped after ${low[4]}${unit === undefined ? "" : ` ${unit}`}: its damping, ${low[1]}, was below the stop limit of ${low[2]}.`;
+  }
+  const unmeasured = /^ladder stopped: damping unassessable at (\w+) ([\d.]+)$/.exec(reason);
+  if (unmeasured !== null) {
+    const unit = AXIS_UNIT[unmeasured[1]];
+    return `The sweep stopped after ${unmeasured[2]}${unit === undefined ? "" : ` ${unit}`} because its damping could not be measured.`;
+  }
+  return reason;
+}
+
 export type PatternMode = "default" | "custom";
 
 const samePattern = (a: Pattern, b: Pattern) =>

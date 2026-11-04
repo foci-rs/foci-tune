@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ApiRequestError, type LiveChannel, type Pattern, type Run, type RunKind, type SessionView } from "./api";
 import {
+  highlightChanges,
   alignSeries,
   appendLive,
   assignColors,
@@ -9,12 +10,18 @@ import {
   DEFAULT_PARAMETERS,
   defaultLadderValues,
   headlineMetric,
-  highlightChanges,
   ladderFieldErrors,
+  queueInOrder,
+  runProgress,
+  skipReasonText,
+  sweepRejectionNotes,
+  runPosition,
+  sweepOrder,
   ladderMedians,
   ladderPlotData,
   patternProblem,
   expectedProbeEdges,
+  patternIsolation,
   patternMode,
   probeEdgeHint,
   suggestedProbeStrokes,
@@ -91,23 +98,6 @@ describe("parseLadderList", () => {
 
   test("rejects an empty list", () => {
     expect(parseLadderList(" , ").ok).toBe(false);
-  });
-});
-
-describe("highlightChanges", () => {
-  const row = (velocity_p: number, position_p: number) => ({
-    velocity_p,
-    velocity_i: 412,
-    position_p,
-    velocity_hz: 500,
-    torque_hz: 1000,
-    position_hz: 500,
-    flux_hz: 1000,
-  });
-
-  test("marks only the gains that differ from the previous row", () => {
-    const marks = highlightChanges([row(800, 140), row(850, 140), row(850, 150), row(850, 150)]);
-    expect(marks.map((m) => [...m].sort())).toEqual([[], ["velocity_p"], ["position_p"], []]);
   });
 });
 
@@ -824,5 +814,313 @@ describe("ladderFieldErrors", () => {
 
   test("the thresholds are not checked for sweeps that have no stop rule", () => {
     expect(ladderFieldErrors(input({ floor: Number.NaN }), 50_000, false).thresholds).toBeNull();
+  });
+});
+
+describe("sweepOrder", () => {
+  const entry = (id: string, value: number | null) => ({ id, run: { request: { ladder_value: value } } });
+
+  test("sorts repeats next to each other by the sweep's own value order", () => {
+    const queued = [
+      entry("1", 300),
+      entry("2", 100),
+      entry("3", 200),
+      entry("4", 300),
+      entry("5", 100),
+      entry("6", 200),
+    ];
+    expect(sweepOrder(queued, [300, 100, 200]).map((e) => e.id)).toEqual(["1", "4", "2", "5", "3", "6"]);
+  });
+
+  test("keeps the order within a value, and puts unknown values and non-sweep runs last in order", () => {
+    const rows = [entry("a", 100), entry("b", 999), entry("c", 100), entry("d", null)];
+    expect(sweepOrder(rows, [100]).map((e) => e.id)).toEqual(["a", "c", "b", "d"]);
+  });
+
+  test("without a sweep the order is untouched", () => {
+    const rows = [entry("b", null), entry("a", null)];
+    expect(sweepOrder(rows, null).map((e) => e.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("run position and queue order", () => {
+  const run = (id: string, state: string) => ({ id, state });
+
+  test("the position counts finished runs, not where the id sorts", () => {
+    const runs = [run("t-zzzz", "queued"), run("t-aaaa", "moving"), run("t-mmmm", "queued"), run("t-bbbb", "queued")];
+    expect(runPosition(runs, "t-aaaa")).toEqual({ run: 1, of: 4 });
+    const later = [run("t-zzzz", "done"), run("t-aaaa", "moving"), run("t-mmmm", "done"), run("t-bbbb", "queued")];
+    expect(runPosition(later, "t-aaaa")).toEqual({ run: 3, of: 4 });
+  });
+
+  test("skipped and aborted runs do not count, and a single run has no position", () => {
+    expect(runPosition([run("a", "moving"), run("b", "skipped"), run("c", "aborted")], "a")).toBeNull();
+    expect(runPosition([run("a", "done"), run("b", "moving"), run("c", "skipped")], "b")).toEqual({ run: 2, of: 2 });
+    expect(runPosition([run("a", "moving")], "z")).toBeNull();
+  });
+
+  test("the queue is listed in the engine's order, not the id order", () => {
+    const runs = [run("a", "queued"), run("b", "queued"), run("c", "queued")];
+    expect(queueInOrder(["c", "a", "b"], runs).map((r) => r.id)).toEqual(["c", "a", "b"]);
+    expect(queueInOrder(["c", "gone"], runs).map((r) => r.id)).toEqual(["c"]);
+  });
+});
+
+describe("runProgress", () => {
+  const steps = (moving: number) => [
+    { step: "preparing", unix_ms: 1_000 },
+    { step: "moving", unix_ms: moving },
+  ];
+
+  test("the quick steps before the motion fill the first tenth", () => {
+    expect(runProgress({ state: "preparing", steps: [], predictedS: 40, nowMs: 0 })?.fraction).toBe(0);
+    expect(runProgress({ state: "recording", steps: [], predictedS: 40, nowMs: 0 })?.fraction).toBeCloseTo(0.075);
+  });
+
+  test("the motion fills 10% to 90% as the predicted time elapses, and says how long is left", () => {
+    const at = (nowMs: number) => runProgress({ state: "moving", steps: steps(10_000), predictedS: 40, nowMs });
+    expect(at(10_000)?.fraction).toBeCloseTo(0.1);
+    expect(at(30_000)?.fraction).toBeCloseTo(0.5);
+    expect(at(30_000)?.secondsLeft).toBe(20);
+    expect(at(60_000)?.fraction).toBeLessThan(0.9);
+    expect(at(60_000)?.secondsLeft).toBe(0);
+  });
+
+  test("without a prediction or a start time the motion holds at the start of its share", () => {
+    expect(runProgress({ state: "moving", steps: steps(10_000), predictedS: null, nowMs: 50_000 })).toMatchObject({
+      fraction: 0.1,
+      secondsLeft: null,
+    });
+    expect(runProgress({ state: "moving", steps: [], predictedS: 40, nowMs: 50_000 })?.fraction).toBe(0.1);
+  });
+
+  test("draining, verifying and analyzing fill the last tenth, and unknown states have no bar", () => {
+    expect(runProgress({ state: "draining", steps: [], predictedS: 40, nowMs: 0 })?.fraction).toBeCloseTo(0.9);
+    expect(runProgress({ state: "analyzing", steps: [], predictedS: 40, nowMs: 0 })?.fraction).toBeCloseTo(0.9667, 3);
+    expect(runProgress({ state: "killing", steps: [], predictedS: 40, nowMs: 0 })).toBeNull();
+  });
+});
+
+describe("sweepRejectionNotes", () => {
+  const base = { unit: "Hz", tested: "stepper_x", others: ["stepper_y"], skippedValues: [] as number[] };
+  const rejected = (over: object = {}) => ({
+    value: 25,
+    state: "not_comparable",
+    reason: null as string | null,
+    failedChecks: [] as string[],
+    ...over,
+  });
+
+  test("names the stepper that moved, and says what that means", () => {
+    expect(sweepRejectionNotes({ ...base, rejected: [rejected({ failedChecks: ["channel_moved"] })] })).toEqual([
+      "The run at 25 Hz was rejected: stepper_y moved while stepper_x was being tested, so the result can't be trusted.",
+    ]);
+  });
+
+  test("falls back to another motor when the board has no single other stepper", () => {
+    const notes = sweepRejectionNotes({
+      ...base,
+      others: [],
+      rejected: [rejected({ failedChecks: ["channel_moved"] })],
+    });
+    expect(notes[0]).toContain("Another motor moved while stepper_x was being tested");
+  });
+
+  test("each other cause gets one plain sentence", () => {
+    const note = (over: object) => sweepRejectionNotes({ ...base, rejected: [rejected(over)] })[0];
+    expect(note({ failedChecks: ["baseline_contiguous"] })).toBe(
+      "The run at 25 Hz was rejected: the gains changed during the run, so the result can't be trusted.",
+    );
+    expect(note({ failedChecks: ["no_drop_gaps"] })).toBe(
+      "The run at 25 Hz was rejected: the recording lost data, so the result can't be trusted.",
+    );
+    expect(note({ failedChecks: ["edge_count"] })).toBe(
+      "The run at 25 Hz was rejected: it recorded too few step responses to measure damping.",
+    );
+    expect(note({ state: "done" })).toBe("The run at 25 Hz was rejected: the recording shows no clear damping value.");
+    expect(note({ state: "failed", reason: "klipper is not ready" })).toBe(
+      "The run at 25 Hz failed: klipper is not ready.",
+    );
+    expect(note({})).toBe("The run at 25 Hz was rejected: its result can't be trusted.");
+  });
+
+  test("raw gains show no unit", () => {
+    expect(
+      sweepRejectionNotes({
+        ...base,
+        unit: "",
+        rejected: [rejected({ value: 900, failedChecks: ["no_drop_gaps"] })],
+      })[0],
+    ).toContain("The run at 900 was rejected");
+  });
+
+  test("a stopped sweep names the values that did not run", () => {
+    const one = sweepRejectionNotes({
+      ...base,
+      skippedValues: [50],
+      rejected: [rejected({ failedChecks: ["channel_moved"] })],
+    });
+    expect(one.at(-1)).toBe("The sweep stopped after 25 Hz, so 50 Hz did not run.");
+    const many = sweepRejectionNotes({
+      ...base,
+      skippedValues: [50, 75, 100],
+      rejected: [rejected({ failedChecks: ["channel_moved"] })],
+    });
+    expect(many.at(-1)).toBe("The sweep stopped after 25 Hz, so 50, 75 and 100 Hz did not run.");
+  });
+
+  test("several rejected values each get a line", () => {
+    const notes = sweepRejectionNotes({
+      ...base,
+      rejected: [rejected({ failedChecks: ["no_drop_gaps"] }), rejected({ value: 50, state: "done" })],
+    });
+    expect(notes).toHaveLength(2);
+    expect(notes[1]).toContain("The run at 50 Hz");
+  });
+});
+
+describe("patternIsolation", () => {
+  const x = { name: "stepper_x", kinematics: "corexy" };
+  const y = { name: "stepper_y", kinematics: "corexy" };
+  const p = (sx: number, sy: number, ex: number, ey: number): Pattern => ({ start: [sx, sy], end: [ex, ey] });
+  const limits = { x: [0, 301], y: [0, 308] } as { x: [number, number]; y: [number, number] };
+  const check = (pattern: Pattern, stepper = x, other: string[] = ["stepper_y"]) =>
+    patternIsolation({ pattern, stepper, others: other, limits });
+
+  test("the proposed corexy diagonals isolate their stepper", () => {
+    expect(check(p(100.5, 104, 200.5, 204)).ok).toBe(true);
+    expect(check(p(100.5, 204, 200.5, 104), y, ["stepper_x"]).ok).toBe(true);
+  });
+
+  test("a path off the diagonal says which motor would move and by how much", () => {
+    const r = check(p(22.7, 18.7, 262.2, 273.7));
+    expect(r.ok).toBe(false);
+    expect(r.message).toBe(
+      "This path is not on the diagonal that moves only stepper_x. stepper_y would move 15.5 mm, and the run would be rejected.",
+    );
+  });
+
+  test("only a millimetre of whole-number rounding is tolerated, leaving the engine's allowance for belt flex", () => {
+    expect(check(p(100, 100, 200, 201)).ok).toBe(true);
+    expect(check(p(100, 100, 200, 202)).ok).toBe(false);
+    expect(check(p(100, 100, 200, 130)).ok).toBe(false);
+  });
+
+  test("a path nine millimetres off the diagonal is flagged, however long the stroke", () => {
+    const r = check(p(30, 21, 270, 270));
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("stepper_y would move 9.0 mm");
+  });
+
+  test("with no other stepper on the board the message says the other motor", () => {
+    expect(check(p(22.7, 18.7, 262.2, 273.7), x, []).message).toContain("The other motor would move 15.5 mm");
+  });
+
+  test("a cartesian stepper must run along its own axis", () => {
+    const cx = { name: "stepper_x", kinematics: "cartesian" };
+    expect(check(p(100, 150, 200, 150), cx).ok).toBe(true);
+    const bad = check(p(100, 150, 200, 170), cx);
+    expect(bad.ok).toBe(false);
+    expect(bad.message).toBe(
+      "This path is not along the X axis. stepper_y would move 20.0 mm, and the run would be rejected.",
+    );
+  });
+
+  const length = (q: Pattern) => Math.hypot(q.end[0] - q.start[0], q.end[1] - q.start[1]);
+  const mid = (q: Pattern) => [(q.start[0] + q.end[0]) / 2, (q.start[1] + q.end[1]) / 2];
+
+  test("the fix rotates the path about its middle, keeps its length and lands on the diagonal", () => {
+    const off = p(22.7, 18.7, 262.2, 273.7);
+    const fixed = check(off).snapped;
+    expect(check(fixed).ok).toBe(true);
+    expect(Math.abs(length(fixed) - length(off))).toBeLessThan(2);
+    expect(Math.abs(mid(fixed)[0] - mid(off)[0])).toBeLessThan(1);
+    expect(Math.abs(mid(fixed)[1] - mid(off)[1])).toBeLessThan(1);
+    expect(fixed.end[0] - fixed.start[0]).toBe(fixed.end[1] - fixed.start[1]);
+    expect(patternProblem(fixed, limits)).toBeNull();
+  });
+
+  test("the fix is exactly 45 degrees on a corexy and exactly on the axis on a cartesian", () => {
+    const dist = (q: Pattern) => [q.end[0] - q.start[0], q.end[1] - q.start[1]];
+    const ex = check(p(22.7, 18.7, 262.2, 273.7)).snapped;
+    expect(Math.abs(dist(ex)[0])).toBe(Math.abs(dist(ex)[1]));
+    expect(dist(ex)[0]).toBe(dist(ex)[1]);
+    const ey = check(p(100, 200, 200, 90), y, ["stepper_x"]).snapped;
+    expect(dist(ey)[0]).toBe(-dist(ey)[1]);
+    const cx = { name: "stepper_x", kinematics: "cartesian" };
+    const ax = check(p(100, 150, 200, 170), cx).snapped;
+    expect(dist(ax)[1]).toBe(0);
+    const cy = { name: "stepper_y", kinematics: "cartesian" };
+    const ay = check(p(100, 150, 120, 250), cy, ["stepper_x"]).snapped;
+    expect(dist(ay)[0]).toBe(0);
+  });
+
+  test("the fix gives whole-millimetre coordinates", () => {
+    const fixed = check(p(22.7, 18.7, 262.2, 273.7)).snapped;
+    for (const v of [...fixed.start, ...fixed.end]) expect(Number.isInteger(v)).toBe(true);
+  });
+
+  test("the fix shifts the path back inside the bed margin when rotating would leave it", () => {
+    const off = p(200, 100, 280, 240);
+    const fixed = check(off).snapped;
+    expect(check(fixed).ok).toBe(true);
+    expect(patternProblem(fixed, limits)).toBeNull();
+    expect(Math.abs(length(fixed) - length(off))).toBeLessThan(2);
+  });
+
+  test("the fix shortens the path only when it cannot fit at its length", () => {
+    const off = p(10, 298, 291, 10);
+    const fixed = check(off).snapped;
+    expect(check(fixed).ok).toBe(true);
+    expect(patternProblem(fixed, limits)).toBeNull();
+    expect(length(fixed)).toBeLessThan(length(off));
+  });
+
+  test("the fix follows the direction the path already goes", () => {
+    const back = check(p(250, 250, 50, 40)).snapped;
+    expect(back.end[0]).toBeLessThan(back.start[0]);
+    expect(back.end[1]).toBeLessThan(back.start[1]);
+    const anti = check(p(100, 200, 200, 90), y, ["stepper_x"]).snapped;
+    expect(anti.end[0]).toBeGreaterThan(anti.start[0]);
+    expect(anti.end[1]).toBeLessThan(anti.start[1]);
+  });
+});
+
+describe("skipReasonText", () => {
+  test("a low-damping stop reads as one plain sentence", () => {
+    expect(skipReasonText("ladder stopped: median zeta 0.038 below the floor 0.05 at velocity_i_corner_hz 25")).toBe(
+      "The sweep stopped after 25 Hz: its damping, 0.038, was below the stop limit of 0.05.",
+    );
+    expect(skipReasonText("ladder stopped: median zeta 0.02 below the floor 0.05 at velocity_p 900")).toBe(
+      "The sweep stopped after 900: its damping, 0.02, was below the stop limit of 0.05.",
+    );
+  });
+
+  test("an unmeasurable damping stop says so", () => {
+    expect(skipReasonText("ladder stopped: damping unassessable at velocity_i_corner_hz 25")).toBe(
+      "The sweep stopped after 25 Hz because its damping could not be measured.",
+    );
+  });
+
+  test("any other reason is shown as it is", () => {
+    expect(skipReasonText("ladder floor reached")).toBe("ladder floor reached");
+    expect(skipReasonText("run.json: truncated")).toBe("run.json: truncated");
+  });
+});
+
+describe("highlightChanges", () => {
+  const row = (velocity_p: number, position_p: number) => ({
+    velocity_p,
+    velocity_i: 412,
+    position_p,
+    velocity_hz: 500,
+    torque_hz: 1000,
+    position_hz: 500,
+    flux_hz: 1000,
+  });
+
+  test("marks only the gains that differ from the previous row", () => {
+    const marks = highlightChanges([row(800, 140), row(850, 140), row(850, 150), row(850, 150)]);
+    expect(marks.map((m) => [...m].sort())).toEqual([[], ["velocity_p"], ["position_p"], []]);
   });
 });
