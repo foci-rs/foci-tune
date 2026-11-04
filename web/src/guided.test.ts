@@ -8,6 +8,8 @@ import {
   canChoose,
   currentGuidedStep,
   failureText,
+  liveSeed,
+  previewLadder,
   defaultProbeSpeed,
   expectedDurationSeconds,
   nextAxis,
@@ -759,5 +761,80 @@ describe("failureText", () => {
   test("a failure that is not an API error reads as a request failure", () => {
     expect(failureText("start", new Error("boom"), open, open)).toBe("boom");
     expect(failureText("start", "weird", null, null)).toBe("Something went wrong. Try again.");
+  });
+});
+
+describe("liveSeed", () => {
+  const control = { velocity_p: 1000, velocity_i: 50, position_p: 800, pwm_hz: 50000 };
+  test("P gains are the live raw values", () => {
+    expect(liveSeed("VelocityP", control)).toBe(1000);
+    expect(liveSeed("PositionP", control)).toBe(800);
+  });
+  test("the I gain is shown as its corner frequency", () => {
+    const hz = liveSeed("VelocityICornerHz", { ...control, velocity_i: 4200 })!;
+    expect(hz).toBeCloseTo((4200 * 50000) / (2 * Math.PI * 65536), 9);
+  });
+  test("a corner cannot be shown while the PWM frequency is unknown", () => {
+    expect(liveSeed("VelocityICornerHz", { ...control, pwm_hz: 0 })).toBeNull();
+  });
+});
+
+describe("previewLadder", () => {
+  const gainsOf = (r: ReturnType<typeof previewLadder>) => ("problem" in r ? [] : r.gains.map((g) => [g.step, g.raw]));
+
+  test("a P ladder is the seed times 2^(k/3), rounded", () => {
+    expect(gainsOf(previewLadder("VelocityP", 1000, 50000, -3, 3))).toEqual([
+      [-3, 500],
+      [-2, 630],
+      [-1, 794],
+      [0, 1000],
+      [1, 1260],
+      [2, 1587],
+      [3, 2000],
+    ]);
+  });
+
+  test("a step whose gain cannot be written is left out with its reason", () => {
+    const r = previewLadder("VelocityP", 30000, 50000, 0, 3);
+    if ("problem" in r) throw new Error(r.problem);
+    expect(r.gains.map((g) => g.step)).toEqual([0]);
+    expect(r.left.map((l) => l.step)).toEqual([1, 2, 3]);
+    expect(r.left[0].reason).toMatch(/outside what the stepper accepts/);
+  });
+
+  test("steps that round to the same gain keep the first and name it", () => {
+    const r = previewLadder("VelocityP", 4, 50000, -2, -1);
+    if ("problem" in r) throw new Error(r.problem);
+    expect(r.gains.map((g) => [g.step, g.raw])).toEqual([[-2, 3]]);
+    expect(r.left).toEqual([
+      expect.objectContaining({ step: -1, reason: expect.stringMatching(/same gain as step -2/) }),
+    ]);
+  });
+
+  test("a gain that rounds to zero is left out", () => {
+    const r = previewLadder("VelocityP", 1, 50000, -4, -4);
+    if ("problem" in r) throw new Error(r.problem);
+    expect(r.left.some((l) => /rounds to zero/.test(l.reason))).toBe(true);
+  });
+
+  test("the I corner ladder is in Hz and a zero seed stands in as 50 Hz", () => {
+    const r = previewLadder("VelocityICornerHz", 0, 50000, 0, 0);
+    if ("problem" in r) throw new Error(r.problem);
+    expect(r.gains[0].shown).toBeCloseTo(50, 1);
+  });
+
+  test.each([
+    ["VelocityP", 0, /can't be zero/],
+    ["PositionP", 0, /can't be zero/],
+    ["VelocityP", 0.2, /too small/],
+    ["VelocityP", 40000, /outside what the stepper accepts/],
+  ] as const)("a %s seed of %d is a problem with a sentence", (axis, seed, pattern) => {
+    const r = previewLadder(axis, seed, 50000, -3, 3);
+    expect("problem" in r && r.problem).toMatch(pattern);
+  });
+
+  test("an unknown PWM frequency makes a corner ladder impossible", () => {
+    const r = previewLadder("VelocityICornerHz", 50, 0, -3, 3);
+    expect("problem" in r && r.problem).toMatch(/PWM frequency/);
   });
 });

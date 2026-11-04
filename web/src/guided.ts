@@ -1,5 +1,6 @@
 import { ApiRequestError } from "./api";
 import { failureMessage } from "./failure";
+import { cornerHz, velocityIRaw } from "./units";
 import type {
   Halt,
   LadderAssessment,
@@ -14,7 +15,7 @@ import type {
   TuneState,
   UnscoredReason,
 } from "./api";
-import { expectedProbeEdges, PROBE_MIN_EDGES, probeToggleSpacing, type ProbeEdgeInput } from "./tune";
+import { expectedProbeEdges, PID_GAIN_MAX_RAW, PROBE_MIN_EDGES, probeToggleSpacing, type ProbeEdgeInput } from "./tune";
 
 export interface ProbeSpeedChoice {
   speed: number;
@@ -532,4 +533,81 @@ export function failureText(action: GuidedAction, error: unknown, before: Tune |
     return "This tune changed since the page last updated, so that didn't go through. The page now shows where it is.";
   }
   return failureMessage(error);
+}
+
+/** The control values a ladder can start from. */
+export interface LiveControl {
+  velocity_p: number;
+  velocity_i: number;
+  position_p: number;
+  pwm_hz: number;
+}
+
+/** The stepper's live value on an axis, in the unit the seed is entered in; null when unknown. */
+export function liveSeed(axis: TuneAxis, control: LiveControl): number | null {
+  switch (axis) {
+    case "VelocityP":
+      return control.velocity_p;
+    case "PositionP":
+      return control.position_p;
+    case "VelocityICornerHz":
+      return cornerHz(control.velocity_i, control.pwm_hz);
+  }
+}
+
+export interface LadderGain {
+  step: number;
+  shown: number;
+  raw: number;
+}
+
+export interface LadderPreview {
+  gains: LadderGain[];
+  left: { step: number; shown: number; reason: string }[];
+}
+
+const SEED_CORNER_HZ = 50;
+
+/**
+ * The gains a ladder will try, as the service works them out: the seed times 2^(step/3), rounded
+ * to the written value. Gains that cannot be written, round to zero or repeat an earlier gain are
+ * left out with the reason. A seed the service would refuse is a problem in words.
+ */
+export function previewLadder(
+  axis: TuneAxis,
+  seed: number,
+  pwmHz: number,
+  lower: number,
+  upper: number,
+): LadderPreview | { problem: string } {
+  const corner = axis === "VelocityICornerHz";
+  if (corner && !(pwmHz > 0)) return { problem: "The PWM frequency is unknown, so a corner can't be converted." };
+  const toRaw = (shown: number) => (corner ? velocityIRaw(shown, pwmHz) : Math.round(shown));
+  const writable = (shown: number, raw: number) => Number.isFinite(shown) && raw >= 0 && raw <= PID_GAIN_MAX_RAW;
+  let seedRaw: number;
+  if (seed === 0) {
+    if (!corner) return { problem: "The seed can't be zero. Use a value above zero, or the live value." };
+    seedRaw = 0;
+  } else {
+    seedRaw = toRaw(seed);
+    if (!writable(seed, seedRaw)) return { problem: `${seed} is outside what the stepper accepts.` };
+    if (seedRaw === 0)
+      return { problem: "The seed is too small: it rounds to zero when written to the stepper. Use a larger value." };
+  }
+  const base = corner ? (seedRaw === 0 ? SEED_CORNER_HZ : (cornerHz(seedRaw, pwmHz) as number)) : seedRaw;
+  const preview: LadderPreview = { gains: [], left: [] };
+  for (let step = lower; step <= upper; step += 1) {
+    const shown = base * 2 ** (step / 3);
+    const raw = toRaw(shown);
+    if (!writable(shown, raw)) {
+      preview.left.push({ step, shown, reason: "It is outside what the stepper accepts." });
+    } else if (raw === 0) {
+      preview.left.push({ step, shown, reason: "It rounds to zero." });
+    } else {
+      const kept = preview.gains.find((g) => g.raw === raw);
+      if (kept === undefined) preview.gains.push({ step, shown, raw });
+      else preview.left.push({ step, shown, reason: `It is the same gain as step ${kept.step}.` });
+    }
+  }
+  return preview;
 }
