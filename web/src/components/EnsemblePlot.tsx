@@ -63,7 +63,7 @@ export function EnsemblePlot({ runs }: { runs: OverlayRun<ProbePlot>[] }) {
   );
   const missing = runs.filter((r) => r.value[signal].fit === null).map((r) => r.label);
   return (
-    <div className="space-y-2">
+    <div className="space-y-4">
       <Tabs value={signal} onValueChange={(v) => setSignal(v as Signal)}>
         <TabsList variant="line" aria-label="Graph view">
           {SIGNALS.map((s) => (
