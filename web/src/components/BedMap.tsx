@@ -1,28 +1,65 @@
-import { useRef, useState, type PointerEvent } from "react";
+import { useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { Pattern } from "@/api";
 import { clampPoint, PATTERN_MARGIN_MM, type Limits } from "@/tune";
 import { NumberField } from "./ui";
 
 type End = "start" | "end";
 
-const round = (v: number) => Math.round(v * 10) / 10;
+const round = (v: number) => Math.round(v);
 
 function CoordField({
   label,
+  axis,
   value,
   disabled,
   onValue,
 }: {
   label: string;
+  axis: string;
   value: number;
   disabled: boolean;
   onValue: (v: number) => void;
 }) {
   return (
     <label className="flex items-center gap-1 text-xs text-muted-foreground">
-      {label}
-      <NumberField label={label} value={value} step={0.1} disabled={disabled} onValue={onValue} className="w-20" />
+      {axis}
+      <NumberField
+        label={label}
+        value={Math.round(value)}
+        step={1}
+        disabled={disabled}
+        onValue={(v) => onValue(Math.round(v))}
+        className="w-24"
+      />
     </label>
+  );
+}
+
+function CoordRow({
+  end,
+  label,
+  point,
+  disabled,
+  onValue,
+}: {
+  end: End;
+  label: string;
+  point: [number, number];
+  disabled: boolean;
+  onValue: (k: 0 | 1, v: number) => void;
+}) {
+  return (
+    <div role="group" aria-label={label} className="flex items-center gap-3">
+      <span className="flex w-14 items-center gap-1.5 text-xs text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className={end === "start" ? "size-2 rounded-full bg-emerald-400" : "size-2 rounded-full bg-sky-400"}
+        />
+        {label}
+      </span>
+      <CoordField label={`${label} X`} axis="X" value={point[0]} disabled={disabled} onValue={(v) => onValue(0, v)} />
+      <CoordField label={`${label} Y`} axis="Y" value={point[1]} disabled={disabled} onValue={(v) => onValue(1, v)} />
+    </div>
   );
 }
 
@@ -33,12 +70,15 @@ export function BedMap({
   proposal,
   disabled = false,
   onChange,
+  children,
 }: {
   limits: Limits;
   pattern: Pattern;
   proposal: Pattern | null;
   disabled?: boolean;
   onChange: (pattern: Pattern) => void;
+  /** Shown between the map and the coordinate rows. */
+  children?: ReactNode;
 }) {
   const svg = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState<End | null>(null);
@@ -115,7 +155,9 @@ export function BedMap({
           className="stroke-muted-foreground/40"
           strokeWidth={r / 5}
           strokeDasharray={`${r} ${r}`}
-        />
+        >
+          <title>{PATTERN_MARGIN_MM} mm margin</title>
+        </rect>
         {proposal !== null && (
           <line
             x1={toSvg(proposal.start)[0]}
@@ -133,16 +175,23 @@ export function BedMap({
         {handle("start")}
         {handle("end")}
       </svg>
-      <div className="flex flex-wrap gap-x-4 gap-y-1">
-        <CoordField label="Start X" value={pattern.start[0]} disabled={disabled} onValue={(v) => set("start", 0, v)} />
-        <CoordField label="Start Y" value={pattern.start[1]} disabled={disabled} onValue={(v) => set("start", 1, v)} />
-        <CoordField label="End X" value={pattern.end[0]} disabled={disabled} onValue={(v) => set("end", 0, v)} />
-        <CoordField label="End Y" value={pattern.end[1]} disabled={disabled} onValue={(v) => set("end", 1, v)} />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Start is green, end is blue; the dashed line is the proposed pattern and the dashed box the {PATTERN_MARGIN_MM}{" "}
-        mm margin.
+      <p className="text-center text-xs text-muted-foreground">
+        Length{" "}
+        <span className="font-mono text-foreground">
+          {Math.round(Math.hypot(pattern.end[0] - pattern.start[0], pattern.end[1] - pattern.start[1]))} mm
+        </span>
       </p>
+      {children}
+      <div className="space-y-2">
+        <CoordRow
+          end="start"
+          label="Start"
+          point={pattern.start}
+          disabled={disabled}
+          onValue={(k, v) => set("start", k, v)}
+        />
+        <CoordRow end="end" label="End" point={pattern.end} disabled={disabled} onValue={(k, v) => set("end", k, v)} />
+      </div>
     </div>
   );
 }
