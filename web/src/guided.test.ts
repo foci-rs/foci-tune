@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ApiRequestError } from "./api";
-import type { LadderAssessment, RungVerdict, Tune, TuneState, TuneStep } from "./api";
+import type { PrinterView, LadderAssessment, RungVerdict, Tune, TuneState, TuneStep } from "./api";
 import {
   announcementOf,
   availableActions,
@@ -8,7 +8,10 @@ import {
   canChoose,
   currentGuidedStep,
   failureText,
+  DEFAULT_PREPARE,
+  liveControlFor,
   liveSeed,
+  prepareState,
   previewLadder,
   defaultProbeSpeed,
   expectedDurationSeconds,
@@ -836,5 +839,60 @@ describe("previewLadder", () => {
   test("an unknown PWM frequency makes a corner ladder impossible", () => {
     const r = previewLadder("VelocityICornerHz", 50, 0, -3, 3);
     expect("problem" in r && r.problem).toMatch(/PWM frequency/);
+  });
+});
+
+describe("prepareState", () => {
+  const control = { velocity_p: 1000, velocity_i: 50, position_p: 800, pwm_hz: 50000 };
+
+  test("the seed follows the live value until one is typed, and the ladder follows the seed", () => {
+    const live = prepareState("VelocityP", DEFAULT_PREPARE, control);
+    expect(live).toMatchObject({ seed: 1000, problem: null });
+    expect(live.preview?.gains).toHaveLength(7);
+    const typed = prepareState("VelocityP", { ...DEFAULT_PREPARE, seed: 2000 }, control);
+    expect(typed.seed).toBe(2000);
+    expect(typed.preview?.gains[3].raw).toBe(2000);
+  });
+
+  test("without a live value a seed must be typed", () => {
+    const none = prepareState("VelocityP", DEFAULT_PREPARE, null);
+    expect(none.preview).toBeNull();
+    expect(none.problem).toMatch(/no live value.*enter a seed/i);
+    expect(prepareState("VelocityP", { ...DEFAULT_PREPARE, seed: 900 }, null).problem).toBeNull();
+  });
+
+  test("a form that cannot be sent says why, in this order: repeats, range, seed, ladder", () => {
+    expect(prepareState("VelocityP", { ...DEFAULT_PREPARE, repeats: 0 }, control).problem).toMatch(
+      /repeat at least once/,
+    );
+    expect(prepareState("VelocityP", { ...DEFAULT_PREPARE, lower: 2, upper: 1 }, control).problem).toMatch(
+      /lowest.*first/i,
+    );
+    expect(prepareState("VelocityP", { ...DEFAULT_PREPARE, seed: 0 }, control).problem).toMatch(/can't be zero/);
+    const unwritable = prepareState("VelocityP", { ...DEFAULT_PREPARE, seed: 32000, lower: 3, upper: 4 }, control);
+    expect(unwritable.problem).toMatch(/none of these steps/i);
+  });
+
+  test("the I corner seed is in Hz with the live value converted", () => {
+    const state = prepareState("VelocityICornerHz", DEFAULT_PREPARE, { ...control, velocity_i: 4200 });
+    expect(state.unit).toBe("Hz");
+    expect(state.seed).toBeCloseTo((4200 * 50000) / (2 * Math.PI * 65536), 6);
+  });
+});
+
+describe("liveControlFor", () => {
+  const printer = {
+    steppers: [{ name: "stepper_x", serial: "s1", channel: 1 }],
+    boards: [
+      { serial: "s0", channels: [{ channel: 1, control: { velocity_p: 1 } }] },
+      { serial: "s1", channels: [{ channel: 1, control: { velocity_p: 2, velocity_i: 3, position_p: 4, pwm_hz: 5 } }] },
+    ],
+  } as unknown as PrinterView;
+  test("finds the control values of the stepper's own board and channel", () => {
+    expect(liveControlFor(printer, "stepper_x")).toEqual({ velocity_p: 2, velocity_i: 3, position_p: 4, pwm_hz: 5 });
+  });
+  test("is null for an unknown stepper or a board that is not reporting", () => {
+    expect(liveControlFor(printer, "stepper_y")).toBeNull();
+    expect(liveControlFor({ ...printer, boards: [] } as unknown as PrinterView, "stepper_x")).toBeNull();
   });
 });

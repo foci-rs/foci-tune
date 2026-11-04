@@ -3,6 +3,7 @@ import { failureMessage } from "./failure";
 import { cornerHz, velocityIRaw } from "./units";
 import type {
   Halt,
+  PrinterView,
   LadderAssessment,
   Pause,
   InadmissibleReason,
@@ -486,24 +487,54 @@ export function currentGuidedStep(tune: Tune): GuidedStepId {
 }
 
 export interface PrepareForm {
-  typed: boolean;
-  seed: number;
+  /** The typed seed; null follows the stepper's live value. */
+  seed: number | null;
   repeats: number;
   lower: number;
   upper: number;
 }
 
-export const DEFAULT_PREPARE: PrepareForm = { typed: false, seed: 0, repeats: 3, lower: -3, upper: 3 };
+export const DEFAULT_PREPARE: PrepareForm = { seed: null, repeats: 3, lower: -3, upper: 3 };
 
-/** Why the step cannot be prepared from this form, as a sentence; null when it can. */
-export function prepareProblem(form: PrepareForm): string | null {
+export interface PrepareState {
+  /** The seed the ladder starts from; null while there is neither a typed nor a live value. */
+  seed: number | null;
+  unit: string;
+  preview: LadderPreview | null;
+  /** Why the step cannot be prepared from this form, as a sentence; null when it can. */
+  problem: string | null;
+}
+
+/** What the next-step form amounts to: its seed, the ladder it gives, and what stops it. */
+export function prepareState(axis: TuneAxis, form: PrepareForm, control: LiveControl | null): PrepareState {
+  const unit = axis === "VelocityICornerHz" ? "Hz" : "";
+  const seed = form.seed ?? (control === null ? null : liveSeed(axis, control));
+  const rangeOk = Number.isInteger(form.lower) && Number.isInteger(form.upper) && form.lower <= form.upper;
+  const built =
+    seed === null || !rangeOk ? null : previewLadder(axis, seed, control?.pwm_hz ?? 0, form.lower, form.upper);
+  const preview = built === null || "problem" in built ? null : built;
+  let problem: string | null = null;
   if (form.repeats < 1 || !Number.isInteger(form.repeats))
-    return "Each gain must repeat at least once, in whole numbers.";
-  if (!Number.isInteger(form.lower) || !Number.isInteger(form.upper) || form.lower > form.upper) {
-    return "The lowest and highest step must be whole numbers, lowest first.";
+    problem = "Each gain must repeat at least once, in whole numbers.";
+  else if (!rangeOk) problem = "The lowest and highest step must be whole numbers, lowest first.";
+  else if (seed === null) problem = "There is no live value to start from. Enter a seed.";
+  else if (built !== null && "problem" in built) problem = built.problem;
+  else if (preview !== null && preview.gains.length === 0) {
+    problem = "None of these steps gives a gain that can be written. Change the seed or the range.";
   }
-  if (form.typed && !(form.seed > 0)) return "The seed must be above zero.";
-  return null;
+  return { seed, unit, preview, problem };
+}
+
+/** The live control values of the stepper's own board and channel; null when it is not reporting. */
+export function liveControlFor(printer: PrinterView, stepperName: string): LiveControl | null {
+  const stepper = printer.steppers.find((s) => s.name === stepperName);
+  if (stepper === undefined) return null;
+  const channel = printer.boards
+    .find((b) => b.serial === stepper.serial)
+    ?.channels.find((c) => c.channel === stepper.channel);
+  if (channel === undefined) return null;
+  const { velocity_p, velocity_i, position_p, pwm_hz } = channel.control;
+  return { velocity_p, velocity_i, position_p, pwm_hz };
 }
 
 export type GuidedAction = "setup" | "prepare" | "start" | "choose" | "extend" | "decide" | "abandon" | "restore";
