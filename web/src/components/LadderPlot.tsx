@@ -39,7 +39,12 @@ export function LadderPlot({
     return {
       scales: { x: { time: false } },
       axes: [axis(axisLabel), axis(metricLabel)],
-      series: [{ label: axisLabel }, ...reps, { label: "Median", stroke: MEDIAN_COLOR, width: 2, spanGaps: true, points: { show: false } }, ...lines],
+      series: [
+        { label: axisLabel },
+        ...reps,
+        { label: "Median", stroke: MEDIAN_COLOR, width: 2, spanGaps: true, points: { show: false } },
+        ...lines,
+      ],
     };
   }, [repeats, axisLabel, metricLabel, thresholds]);
   const data = useMemo(() => {

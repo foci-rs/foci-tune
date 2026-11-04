@@ -123,7 +123,10 @@ beforeEach(() => {
     const channel = (probe: ProbeRecord | null, st: ReturnType<typeof standstill> | null) =>
       runWith(id, { channels: [{ channel: 0, declared: true, tracking: [], probe, standstill: st }] });
     if (id === "p1")
-      return channel(probeRecord({ status: "failed", reason: "fitted damping ratio 1.70 is outside (0, 1)" }, 12), null);
+      return channel(
+        probeRecord({ status: "failed", reason: "fitted damping ratio 1.70 is outside (0, 1)" }, 12),
+        null,
+      );
     if (id === "p0") return channel(probeRecord(fit(0.09, 24), 41), null);
     if (id === "s1") return channel(null, standstill([2.5, 3.5, null]));
     return channel(null, null);
@@ -156,7 +159,9 @@ test("plots the paused rung's repeats and dims the previous rung's", async () =>
 });
 
 test("a standstill pause counts every emitted rest and shows a placeholder for a missing sd", async () => {
-  render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />);
+  render(
+    <PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />,
+  );
   expect(await screen.findByText(/3 of 3 rests qualified/)).toBeInTheDocument();
   expect(screen.getByText(/worst torque sd 7\.500/)).toBeInTheDocument();
   expect(screen.getByText("2.500")).toBeInTheDocument();
@@ -172,7 +177,9 @@ test("a run that did not finish well gives its reason beside the repeat", async 
       ? ({ ...(await base(id)), state: "not_comparable", reason: "channel 0 did not move" } as Run)
       : base(id),
   );
-  render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />);
+  render(
+    <PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />,
+  );
   expect(await screen.findByText(/channel 0 did not move/)).toBeInTheDocument();
 });
 
@@ -193,7 +200,10 @@ test("shows this and the previous rung's median p99 per speed and worst torque s
   render(<PausePanel tune={tune} step={0} busy={false} onDecide={() => undefined} />);
   const table = await screen.findByRole("table", { name: "Rung medians" });
   const [, thisRung, previousRung] = within(table).getAllByRole("row");
-  const cells = (row: HTMLElement) => within(row).getAllByRole("cell").map((c) => c.textContent);
+  const cells = (row: HTMLElement) =>
+    within(row)
+      .getAllByRole("cell")
+      .map((c) => c.textContent);
   expect(cells(thisRung)).toEqual(["2", "3.125", "4.750", "6.500"]);
   expect(cells(previousRung)).toEqual(["1", "5.500", "6.250", "9.125"]);
 });

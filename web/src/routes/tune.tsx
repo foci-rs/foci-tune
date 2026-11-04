@@ -228,9 +228,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
   const [params, setParams] = useStored("params", () => DEFAULT_PARAMETERS);
   const [type, setType] = useStored<"type">("type", () => "probe");
   const [patterns, setPatterns] = useStored<"patterns">("patterns", () => ({}));
-  const [speedsText, setSpeedsText] = useStored("speedsText", () =>
-    DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "),
-  );
+  const [speedsText, setSpeedsText] = useStored("speedsText", () => DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "));
 
   const patternFor = (s: StepperView | undefined): Pattern | null => {
     if (s === undefined || limits === null) return null;
@@ -547,7 +545,11 @@ function Workbench({ printer }: { printer: PrinterView }) {
                   </p>
                 )}
                 {stepper.proposal.pattern !== null && (
-                  <Button className="mt-2 text-xs" disabled={busy} onClick={() => setPattern(stepper.proposal.pattern as Pattern)}>
+                  <Button
+                    className="mt-2 text-xs"
+                    disabled={busy}
+                    onClick={() => setPattern(stepper.proposal.pattern as Pattern)}
+                  >
                     Use the proposed pattern
                   </Button>
                 )}
@@ -580,7 +582,11 @@ function Workbench({ printer }: { printer: PrinterView }) {
                 disabled={busy}
                 ladder={ladder}
                 ladderOn={ladderOn}
-                ladderDefaults={pwmHz === null && ladder.axis === "velocity_i_corner_hz" ? [] : defaultLadderValues(ladder.axis, gains, pwmHz ?? 0)}
+                ladderDefaults={
+                  pwmHz === null && ladder.axis === "velocity_i_corner_hz"
+                    ? []
+                    : defaultLadderValues(ladder.axis, gains, pwmHz ?? 0)
+                }
                 onGains={setGains}
                 onFilters={setFilters}
                 onLadder={setLadder}
@@ -605,7 +611,10 @@ function Workbench({ printer }: { printer: PrinterView }) {
             </Button>
           </div>
           {message !== null && (
-            <p role="status" className={message.tone === "ok" ? "mt-2 text-sm text-emerald-400" : "mt-2 text-sm text-red-400"}>
+            <p
+              role="status"
+              className={message.tone === "ok" ? "mt-2 text-sm text-emerald-400" : "mt-2 text-sm text-red-400"}
+            >
               {message.text}
             </p>
           )}
@@ -626,9 +635,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
               </span>
             )}
             <span className="text-muted-foreground">{queue.length} queued</span>
-            {current !== null && (
-              <Button onClick={abort}>Abort after this run</Button>
-            )}
+            {current !== null && <Button onClick={abort}>Abort after this run</Button>}
           </div>
           {pending.length > 0 && (
             <ol aria-label="Queue" className="mt-2 flex flex-wrap gap-2 text-xs">
@@ -650,9 +657,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
       )}
 
       {sessionError !== null && <p className="text-sm text-red-400">Session: {sessionError}</p>}
-      {view !== null && view.session !== null && (
-        <SessionResults view={view} />
-      )}
+      {view !== null && view.session !== null && <SessionResults view={view} />}
     </div>
   );
 }
@@ -714,17 +719,22 @@ export function SessionResults({ view }: { view: SessionView }) {
   const unassessable = ladderMedians(ladderEntries, repeats)
     .filter((m) => m.unassessable)
     .map((m) => m.value);
-  const headlineLabel = type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (um)" : "Worst torque sd";
+  const headlineLabel =
+    type === "probe" ? "Velocity zeta" : type === "tracking" ? "p99 at top speed (um)" : "Worst torque sd";
 
-  const overlay = useMemo(() => checked.flatMap((id) => {
-    const entry = entries.find((e) => e.id === id);
-    const s = series[id];
-    if (entry?.run == null || s === undefined || "error" in s) return [];
-    const plot = s.channels.find((c) => c.channel === entry.run?.declared_channel);
-    if (plot === undefined) return [];
-    const label = new Date(finishedMs(entry)).toLocaleTimeString([], { hour12: false });
-    return [{ id, label, color: PALETTE[colors.get(id) ?? 0], plot, run: entry.run }];
-  }), [checked, entries, series, colors]);
+  const overlay = useMemo(
+    () =>
+      checked.flatMap((id) => {
+        const entry = entries.find((e) => e.id === id);
+        const s = series[id];
+        if (entry?.run == null || s === undefined || "error" in s) return [];
+        const plot = s.channels.find((c) => c.channel === entry.run?.declared_channel);
+        if (plot === undefined) return [];
+        const label = new Date(finishedMs(entry)).toLocaleTimeString([], { hour12: false });
+        return [{ id, label, color: PALETTE[colors.get(id) ?? 0], plot, run: entry.run }];
+      }),
+    [checked, entries, series, colors],
+  );
   const seriesErrors = checked.flatMap((id) => {
     const s = series[id];
     return s !== undefined && "error" in s ? [`${id}: ${s.error}`] : [];
@@ -810,9 +820,14 @@ export function SessionResults({ view }: { view: SessionView }) {
         {config !== null && "text" in config && (
           <div className="mt-3 space-y-2">
             {acceptedEntry !== undefined && acceptedEntry.state !== "done" && (
-              <p className="text-sm text-amber-400">This run is {stateLabel(acceptedEntry.state)}; check its gains before using them.</p>
+              <p className="text-sm text-amber-400">
+                This run is {stateLabel(acceptedEntry.state)}; check its gains before using them.
+              </p>
             )}
-            <pre aria-label="Config block" className="overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs select-all">
+            <pre
+              aria-label="Config block"
+              className="overflow-x-auto rounded-md border bg-background p-3 font-mono text-xs select-all"
+            >
               {config.text}
             </pre>
             <Button onClick={() => copy(config.text)}>{copied ? "Copied" : "Copy"}</Button>

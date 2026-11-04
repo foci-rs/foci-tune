@@ -187,8 +187,6 @@ test("the confirmed stop clears when klipper returns to ready", async () => {
 
 test("the confirmed stop clears when a new run starts", async () => {
   await killOnce();
-  act(() =>
-    StubSocket.last!.deliver({ type: "run_state", session: "s", run: "r", state: "preparing" }),
-  );
+  act(() => StubSocket.last!.deliver({ type: "run_state", session: "s", run: "r", state: "preparing" }));
   expect(screen.queryByText("Stop confirmed")).toBeNull();
 });

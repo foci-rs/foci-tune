@@ -81,7 +81,9 @@ export function PausePanel({
     });
   }, [s, pausedRung, perRepeat]);
 
-  const idKey = refs.map((r) => `${r.probeId}/${standstillPause && r.rung === pausedRung ? r.standstillId : ""}`).join("|");
+  const idKey = refs
+    .map((r) => `${r.probeId}/${standstillPause && r.rung === pausedRung ? r.standstillId : ""}`)
+    .join("|");
   const [loaded, setLoaded] = useState<Loaded>({ runs: {}, series: {} });
   const [error, setError] = useState<string | null>(null);
 
@@ -91,10 +93,7 @@ export function PausePanel({
     const runIds = refs.flatMap((r) =>
       standstillPause && r.rung === pausedRung && r.standstillId !== null ? [r.probeId, r.standstillId] : [r.probeId],
     );
-    Promise.all([
-      Promise.all(runIds.map((id) => getRun(id))),
-      Promise.all(refs.map((r) => getSeries(r.probeId))),
-    ]).then(
+    Promise.all([Promise.all(runIds.map((id) => getRun(id))), Promise.all(refs.map((r) => getSeries(r.probeId)))]).then(
       ([runs, series]) => {
         if (!live) return;
         setLoaded({
@@ -179,7 +178,11 @@ export function PausePanel({
                 <td className="pr-3">{r.repeat + 1}</td>
                 <td className="pr-3">{r.rung + 1}</td>
                 <td className="pr-3 font-sans">
-                  {probe === null ? (loading ? "loading" : (probeProblem ?? "no probe record")) : fitText(probe.velocity)}
+                  {probe === null
+                    ? loading
+                      ? "loading"
+                      : (probeProblem ?? "no probe record")
+                    : fitText(probe.velocity)}
                 </td>
                 <td className="pr-3">
                   {probe?.velocity.status === "fit" ? (probe.velocity.admissible_starts ?? "-") : "-"}
@@ -229,7 +232,8 @@ export function PausePanel({
           {restsByRepeat.map(({ r, rests, problem }) => (
             <div key={r.probeId}>
               <p>
-                Repeat {r.repeat + 1}: worst torque sd {fixed(s.rungs[pausedRung].repeat_values[r.repeat]?.worst_torque_sd)}
+                Repeat {r.repeat + 1}: worst torque sd{" "}
+                {fixed(s.rungs[pausedRung].repeat_values[r.repeat]?.worst_torque_sd)}
                 {rests !== null && `, ${rests.length} of ${required} rests qualified`}
               </p>
               {problem !== null && <p className="text-xs text-amber-400">Standstill run {problem}</p>}

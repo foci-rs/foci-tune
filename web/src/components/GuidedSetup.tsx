@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { ApiRequestError, postTune, type Pattern, type PrinterView, type StepperView, type Tune, type TuneSetup } from "@/api";
+import {
+  ApiRequestError,
+  postTune,
+  type Pattern,
+  type PrinterView,
+  type StepperView,
+  type Tune,
+  type TuneSetup,
+} from "@/api";
 import { defaultProbeSpeed, gatesBody, type GatesForm } from "@/guided";
 import {
   bedLimits,
@@ -82,7 +90,18 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
             maxVelocity,
           })
         : null,
-    [speedsText, pattern?.start[0], pattern?.start[1], pattern?.end[0], pattern?.end[1], stepper?.kinematics, probe.segments_between_toggles, probeStrokesTouched, probe.strokes, maxVelocity],
+    [
+      speedsText,
+      pattern?.start[0],
+      pattern?.start[1],
+      pattern?.end[0],
+      pattern?.end[1],
+      stepper?.kinematics,
+      probe.segments_between_toggles,
+      probeStrokesTouched,
+      probe.strokes,
+      maxVelocity,
+    ],
   );
   useEffect(() => {
     if (!probeSpeedTouched && derived !== null && derived.speed > 0) {
@@ -130,7 +149,8 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   if (limits === null) blocked.push("bed limits need stepper_x and stepper_y in the config");
   if (patternError !== null) blocked.push(patternError);
   if (!speeds.ok) blocked.push(speeds.error);
-  else if (speeds.values.length < 1 || speeds.values.length > 3) blocked.push("a tune needs one to three tracking speeds");
+  else if (speeds.values.length < 1 || speeds.values.length > 3)
+    blocked.push("a tune needs one to three tracking speeds");
   if (spacingProblem !== null) blocked.push(spacingProblem);
   if (gates.damping_floor >= gates.marginal) blocked.push("the damping floor must be below the marginal threshold");
 
@@ -154,9 +174,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   };
 
   const asSetup = (parameters: Setup["parameters"], type: Setup["type"]): Setup | null =>
-    pattern === null || stepper === undefined
-      ? null
-      : ({ stepper: stepper.name, pattern, type, parameters } as Setup);
+    pattern === null || stepper === undefined ? null : ({ stepper: stepper.name, pattern, type, parameters } as Setup);
   const probeSetup = asSetup(probe, "probe");
   const trackingSetup = asSetup({ speeds_mm_s: speeds.ok ? speeds.values : [], strokes: trackingStrokes }, "tracking");
   const standstillSetup = asSetup(standstill, "standstill");
@@ -164,9 +182,13 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   const gateField = (label: string, key: "damping_floor" | "marginal" | "standstill_factor", step: number) => (
     <label className="flex flex-col text-xs text-muted-foreground">
       {label}
-      <NumberField label={label} value={gates[key]} step={step}
+      <NumberField
+        label={label}
+        value={gates[key]}
+        step={step}
         disabled={busy || (key === "standstill_factor" && !gates.standstill_gate)}
-        onValue={(v) => setGates((g) => ({ ...g, [key]: v }))} />
+        onValue={(v) => setGates((g) => ({ ...g, [key]: v }))}
+      />
     </label>
   );
 
@@ -217,7 +239,9 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               }}
             />
           )}
-          {derived?.warning != null && !probeSpeedTouched && <p className="text-xs text-amber-400">{derived.warning}</p>}
+          {derived?.warning != null && !probeSpeedTouched && (
+            <p className="text-xs text-amber-400">{derived.warning}</p>
+          )}
           {spacingProblem !== null && <p className="text-xs text-amber-400">{spacingProblem}</p>}
           {edgeHint !== null && (
             <p role="note" className={HINT_CLASS[edgeHint.tone]}>
@@ -269,14 +293,24 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         )}
         {limits !== null && pattern !== null && stepper !== undefined && (
           <div>
-            <BedMap limits={limits} pattern={pattern} proposal={stepper.proposal.pattern} disabled={busy} onChange={setPattern} />
+            <BedMap
+              limits={limits}
+              pattern={pattern}
+              proposal={stepper.proposal.pattern}
+              disabled={busy}
+              onChange={setPattern}
+            />
             {patternError !== null && (
               <p role="alert" className="mt-2 text-sm text-amber-400">
                 Pattern refused: {patternError}
               </p>
             )}
             {stepper.proposal.pattern !== null && (
-              <Button className="mt-2 text-xs" disabled={busy} onClick={() => setPattern(stepper.proposal.pattern as Pattern)}>
+              <Button
+                className="mt-2 text-xs"
+                disabled={busy}
+                onClick={() => setPattern(stepper.proposal.pattern as Pattern)}
+              >
                 Use the proposed pattern
               </Button>
             )}

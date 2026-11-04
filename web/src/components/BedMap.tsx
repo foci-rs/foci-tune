@@ -140,8 +140,8 @@ export function BedMap({
         <CoordField label="End Y" value={pattern.end[1]} disabled={disabled} onValue={(v) => set("end", 1, v)} />
       </div>
       <p className="text-xs text-muted-foreground">
-        Start is green, end is blue; the dashed line is the proposed pattern and the dashed box the{" "}
-        {PATTERN_MARGIN_MM} mm margin.
+        Start is green, end is blue; the dashed line is the proposed pattern and the dashed box the {PATTERN_MARGIN_MM}{" "}
+        mm margin.
       </p>
     </div>
   );

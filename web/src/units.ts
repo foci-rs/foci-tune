@@ -39,10 +39,7 @@ export function formatBytes(bytes: number): string {
   return `${text} ${units[unit]}`;
 }
 
-export function diffGains<T extends Record<string, number>>(
-  prev: T | null,
-  next: T,
-): (keyof T)[] {
+export function diffGains<T extends Record<string, number>>(prev: T | null, next: T): (keyof T)[] {
   if (prev === null) return [];
   return (Object.keys(next) as (keyof T)[]).filter((k) => prev[k] !== next[k]);
 }

@@ -132,17 +132,36 @@ describe("headlineMetric", () => {
       reversal_count: 0,
       moving_samples: 10,
     });
-    const r = run({ Tracking: { speeds_mm_s: [50, 400], strokes: 8 } }, {
-      tracking: [rec(400, 33), rec(50, 12)],
-    });
+    const r = run(
+      { Tracking: { speeds_mm_s: [50, 400], strokes: 8 } },
+      {
+        tracking: [rec(400, 33), rec(50, 12)],
+      },
+    );
     expect(headlineMetric(r, "tracking")).toMatchObject({ value: 33, unit: "um" });
   });
 
   test("probe: velocity zeta, or no value with the fit's reason", () => {
-    const fit = { status: "fit", damped_hz: 150, zeta: 0.12, amplitude: 1, phase: 0, offset: 0, tau_s: 0.01, residual_rms: 0.1 };
+    const fit = {
+      status: "fit",
+      damped_hz: 150,
+      zeta: 0.12,
+      amplitude: 1,
+      phase: 0,
+      offset: 0,
+      tau_s: 0.01,
+      residual_rms: 0.1,
+    };
     const failed = { status: "failed", reason: "did not converge" };
     const probe = (velocity: unknown) => ({
-      probe: { velocity, torque: failed, position_error: failed, edges: 30, stderr_at_peak: null, torque_psd_peak_hz: null },
+      probe: {
+        velocity,
+        torque: failed,
+        position_error: failed,
+        edges: 30,
+        stderr_at_peak: null,
+        torque_psd_peak_hz: null,
+      },
     });
     const kind: RunKind = {
       Probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
@@ -155,13 +174,19 @@ describe("headlineMetric", () => {
   });
 
   test("standstill: worst torque sd", () => {
-    const r = run({ Standstill: { rests: 8, dwell_s: 3 } }, {
-      standstill: { rests: [], worst_torque_sd: 41.5, worst_large_transitions_per_s: null },
-    });
+    const r = run(
+      { Standstill: { rests: 8, dwell_s: 3 } },
+      {
+        standstill: { rests: [], worst_torque_sd: 41.5, worst_large_transitions_per_s: null },
+      },
+    );
     expect(headlineMetric(r, "standstill")).toMatchObject({ value: 41.5 });
-    const withRate = run({ Standstill: { rests: 8, dwell_s: 3 } }, {
-      standstill: { rests: [], worst_torque_sd: 41.5, worst_large_transitions_per_s: 12.34 },
-    });
+    const withRate = run(
+      { Standstill: { rests: 8, dwell_s: 3 } },
+      {
+        standstill: { rests: [], worst_torque_sd: 41.5, worst_large_transitions_per_s: 12.34 },
+      },
+    );
     expect(headlineMetric(withRate, "standstill")).toMatchObject({ value: 41.5, note: "large steps 12.3/s" });
     expect(headlineMetric(r, "standstill").note).toBeUndefined();
   });
@@ -246,11 +271,7 @@ describe("buildLadderRequest", () => {
 
   test("refuses more runs than a ladder may queue", () => {
     const text = Array.from({ length: 20 }, (_, k) => 100 + k).join(",");
-    const r = buildLadderRequest(
-      base,
-      { axis: "velocity_p", text, repeats: 4, floor: 0.05, marginal: 0.08 },
-      50_000,
-    );
+    const r = buildLadderRequest(base, { axis: "velocity_p", text, repeats: 4, floor: 0.05, marginal: 0.08 }, 50_000);
     expect(r).toEqual({ ok: false, error: "a ladder queues at most 60 runs; this one would queue 80" });
   });
 });
@@ -263,9 +284,9 @@ describe("defaultLadderValues", () => {
     expect(defaultLadderValues("velocity_p", { velocity_p: 32500, velocity_i: 0, position_p: 0 }, 50_000)).toEqual([
       32500, 32600, 32700,
     ]);
-    expect(defaultLadderValues("velocity_i_corner_hz", { velocity_p: 0, velocity_i: 0, position_p: 0 }, 50_000)).toEqual([
-      25, 50, 75, 100,
-    ]);
+    expect(
+      defaultLadderValues("velocity_i_corner_hz", { velocity_p: 0, velocity_i: 0, position_p: 0 }, 50_000),
+    ).toEqual([25, 50, 75, 100]);
   });
 });
 
@@ -300,9 +321,15 @@ describe("live conversion", () => {
 
   test("prefers the batch clock, falls back to the run regime, refuses an unknown clock", () => {
     const stepper = { motor_rotation_distance_mm: 40 };
-    expect(liveRegime(260e6, null, stepper)).toEqual({ ok: true, regime: { clock_freq: 260e6, motor_rotation_distance_mm: 40 } });
+    expect(liveRegime(260e6, null, stepper)).toEqual({
+      ok: true,
+      regime: { clock_freq: 260e6, motor_rotation_distance_mm: 40 },
+    });
     const run = { clock_freq: 170e6, motor_rotation_distance_mm: 32, encoder_counts_per_rev: 4000, pwm_hz: 50_000 };
-    expect(liveRegime(0, run, stepper)).toEqual({ ok: true, regime: { clock_freq: 170e6, motor_rotation_distance_mm: 32 } });
+    expect(liveRegime(0, run, stepper)).toEqual({
+      ok: true,
+      regime: { clock_freq: 170e6, motor_rotation_distance_mm: 32 },
+    });
     expect(liveRegime(0, null, stepper).ok).toBe(false);
   });
 });
@@ -431,9 +458,16 @@ describe("session continuity", () => {
 describe("assignColors", () => {
   test("keeps a run's slot when another is unchecked and fills the lowest free slot", () => {
     let slots = assignColors(new Map(), ["a", "b", "c"]);
-    expect([...slots]).toEqual([["a", 0], ["b", 1], ["c", 2]]);
+    expect([...slots]).toEqual([
+      ["a", 0],
+      ["b", 1],
+      ["c", 2],
+    ]);
     slots = assignColors(slots, ["a", "c"]);
-    expect([...slots]).toEqual([["a", 0], ["c", 2]]);
+    expect([...slots]).toEqual([
+      ["a", 0],
+      ["c", 2],
+    ]);
     slots = assignColors(slots, ["a", "c", "d"]);
     expect(slots.get("d")).toBe(1);
   });
@@ -473,7 +507,7 @@ describe("pattern helpers", () => {
     };
     expect(loadPattern(broken, "stepper_x")).toBeNull();
     expect(() => savePattern(broken, "stepper_x", pattern)).not.toThrow();
-    store.set("foci-tune.pattern.stepper_z", "{\"start\":[1]}");
+    store.set("foci-tune.pattern.stepper_z", '{"start":[1]}');
     expect(loadPattern(storage, "stepper_z")).toBeNull();
   });
 
@@ -636,8 +670,19 @@ describe("probe edge hint", () => {
   });
 
   test("the suggested strokes are the fewest that clear the steady-estimate bar", () => {
-    for (const [speed, segments, reach] of [[195, 3, 100], [195, 3, 150], [400, 6, 150], [195, 3, 70]]) {
-      const input = { pattern: diag(reach), kinematics: "corexy", speedMmS: speed, segmentsBetweenToggles: segments, maxVelocity: 500 };
+    for (const [speed, segments, reach] of [
+      [195, 3, 100],
+      [195, 3, 150],
+      [400, 6, 150],
+      [195, 3, 70],
+    ]) {
+      const input = {
+        pattern: diag(reach),
+        kinematics: "corexy",
+        speedMmS: speed,
+        segmentsBetweenToggles: segments,
+        maxVelocity: 500,
+      };
       const strokes = suggestedProbeStrokes(input)!;
       expect(probeEdgeHint({ ...input, strokes })!.tone).toBe("ok");
       expect(probeEdgeHint({ ...input, strokes: strokes - 1 })?.tone).not.toBe("ok");
@@ -645,7 +690,13 @@ describe("probe edge hint", () => {
   });
 
   test("no strokes are suggested when the toggles are too close or the pattern is too short", () => {
-    const input = { pattern: diag(100), kinematics: "corexy", speedMmS: 195, segmentsBetweenToggles: 1, maxVelocity: 500 };
+    const input = {
+      pattern: diag(100),
+      kinematics: "corexy",
+      speedMmS: 195,
+      segmentsBetweenToggles: 1,
+      maxVelocity: 500,
+    };
     expect(suggestedProbeStrokes(input)).toBeNull();
     expect(suggestedProbeStrokes({ ...input, segmentsBetweenToggles: 3, pattern: diag(5) })).toBeNull();
   });

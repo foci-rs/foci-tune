@@ -55,7 +55,10 @@ function Details({ run, type }: { run: Run; type: RunType }) {
       <span>
         {[...m.tracking]
           .sort((a, b) => a.speed_mm_s - b.speed_mm_s)
-          .map((t) => `${formatNumber(t.speed_mm_s, 0)}: p99 ${formatNumber(t.p99_um, 1)}, rev ${formatNumber(t.reversal_peak_um, 1)}`)
+          .map(
+            (t) =>
+              `${formatNumber(t.speed_mm_s, 0)}: p99 ${formatNumber(t.p99_um, 1)}, rev ${formatNumber(t.reversal_peak_um, 1)}`,
+          )
           .join("; ")}
       </span>
     );
@@ -66,8 +69,8 @@ function Details({ run, type }: { run: Run; type: RunType }) {
     const v = p.velocity;
     return (
       <span>
-        {v.status === "fit" ? `${formatNumber(v.damped_hz, 1)} Hz` : `fit failed: ${v.reason}`}, {p.edges} edges, PSD peak{" "}
-        {formatNumber(p.torque_psd_peak_hz, 1)} Hz
+        {v.status === "fit" ? `${formatNumber(v.damped_hz, 1)} Hz` : `fit failed: ${v.reason}`}, {p.edges} edges, PSD
+        peak {formatNumber(p.torque_psd_peak_hz, 1)} Hz
       </span>
     );
   }
@@ -122,9 +125,7 @@ export function ResultsTable({
   }
   const entries = [...unsorted].sort((a, b) => finishedMs(a) - finishedMs(b));
   const sessionPwm = entries.map((e) => (e.run === null ? null : pwmOf(e.run))).find((p) => p !== null) ?? null;
-  const marks = highlightChanges(
-    entries.flatMap((e) => (e.run === null ? [] : [gainRow(e.run)])),
-  );
+  const marks = highlightChanges(entries.flatMap((e) => (e.run === null ? [] : [gainRow(e.run)])));
   let markIndex = 0;
   const full = checked.size >= PALETTE.length;
   return (
@@ -180,14 +181,21 @@ export function ResultsTable({
                     onChange={(e) => onToggle(entry.id, e.target.checked)}
                   />
                   {slot !== undefined && (
-                    <span aria-hidden="true" className="ml-1 inline-block size-2 rounded-sm" style={{ background: PALETTE[slot] }} />
+                    <span
+                      aria-hidden="true"
+                      className="ml-1 inline-block size-2 rounded-sm"
+                      style={{ background: PALETTE[slot] }}
+                    />
                   )}
                 </td>
                 <td className="py-1 pr-3">{time(finishedMs(entry))}</td>
                 {GAIN_COLUMNS.map((c) => (
                   <td
                     key={c.key}
-                    className={cn("py-1 pr-3 text-right", changed.has(c.key) && "rounded bg-emerald-900/50 text-emerald-200")}
+                    className={cn(
+                      "py-1 pr-3 text-right",
+                      changed.has(c.key) && "rounded bg-emerald-900/50 text-emerald-200",
+                    )}
                   >
                     {c.key === "velocity_i" && pwm !== null
                       ? `${formatNumber(cornerHz(row.velocity_i, pwm), 1)} Hz (${row.velocity_i})`
@@ -195,17 +203,23 @@ export function ResultsTable({
                     {changed.has(c.key) && <span className="sr-only"> changed</span>}
                   </td>
                 ))}
-                {ladderAxis !== null && <td className="py-1 pr-3 text-right">{formatNumber(run.request.ladder_value, 2)}</td>}
+                {ladderAxis !== null && (
+                  <td className="py-1 pr-3 text-right">{formatNumber(run.request.ladder_value, 2)}</td>
+                )}
                 <td className="py-1 pr-3 text-right" title={head.label}>
                   {formatNumber(head.value, type === "probe" ? 3 : 1)}
-                  {head.value !== null && head.unit !== "" && <span className="text-muted-foreground"> {head.unit}</span>}
+                  {head.value !== null && head.unit !== "" && (
+                    <span className="text-muted-foreground"> {head.unit}</span>
+                  )}
                 </td>
                 <td className="py-1 pr-3 font-sans text-xs">
                   <Details run={run} type={type} />
                   {run.clamped_speeds.length > 0 && (
                     <p className="text-amber-400">
                       clamped:{" "}
-                      {run.clamped_speeds.map(([req, app]) => `${formatNumber(req, 0)} to ${formatNumber(app, 0)} mm/s`).join(", ")}
+                      {run.clamped_speeds
+                        .map(([req, app]) => `${formatNumber(req, 0)} to ${formatNumber(app, 0)} mm/s`)
+                        .join(", ")}
                     </p>
                   )}
                 </td>

@@ -78,7 +78,14 @@ export function SyncedPanels({
   return (
     <div className="space-y-2">
       {panels.map((p, k) => (
-        <PlotPanel key={p.label} label={p.label} options={options[k]} data={p.data} height={180} onCreate={callbacks[k]} />
+        <PlotPanel
+          key={p.label}
+          label={p.label}
+          options={options[k]}
+          data={p.data}
+          height={180}
+          onCreate={callbacks[k]}
+        />
       ))}
     </div>
   );

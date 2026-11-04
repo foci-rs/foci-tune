@@ -14,9 +14,7 @@ test("postKill gives up on a hung server so the kill reads as unconfirmed", asyn
     "fetch",
     (_path: string, init?: RequestInit) =>
       new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () =>
-          reject(new DOMException("aborted", "AbortError")),
-        );
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
       }),
   );
   const result = postKill().then(

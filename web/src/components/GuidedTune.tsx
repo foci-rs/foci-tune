@@ -244,12 +244,7 @@ function TuneView({ id }: { id: TuneId }) {
             onExtend={(direction) => run(() => postTuneExtension(id, direction))}
           />
           {actions.decide && i === last && (
-            <PausePanel
-              tune={detail}
-              step={i}
-              busy={busy}
-              onDecide={(d) => run(() => postTuneDecision(id, d))}
-            />
+            <PausePanel tune={detail} step={i} busy={busy} onDecide={(d) => run(() => postTuneDecision(id, d))} />
           )}
         </div>
       ))}
@@ -260,7 +255,12 @@ function TuneView({ id }: { id: TuneId }) {
           plan={plan}
           earlier={earlier}
           busy={busy}
-          onStart={() => run(() => postTuneConfirm(id), () => setPlan(null))}
+          onStart={() =>
+            run(
+              () => postTuneConfirm(id),
+              () => setPlan(null),
+            )
+          }
         />
       )}
 
@@ -293,7 +293,10 @@ function LockBanner({
   onRestore: () => void;
 }) {
   const reason =
-    detail.lock ?? (typeof detail.state === "object" ? detail.state.RestoreFailed : "the starting gains have not been written back yet");
+    detail.lock ??
+    (typeof detail.state === "object"
+      ? detail.state.RestoreFailed
+      : "the starting gains have not been written back yet");
   return (
     <div role="alert" className="rounded-xl border border-amber-500/60 bg-card p-4 text-sm">
       <p className="font-medium text-amber-300">The stepper is locked until its starting gains are restored</p>
@@ -335,10 +338,24 @@ function PrepareCard({
     <Card label={`Next step: ${axisLabel(axis)}`}>
       <div className="flex flex-wrap items-end gap-3">
         <div role="radiogroup" aria-label="Seed" className="flex gap-1">
-          <button type="button" role="radio" aria-checked={!typed} disabled={busy} onClick={() => setTyped(false)} className={pillClass(!typed)}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!typed}
+            disabled={busy}
+            onClick={() => setTyped(false)}
+            className={pillClass(!typed)}
+          >
             Live value
           </button>
-          <button type="button" role="radio" aria-checked={typed} disabled={busy} onClick={() => setTyped(true)} className={pillClass(typed)}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={typed}
+            disabled={busy}
+            onClick={() => setTyped(true)}
+            className={pillClass(typed)}
+          >
             Typed value
           </button>
         </div>
@@ -398,7 +415,8 @@ function AnnouncementPanel({
         <Field label="Stepper">{a.stepper}</Field>
         <Field label="Axis">{axisLabel(a.axis)}</Field>
         <Field label="Rungs">
-          {a.firstGain.toFixed(a.axis === "VelocityICornerHz" ? 1 : 0)} to {a.lastGain.toFixed(a.axis === "VelocityICornerHz" ? 1 : 0)}
+          {a.firstGain.toFixed(a.axis === "VelocityICornerHz" ? 1 : 0)} to{" "}
+          {a.lastGain.toFixed(a.axis === "VelocityICornerHz" ? 1 : 0)}
         </Field>
         <Field label="Runs" sub={`${a.rungs} rungs, ${a.repeats} repeats`}>
           {a.runCount}
@@ -438,7 +456,13 @@ function RungTable({ rows, speeds, axis }: { rows: RungView[]; speeds: number[];
         </thead>
         <tbody className="font-mono">
           {rows.map((r) => (
-            <tr key={r.index} className={cn(r.recommended !== null && "text-emerald-300", r.skipped !== null && "text-muted-foreground")}>
+            <tr
+              key={r.index}
+              className={cn(
+                r.recommended !== null && "text-emerald-300",
+                r.skipped !== null && "text-muted-foreground",
+              )}
+            >
               <td className="pr-3">{r.index + 1}</td>
               <td className="pr-3">{r.shown.toFixed(2)}</td>
               <td className="pr-3">{r.raw}</td>
@@ -556,18 +580,14 @@ function StepCard({
       ))}
       {step.drift.length > 0 && (
         <p className="mt-1 text-xs text-muted-foreground">
-          Drift of the seed rung:{" "}
-          {step.drift.map((d) => `${d.metric} ${fmt(d.first)} to ${fmt(d.rerun)}`).join("; ")}
+          Drift of the seed rung: {step.drift.map((d) => `${d.metric} ${fmt(d.first)} to ${fmt(d.rerun)}`).join("; ")}
         </p>
       )}
 
       {active && canChoose && (
         <div className="mt-4 space-y-3 border-t pt-4">
           <div className="flex flex-wrap items-end gap-3">
-            <Button
-              disabled={busy || rec === null || rec.kind === "none"}
-              onClick={() => onChoose("recommended")}
-            >
+            <Button disabled={busy || rec === null || rec.kind === "none"} onClick={() => onChoose("recommended")}>
               Accept the recommendation
             </Button>
             <label className="flex flex-col text-xs text-muted-foreground">
@@ -611,8 +631,8 @@ function StepCard({
       {active && canExtend && summary.extend !== null && (
         <div className="mt-3 space-y-2 border-t pt-3">
           <p className="text-sm">
-            The best rung is at the {summary.extend === "Below" ? "low" : "high"} end of the ladder. Extending adds one rung{" "}
-            {summary.extend === "Below" ? "below" : "above"} it.
+            The best rung is at the {summary.extend === "Below" ? "low" : "high"} end of the ladder. Extending adds one
+            rung {summary.extend === "Below" ? "below" : "above"} it.
           </p>
           {extension === null ? (
             <Button disabled={busy} onClick={() => setExtension(summary.extend === "Below" ? "below" : "above")}>

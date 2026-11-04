@@ -20,10 +20,7 @@ export interface ProbeSpeedChoice {
 }
 
 /** The fastest speed whose toggle spacing is valid and whose edge estimate reaches the minimum. */
-export function defaultProbeSpeed(
-  speeds: number[],
-  context: Omit<ProbeEdgeInput, "speedMmS">,
-): ProbeSpeedChoice {
+export function defaultProbeSpeed(speeds: number[], context: Omit<ProbeEdgeInput, "speedMmS">): ProbeSpeedChoice {
   const fastestFirst = [...speeds].filter(Number.isFinite).sort((a, b) => b - a);
   if (fastestFirst.length === 0) return { speed: 0, warning: "No tracking speed to derive the probe speed from" };
   const spacingOk = (speedMmS: number) =>
@@ -42,8 +39,7 @@ export function defaultProbeSpeed(
   if (valid.length === 0) {
     return {
       speed: fastestFirst[0],
-      warning:
-        "No speed gives gain toggles far enough apart for the probe fit: raise the segments between toggles",
+      warning: "No speed gives gain toggles far enough apart for the probe fit: raise the segments between toggles",
     };
   }
   return {
@@ -254,7 +250,8 @@ export function rungView(tune: Tune, step: number): RungView[] {
     else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
     else text = "Pending";
 
-    if (s.standstill_gate_off !== null || tune.setup.gates.standstill_factor === null) text = `${text} (Standstill gate off)`;
+    if (s.standstill_gate_off !== null || tune.setup.gates.standstill_factor === null)
+      text = `${text} (Standstill gate off)`;
 
     let recommended: RecommendationKind | null = null;
     if (choice !== undefined && "Measured" in choice && choice.Measured.rung === index) recommended = "measured";

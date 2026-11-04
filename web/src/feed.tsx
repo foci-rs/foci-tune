@@ -1,13 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ApiRequestError,
   connectEvents,
@@ -117,8 +108,7 @@ export function FeedProvider({ children }: { children: ReactNode }) {
     }
   }, [klippy]);
   const killUnconfirmed =
-    printer?.engine.unconfirmed_kill != null ||
-    (killStatus === "kill_unconfirmed" && klippy !== "shutdown");
+    printer?.engine.unconfirmed_kill != null || (killStatus === "kill_unconfirmed" && klippy !== "shutdown");
 
   const value = useMemo<Feed>(
     () => ({

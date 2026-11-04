@@ -223,9 +223,7 @@ export function FirmwareRestart() {
   };
   return (
     <Card label="Klipper is shut down" className="border-red-500">
-      <p className="mb-3 text-sm">
-        After a restart the gains are whatever the config says.
-      </p>
+      <p className="mb-3 text-sm">After a restart the gains are whatever the config says.</p>
       <Button tone="danger" disabled={busy} onClick={restart}>
         Firmware restart
       </Button>

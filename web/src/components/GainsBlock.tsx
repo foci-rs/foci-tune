@@ -64,11 +64,21 @@ function Stepper({
     <div className="min-w-0">
       <p className="text-[0.65rem] uppercase tracking-wider text-muted-foreground">{label}</p>
       <div className="flex items-center gap-1">
-        <Button aria-label={`Decrease ${label} by ${step} ${unit}`} disabled={disabled} onClick={() => onValue(value - step)} className="px-2 py-0.5">
+        <Button
+          aria-label={`Decrease ${label} by ${step} ${unit}`}
+          disabled={disabled}
+          onClick={() => onValue(value - step)}
+          className="px-2 py-0.5"
+        >
           -
         </Button>
         <NumberField label={`${label} (${unit})`} value={value} disabled={disabled} onValue={onValue} />
-        <Button aria-label={`Increase ${label} by ${step} ${unit}`} disabled={disabled} onClick={() => onValue(value + step)} className="px-2 py-0.5">
+        <Button
+          aria-label={`Increase ${label} by ${step} ${unit}`}
+          disabled={disabled}
+          onClick={() => onValue(value + step)}
+          className="px-2 py-0.5"
+        >
           +
         </Button>
         <span className="text-xs text-muted-foreground">{unit}</span>
@@ -255,18 +265,40 @@ export function LadderSetup({
           </label>
           <label className="flex flex-col text-xs text-muted-foreground">
             Repeats
-            <NumberField label="Repeats" value={ladder.repeats} disabled={disabled} onValue={(v) => onLadder({ ...ladder, repeats: v })} className="w-16" />
+            <NumberField
+              label="Repeats"
+              value={ladder.repeats}
+              disabled={disabled}
+              onValue={(v) => onLadder({ ...ladder, repeats: v })}
+              className="w-16"
+            />
           </label>
           <label className="flex flex-col text-xs text-muted-foreground">
             Zeta floor
-            <NumberField label="Zeta floor" value={ladder.floor} step={0.01} disabled={disabled} onValue={(v) => onLadder({ ...ladder, floor: v })} className="w-20" />
+            <NumberField
+              label="Zeta floor"
+              value={ladder.floor}
+              step={0.01}
+              disabled={disabled}
+              onValue={(v) => onLadder({ ...ladder, floor: v })}
+              className="w-20"
+            />
           </label>
           <label className="flex flex-col text-xs text-muted-foreground">
             Marginal below
-            <NumberField label="Marginal below" value={ladder.marginal} step={0.01} disabled={disabled} onValue={(v) => onLadder({ ...ladder, marginal: v })} className="w-20" />
+            <NumberField
+              label="Marginal below"
+              value={ladder.marginal}
+              step={0.01}
+              disabled={disabled}
+              onValue={(v) => onLadder({ ...ladder, marginal: v })}
+              className="w-20"
+            />
           </label>
           {!probe && (
-            <p className="text-xs text-muted-foreground">The stop rule applies to probe ladders only; this ladder runs to completion.</p>
+            <p className="text-xs text-muted-foreground">
+              The stop rule applies to probe ladders only; this ladder runs to completion.
+            </p>
           )}
         </>
       )}

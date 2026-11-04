@@ -110,8 +110,7 @@ export function restoreStillApplies(started: RestoreBasis, now: RestoreBasis): b
 /** True when the error says the linked session is gone: not found, or refused as unknown. */
 export function isUnknownSession(e: unknown): boolean {
   return (
-    e instanceof ApiRequestError &&
-    (e.status === 404 || (e.status === 409 && e.message.startsWith("unknown session")))
+    e instanceof ApiRequestError && (e.status === 404 || (e.status === 409 && e.message.startsWith("unknown session")))
   );
 }
 
@@ -222,11 +221,7 @@ export interface LadderInput {
 export type Built<T> = { ok: true; body: T } | { ok: false; error: string };
 
 /** The ladder request, checked the way the engine checks it so a refusal shows before posting. */
-export function buildLadderRequest(
-  base: RunBody,
-  input: LadderInput,
-  pwmHz: number | null,
-): Built<LadderRequestBody> {
+export function buildLadderRequest(base: RunBody, input: LadderInput, pwmHz: number | null): Built<LadderRequestBody> {
   const { session: _session, ...fixed } = base;
   const parsed = parseLadderList(input.text);
   if (!parsed.ok) return parsed;
@@ -320,12 +315,7 @@ export interface LiveTrace {
 }
 
 /** Appends one batch of raw samples, keeping the last `windowS` seconds. */
-export function appendLive(
-  trace: LiveTrace | null,
-  ch: LiveChannel,
-  regime: LiveRegime,
-  windowS: number,
-): LiveTrace {
+export function appendLive(trace: LiveTrace | null, ch: LiveChannel, regime: LiveRegime, windowS: number): LiveTrace {
   const umPerUnit = (regime.motor_rotation_distance_mm / POSITION_UNITS_PER_REV) * 1000;
   const next: LiveTrace = trace
     ? {
@@ -348,8 +338,7 @@ export function appendLive(
     const t = (tick - next.firstTick) / regime.clock_freq;
     const dt = (tick - next.lastTick) / regime.clock_freq;
     const position = ch.tmc_position[k];
-    const velocity =
-      Number.isFinite(dt) && dt > 0 ? ((position - next.lastPosition) * umPerUnit) / 1000 / dt : null;
+    const velocity = Number.isFinite(dt) && dt > 0 ? ((position - next.lastPosition) * umPerUnit) / 1000 / dt : null;
     next.t_s.push(t);
     next.position_error_um.push(ch.position_error[k] * umPerUnit);
     next.velocity_mm_s.push(velocity);
@@ -383,9 +372,7 @@ export function alignSeries(tables: [Column, ...Column[]][]): AlignedColumns {
   const out: AlignedColumns = [axis];
   for (const [x, ...ys] of tables) {
     for (const y of ys) {
-      const col: (number | null | undefined)[] = new Array<number | null | undefined>(axis.length).fill(
-        undefined,
-      );
+      const col: (number | null | undefined)[] = new Array<number | null | undefined>(axis.length).fill(undefined);
       x.forEach((xv, k) => {
         if (xv === null) return;
         const at = index.get(xv);
@@ -485,7 +472,10 @@ export function bedLimits(steppers: StepperView[]): Limits | null {
     steppers
       .filter((s) => s.axis === axis)
       .reduce<[number, number] | null>(
-        (acc, s) => (acc === null ? [s.position_min, s.position_max] : [Math.min(acc[0], s.position_min), Math.max(acc[1], s.position_max)]),
+        (acc, s) =>
+          acc === null
+            ? [s.position_min, s.position_max]
+            : [Math.min(acc[0], s.position_min), Math.max(acc[1], s.position_max)],
         null,
       );
   const x = span("x");
@@ -728,8 +718,7 @@ export function loadPattern(storage: PatternStorage | null, stepper: string): Pa
 export function savePattern(storage: PatternStorage | null, stepper: string, pattern: Pattern): void {
   try {
     storage?.setItem(patternKey(stepper), JSON.stringify(pattern));
-  } catch {
-  }
+  } catch {}
 }
 
 export function browserStorage(): PatternStorage | null {

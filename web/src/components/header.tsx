@@ -12,8 +12,7 @@ export function traceTone(printer: PrinterView | null): "ok" | "warn" | "off" {
   return printer.boards.every((b) => b.open) ? "ok" : "warn";
 }
 
-const navClass =
-  "rounded-full px-3 py-1 text-sm text-muted-foreground hover:text-foreground";
+const navClass = "rounded-full px-3 py-1 text-sm text-muted-foreground hover:text-foreground";
 
 export function Header() {
   const feed = useFeed();
@@ -104,8 +103,7 @@ export function Header() {
       </header>
       {killUnconfirmed && (
         <div role="alert" className="border-b border-red-500 bg-red-950 px-4 py-2 text-sm text-red-200">
-          The emergency stop is not confirmed and motion may continue. Press Kill again to re-post
-          the stop.
+          The emergency stop is not confirmed and motion may continue. Press Kill again to re-post the stop.
           {killError !== null && <span className="ml-2 font-mono">{killError}</span>}
         </div>
       )}

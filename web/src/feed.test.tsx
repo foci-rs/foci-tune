@@ -67,8 +67,5 @@ test("the last unsubscribe sends unsubscribe", () => {
   });
   expect(socket.sent).toEqual([JSON.stringify({ subscribe: "live" })]);
   rerender(<Toggle on={false} />);
-  expect(socket.sent).toEqual([
-    JSON.stringify({ subscribe: "live" }),
-    JSON.stringify({ unsubscribe: "live" }),
-  ]);
+  expect(socket.sent).toEqual([JSON.stringify({ subscribe: "live" }), JSON.stringify({ unsubscribe: "live" })]);
 });

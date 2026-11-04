@@ -474,10 +474,7 @@ export interface PauseRecord {
 
 export type TuneDecision = "continue" | "rerun" | "stop";
 
-export type RungNote =
-  | { OutOfRange: number }
-  | { RoundedToZero: number }
-  | { Merged: { shown: number; into: number } };
+export type RungNote = { OutOfRange: number } | { RoundedToZero: number } | { Merged: { shown: number; into: number } };
 
 export type UnscoredReason = "TrackingMissing" | "StandstillMissing" | "DampingWaived";
 export type InadmissibleReason = "DampingBelowFloor" | "StandstillHigh";
@@ -498,10 +495,7 @@ export interface RungMedians {
   worst_torque_sd: number | null;
 }
 
-export type Halt =
-  | { BelowFloor: { median: number } }
-  | "DampingUnassessable"
-  | "StandstillBaselineUnassessable";
+export type Halt = { BelowFloor: { median: number } } | "DampingUnassessable" | "StandstillBaselineUnassessable";
 
 export interface LadderAssessment {
   verdicts: RungVerdict[];
@@ -666,12 +660,7 @@ export class ApiRequestError extends Error {
 
 const KILL_TIMEOUT_MS = 3000;
 
-async function request<T>(
-  method: "GET" | "POST",
-  path: string,
-  body?: unknown,
-  timeoutMs?: number,
-): Promise<T> {
+async function request<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   let response: Response;
   const controller = new AbortController();
   const timer = timeoutMs === undefined ? null : setTimeout(() => controller.abort(), timeoutMs);
@@ -684,11 +673,7 @@ async function request<T>(
     });
   } catch (e) {
     if (timer !== null) clearTimeout(timer);
-    const message = controller.signal.aborted
-      ? "request timed out"
-      : e instanceof Error
-        ? e.message
-        : "network error";
+    const message = controller.signal.aborted ? "request timed out" : e instanceof Error ? e.message : "network error";
     throw new ApiRequestError(0, message);
   }
   if (timer !== null) clearTimeout(timer);
@@ -701,11 +686,7 @@ async function request<T>(
   }
   if (!response.ok) {
     const err = parsed as { error?: string; field?: string } | null;
-    throw new ApiRequestError(
-      response.status,
-      err?.error ?? (text || response.statusText),
-      err?.field ?? null,
-    );
+    throw new ApiRequestError(response.status, err?.error ?? (text || response.statusText), err?.field ?? null);
   }
   return parsed as T;
 }
@@ -717,18 +698,15 @@ export const postTraceMode = (board: string, mode: TraceModeCommand) =>
 
 export const postKill = () => request<KillResponse>("POST", "/api/kill", undefined, KILL_TIMEOUT_MS);
 
-export const postFirmwareRestart = () =>
-  request<{ ok: true }>("POST", "/api/firmware-restart");
+export const postFirmwareRestart = () => request<{ ok: true }>("POST", "/api/firmware-restart");
 
 export const postHome = () => request<{ ok: true }>("POST", "/api/home");
 
 export const getSessions = () => request<SessionView[]>("GET", "/api/sessions");
 
-export const getSession = (id: SessionId) =>
-  request<SessionView>("GET", `/api/sessions/${encodeURIComponent(id)}`);
+export const getSession = (id: SessionId) => request<SessionView>("GET", `/api/sessions/${encodeURIComponent(id)}`);
 
-export const postRun = (body: RunRequestBody) =>
-  request<{ session: SessionId; run: RunId }>("POST", "/api/runs", body);
+export const postRun = (body: RunRequestBody) => request<{ session: SessionId; run: RunId }>("POST", "/api/runs", body);
 
 export const postLadder = (body: LadderRequestBody) =>
   request<{ session: SessionId; runs: RunId[] }>("POST", "/api/ladders", body);
@@ -737,10 +715,7 @@ export const postAbort = (run: RunId) =>
   request<{ run: RunId; aborted: RunId[] }>("POST", `/api/runs/${encodeURIComponent(run)}/abort`);
 
 export const postRevert = (session: SessionId) =>
-  request<{ session: SessionId; reverted: true }>(
-    "POST",
-    `/api/sessions/${encodeURIComponent(session)}/revert`,
-  );
+  request<{ session: SessionId; reverted: true }>("POST", `/api/sessions/${encodeURIComponent(session)}/revert`);
 
 const tunePath = (id: TuneId, tail = "") => `/api/tunes/${encodeURIComponent(id)}${tail}`;
 
@@ -769,11 +744,9 @@ export const postTuneAbandon = (id: TuneId) => request<unknown>("POST", tunePath
 
 export const postTuneRestore = (id: TuneId) => request<unknown>("POST", tunePath(id, "/restore"));
 
-
 export const getRun = (id: RunId) => request<Run>("GET", `/api/runs/${encodeURIComponent(id)}`);
 
-export const getSeries = (id: RunId) =>
-  request<Series>("GET", `/api/runs/${encodeURIComponent(id)}/series`);
+export const getSeries = (id: RunId) => request<Series>("GET", `/api/runs/${encodeURIComponent(id)}/series`);
 
 export async function getConfigBlock(id: RunId): Promise<string> {
   let response: Response;
@@ -787,8 +760,7 @@ export async function getConfigBlock(id: RunId): Promise<string> {
     let message = text || response.statusText;
     try {
       message = (JSON.parse(text) as { error?: string }).error ?? message;
-    } catch {
-    }
+    } catch {}
     throw new ApiRequestError(response.status, message);
   }
   return text;

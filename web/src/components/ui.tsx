@@ -1,37 +1,16 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export function Card({
-  label,
-  children,
-  className,
-}: {
-  label: string;
-  children: ReactNode;
-  className?: string;
-}) {
+export function Card({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
-    <section
-      aria-label={label}
-      className={cn("rounded-xl border bg-card p-4 text-card-foreground", className)}
-    >
-      <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        {label}
-      </h2>
+    <section aria-label={label} className={cn("rounded-xl border bg-card p-4 text-card-foreground", className)}>
+      <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</h2>
       {children}
     </section>
   );
 }
 
-export function Field({
-  label,
-  children,
-  sub,
-}: {
-  label: string;
-  children: ReactNode;
-  sub?: ReactNode;
-}) {
+export function Field({ label, children, sub }: { label: string; children: ReactNode; sub?: ReactNode }) {
   return (
     <div className="min-w-0">
       <dt className="text-[0.65rem] uppercase tracking-wider text-muted-foreground">{label}</dt>
@@ -44,8 +23,7 @@ export function Field({
 }
 
 export function Dot({ tone }: { tone: "ok" | "warn" | "off" }) {
-  const color =
-    tone === "ok" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-muted-foreground/50";
+  const color = tone === "ok" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-muted-foreground/50";
   return <span aria-hidden="true" className={cn("inline-block size-2 rounded-full", color)} />;
 }
 

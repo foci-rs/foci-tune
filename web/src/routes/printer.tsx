@@ -17,9 +17,7 @@ function PrinterPage() {
   if (printer === null) {
     return (
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <h1 className="text-lg font-medium text-muted-foreground">
-          {loadError ?? "Waiting for the printer snapshot"}
-        </h1>
+        <h1 className="text-lg font-medium text-muted-foreground">{loadError ?? "Waiting for the printer snapshot"}</h1>
       </main>
     );
   }
@@ -51,9 +49,7 @@ function PrinterPage() {
               key={`${board.serial}-${channel.channel}`}
               board={board}
               channel={channel}
-              stepper={printer.steppers.find(
-                (s) => s.serial === board.serial && s.channel === channel.channel,
-              )}
+              stepper={printer.steppers.find((s) => s.serial === board.serial && s.channel === channel.channel)}
             />
           )),
         )}

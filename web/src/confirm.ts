@@ -17,11 +17,7 @@ export function press(
   return { state: { armedAt: now }, fire: false };
 }
 
-export function expire(
-  state: ConfirmState,
-  now: number,
-  windowMs: number = CONFIRM_WINDOW_MS,
-): ConfirmState {
+export function expire(state: ConfirmState, now: number, windowMs: number = CONFIRM_WINDOW_MS): ConfirmState {
   if (state.armedAt !== null && now - state.armedAt > windowMs) return { armedAt: null };
   return state;
 }

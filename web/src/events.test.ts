@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import {
-  connectEvents,
-  parseServerMessage,
-  type ServerMessage,
-  type SocketLike,
-} from "./api";
+import { connectEvents, parseServerMessage, type ServerMessage, type SocketLike } from "./api";
 
 class FakeSocket implements SocketLike {
   static all: FakeSocket[] = [];

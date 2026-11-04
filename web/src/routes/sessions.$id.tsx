@@ -55,7 +55,11 @@ function SessionPage() {
           All sessions
         </Link>
       </p>
-      {error !== null && <p className="text-sm text-red-400">Could not load session {id}: {error}</p>}
+      {error !== null && (
+        <p className="text-sm text-red-400">
+          Could not load session {id}: {error}
+        </p>
+      )}
       {view === null && error === null && <p className="text-sm text-muted-foreground">Loading session</p>}
       {view !== null && (
         <>
@@ -63,7 +67,8 @@ function SessionPage() {
             <p className="font-mono text-sm">{sessionLabel(view)}</p>
             {view.session !== null && (
               <p className="mt-1 text-xs text-muted-foreground">
-                {view.session.name}, recorded {new Date(view.session.created_unix_s * 1000).toLocaleString()}. Read only.
+                {view.session.name}, recorded {new Date(view.session.created_unix_s * 1000).toLocaleString()}. Read
+                only.
               </p>
             )}
             {view.error !== null && <p className="mt-2 text-sm text-red-400">{view.error}</p>}

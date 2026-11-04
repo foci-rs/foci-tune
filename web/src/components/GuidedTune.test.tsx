@@ -85,7 +85,11 @@ beforeEach(() => {
         return new Response("{}");
       }
       if (path === "/api/tunes") {
-        return new Response(JSON.stringify([{ id: "t1", stepper: "stepper_x", state: current.state, created: 1, current_step: "VelocityP" }]));
+        return new Response(
+          JSON.stringify([
+            { id: "t1", stepper: "stepper_x", state: current.state, created: 1, current_step: "VelocityP" },
+          ]),
+        );
       }
       return new Response(JSON.stringify(current));
     }),
@@ -147,9 +151,25 @@ test("choosing is offered once the step awaits a choice", async () => {
 
 test("the typed value follows the recommendation until the operator types", async () => {
   current = detail("AwaitingChoice");
-  const none = { inadmissible: null, marginal: false, unscored: null, score: 1, deciding_speed: null, gap: null, tolerance: null };
+  const none = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: 1,
+    deciding_speed: null,
+    gap: null,
+    tolerance: null,
+  };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
-  current.steps[0].assessment = { verdicts: [none, none, none], medians: [medians, medians, medians], halt: null, best: null, runner_up: null, tie: [], spreads: [] };
+  current.steps[0].assessment = {
+    verdicts: [none, none, none],
+    medians: [medians, medians, medians],
+    halt: null,
+    best: null,
+    runner_up: null,
+    tie: [],
+    spreads: [],
+  };
   current.steps[0].recommendation = { choice: { Interpolated: { shown: 1100, between: [1, 2] } }, extend: null };
   render(<GuidedTune printer={printer} />);
   const field = await screen.findByRole("spinbutton", { name: "Value" });
@@ -158,11 +178,35 @@ test("the typed value follows the recommendation until the operator types", asyn
 
 test("a running step with scored rungs does not claim scores can change", async () => {
   current = detail("Running");
-  const scored = { inadmissible: null, marginal: false, unscored: null, score: 1, deciding_speed: null, gap: null, tolerance: null };
-  const open = { inadmissible: null, marginal: false, unscored: null, score: null, deciding_speed: null, gap: null, tolerance: null };
+  const scored = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: 1,
+    deciding_speed: null,
+    gap: null,
+    tolerance: null,
+  };
+  const open = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: null,
+    deciding_speed: null,
+    gap: null,
+    tolerance: null,
+  };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
   current.steps[0].rungs[0].repeat_values = [{} as never, {} as never];
-  current.steps[0].assessment = { verdicts: [scored, open, open], medians: [medians, medians, medians], halt: null, best: 0, runner_up: null, tie: [0], spreads: [null, null] };
+  current.steps[0].assessment = {
+    verdicts: [scored, open, open],
+    medians: [medians, medians, medians],
+    halt: null,
+    best: 0,
+    runner_up: null,
+    tie: [0],
+    spreads: [null, null],
+  };
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("table");
   expect(screen.queryByText(/can change as later rungs finish/i)).toBeNull();
@@ -170,10 +214,34 @@ test("a running step with scored rungs does not claim scores can change", async 
 
 test("the score column is in micrometres and each scored row shows its deciding speed and gap", async () => {
   current = detail("AwaitingChoice");
-  const best = { inadmissible: null, marginal: false, unscored: null, score: 2, deciding_speed: 1, gap: null, tolerance: null };
-  const behind = { inadmissible: null, marginal: false, unscored: null, score: 7.1, deciding_speed: 1, gap: 5.1, tolerance: 3.1 };
+  const best = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: 2,
+    deciding_speed: 1,
+    gap: null,
+    tolerance: null,
+  };
+  const behind = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: 7.1,
+    deciding_speed: 1,
+    gap: 5.1,
+    tolerance: 3.1,
+  };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
-  current.steps[0].assessment = { verdicts: [best, behind, behind], medians: [medians, medians, medians], halt: null, best: 0, runner_up: 1, tie: [0], spreads: [null, null, null] };
+  current.steps[0].assessment = {
+    verdicts: [best, behind, behind],
+    medians: [medians, medians, medians],
+    halt: null,
+    best: 0,
+    runner_up: 1,
+    tie: [0],
+    spreads: [null, null, null],
+  };
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("table");
   expect(screen.getByRole("columnheader", { name: /score.*um/i })).toBeInTheDocument();
@@ -184,10 +252,26 @@ test("the score column is in micrometres and each scored row shows its deciding 
 
 test("the recommendation card carries the comparison line and the drift lines", async () => {
   current = detail("AwaitingChoice");
-  const a = { inadmissible: null, marginal: false, unscored: null, score: 2, deciding_speed: 1, gap: null, tolerance: null };
+  const a = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: 2,
+    deciding_speed: 1,
+    gap: null,
+    tolerance: null,
+  };
   const b = { inadmissible: null, marginal: false, unscored: null, score: 3, deciding_speed: 1, gap: 1, tolerance: 2 };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
-  current.steps[0].assessment = { verdicts: [a, a, b], medians: [medians, medians, medians], halt: null, best: 1, runner_up: 2, tie: [1, 2], spreads: [null, null, null] };
+  current.steps[0].assessment = {
+    verdicts: [a, a, b],
+    medians: [medians, medians, medians],
+    halt: null,
+    best: 1,
+    runner_up: 2,
+    tie: [1, 2],
+    spreads: [null, null, null],
+  };
   current.steps[0].drift = [{ metric: "p99 100", first: 4, rerun: 9, verdict: "Drifted" }];
   render(<GuidedTune printer={printer} />);
   expect(await screen.findByText(/lower gain/i)).toBeInTheDocument();

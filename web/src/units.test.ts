@@ -1,12 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  cornerHz,
-  diffGains,
-  formatBytes,
-  formatUm,
-  pGain,
-  quantumUm,
-} from "./units";
+import { cornerHz, diffGains, formatBytes, formatUm, pGain, quantumUm } from "./units";
 
 describe("units", () => {
   test("cornerHz converts the raw integrator gain at the PWM rate", () => {

@@ -22,7 +22,9 @@ export function PsdPlot({ runs }: { runs: OverlayRun<Psd>[] }) {
   const data = useMemo(
     () =>
       alignSeries(
-        runs.map((r) => [r.value.freq_hz, r.value.power.map((p) => (p !== null && p > 0 ? p : null))] as [Column, Column]),
+        runs.map(
+          (r) => [r.value.freq_hz, r.value.power.map((p) => (p !== null && p > 0 ? p : null))] as [Column, Column],
+        ),
       ) as uPlot.AlignedData,
     [runs],
   );

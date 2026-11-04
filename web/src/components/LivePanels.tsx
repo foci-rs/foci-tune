@@ -10,13 +10,7 @@ const WINDOW_S = 5;
 const SERIES: uPlot.Series[] = [{ label: "Live", stroke: PALETTE[0], width: 2, spanGaps: false }];
 
 /** The declared channel's critical samples while a run records, converted to plot units. */
-export function LivePanels({
-  stepper,
-  runRegime,
-}: {
-  stepper: StepperView;
-  runRegime: RunRegime | null;
-}) {
+export function LivePanels({ stepper, runRegime }: { stepper: StepperView; runRegime: RunRegime | null }) {
   const { listen, subscribeLive } = useFeed();
   const [trace, setTrace] = useState<LiveTrace | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +48,7 @@ export function LivePanels({
   return (
     <div className="space-y-2">
       {error !== null && <p className="text-sm text-amber-400">Live samples cannot be shown: {error}</p>}
-      {trace === null && error === null && (
-        <p className="text-sm text-muted-foreground">Waiting for live samples</p>
-      )}
+      {trace === null && error === null && <p className="text-sm text-muted-foreground">Waiting for live samples</p>}
       <SyncedPanels syncKey="live" panels={panels} series={SERIES} xLabel="Time (s)" />
     </div>
   );

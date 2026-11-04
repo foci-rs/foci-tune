@@ -20,7 +20,13 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
   const width = rests * group + 40;
   return (
     <div className="overflow-x-auto">
-      <svg role="img" aria-label="Torque sd per rest" width={width} height={HEIGHT + 24} className="text-muted-foreground">
+      <svg
+        role="img"
+        aria-label="Torque sd per rest"
+        width={width}
+        height={HEIGHT + 24}
+        className="text-muted-foreground"
+      >
         <line x1={32} x2={width} y1={HEIGHT} y2={HEIGHT} stroke="currentColor" strokeOpacity={0.3} />
         <text x={0} y={10} fontSize={10} fill="currentColor">
           {formatNumber(max, 1)}
@@ -61,7 +67,11 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
               <tr key={`${r.id}-${row.label}`}>
                 {i === 0 && (
                   <td className="pr-3" rowSpan={REST_ROWS.length}>
-                    <span aria-hidden="true" className="mr-1 inline-block size-2 rounded-sm" style={{ background: r.color }} />
+                    <span
+                      aria-hidden="true"
+                      className="mr-1 inline-block size-2 rounded-sm"
+                      style={{ background: r.color }}
+                    />
                     {r.label}
                   </td>
                 )}

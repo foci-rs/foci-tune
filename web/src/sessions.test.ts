@@ -38,7 +38,10 @@ function probeRun(id: string, created: number, zeta: number | null): Run {
           declared: true,
           tracking: [],
           standstill: null,
-          probe: { velocity: zeta === null ? { status: "failed", reason: "no fit" } : { status: "fit", zeta }, edges: 3 },
+          probe: {
+            velocity: zeta === null ? { status: "failed", reason: "no fit" } : { status: "fit", zeta },
+            edges: 3,
+          },
         },
       ],
     },
@@ -95,7 +98,9 @@ describe("summarizeSession", () => {
 
   test("no done run with a record means no headline, and an unreadable session keeps its error", () => {
     expect(summarizeSession(view("s", 1, [])).headline).toBeNull();
-    const broken = summarizeSession(view("x", null, [{ id: "r", state: "failed", reason: "bad", run: null } as RunEntry]));
+    const broken = summarizeSession(
+      view("x", null, [{ id: "r", state: "failed", reason: "bad", run: null } as RunEntry]),
+    );
     expect(broken.type).toBeNull();
     expect(broken.error).toBe("session.json: missing");
     expect(broken.reasons).toEqual(["bad"]);

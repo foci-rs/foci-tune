@@ -7,12 +7,7 @@ export function PreconditionList({ items }: { items: PreconditionView[] }) {
   return (
     <div className="space-y-3">
       {items.map((item) => (
-        <div
-          key={item.stepper}
-          role="group"
-          aria-label={item.stepper}
-          className="rounded-md border p-3"
-        >
+        <div key={item.stepper} role="group" aria-label={item.stepper} className="rounded-md border p-3">
           <p className="font-mono text-sm">{item.stepper}</p>
           {item.ok ? (
             <p className="text-sm text-emerald-400">All preconditions hold</p>

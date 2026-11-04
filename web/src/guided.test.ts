@@ -107,12 +107,7 @@ function assessed(overrides: Partial<TuneStep> = {}): TuneStep {
         { ...none, marginal: true, score: 1.4 },
         { ...none, score: 1.1 },
       ],
-      medians: [
-        medians([null, null]),
-        medians([5, 9]),
-        medians([4, 8]),
-        medians([3, 6]),
-      ],
+      medians: [medians([null, null]), medians([5, 9]), medians([4, 8]), medians([3, 6])],
       halt: null,
       best: null,
       runner_up: null,
@@ -220,7 +215,10 @@ describe("rungView", () => {
 
   test("shows repeat progress before the verdict exists", () => {
     const repeat = { zeta: { Assessed: 0.1 }, p99_by_speed: [3, 4], worst_torque_sd: 1 };
-    const s = step({ repeats: 2, rungs: [rung(0, { repeat_values: [repeat, repeat] }), rung(1, { repeat_values: [repeat] }), rung(2)] });
+    const s = step({
+      repeats: 2,
+      rungs: [rung(0, { repeat_values: [repeat, repeat] }), rung(1, { repeat_values: [repeat] }), rung(2)],
+    });
     const rows = rungView(tune("Running", [s]), 0);
     expect(rows.map((r) => r.verdict)).toEqual(["Measured, awaiting verdict", "1 of 2 repeats", "Pending"]);
   });
@@ -481,7 +479,16 @@ describe("a paused step", () => {
   test("summarises the pause with its rung and reason", () => {
     const t = tune("Paused");
     t.steps[0].paused = { rung: 1, reason: "DampingUnassessable", unix_ms: 1 };
-    t.steps[0].assessment = { verdicts: [], medians: [], halt: null, pause: [1, "DampingUnassessable"], best: null, runner_up: null, tie: [], spreads: [] };
+    t.steps[0].assessment = {
+      verdicts: [],
+      medians: [],
+      halt: null,
+      pause: [1, "DampingUnassessable"],
+      best: null,
+      runner_up: null,
+      tie: [],
+      spreads: [],
+    };
     expect(stepSummary(t, 0).pause).toBe("Paused at rung 2: damping unassessable");
   });
   test("explains a waived rung and a paused rung", () => {
@@ -503,7 +510,15 @@ describe("a paused step", () => {
   });
   test("a halt of DampingUnassessable from an old record still reads as a halt", () => {
     const t = tune("AwaitingChoice");
-    t.steps[0].assessment = { verdicts: [], medians: [], halt: [1, "DampingUnassessable"], best: null, runner_up: null, tie: [], spreads: [] };
+    t.steps[0].assessment = {
+      verdicts: [],
+      medians: [],
+      halt: [1, "DampingUnassessable"],
+      best: null,
+      runner_up: null,
+      tie: [],
+      spreads: [],
+    };
     t.steps[0].assessment.verdicts = [none, none, none, none];
     t.steps[0].assessment.medians = [medians([]), medians([]), medians([]), medians([])];
     expect(stepSummary(t, 0).halt).toContain("damping unassessable");
@@ -571,7 +586,9 @@ describe("comparison fields", () => {
 
   test("rows beyond a halt carry no comparison fields", () => {
     const rows = rungView(
-      withAssessment(ladder({ best: 0, halt: [1, "DampingUnassessable"], verdicts: [scored({ gap: 0 }), none, none, none] })),
+      withAssessment(
+        ladder({ best: 0, halt: [1, "DampingUnassessable"], verdicts: [scored({ gap: 0 }), none, none, none] }),
+      ),
       0,
     );
     expect(rows[2]).toMatchObject({ decidingSpeed: null, gap: null, tolerance: null, best: false });
@@ -579,7 +596,11 @@ describe("comparison fields", () => {
 
   test("the comparison line names the tie, its gap and tolerance, and the lower gain", () => {
     const text = comparisonText(
-      ladder({ best: 1, tie: [1, 2], verdicts: [none, scored({ gap: 0 }), scored({ gap: 2.0, tolerance: 3.1 }), none] }),
+      ladder({
+        best: 1,
+        tie: [1, 2],
+        verdicts: [none, scored({ gap: 0 }), scored({ gap: 2.0, tolerance: 3.1 }), none],
+      }),
       3,
     );
     expect(text).toMatch(/rungs 2 and 3/);
