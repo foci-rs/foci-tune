@@ -1069,6 +1069,48 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         Ok(())
     }
 
+    /// Discards the announced step before anything has run, so its settings can be changed and
+    /// the step prepared again. The tune goes back to ready and the step's empty sessions are
+    /// removed.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the tune has an announced step that has not started,
+    /// and store errors.
+    pub async fn cancel_step(&self, tune: &TuneId) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if record.state != TuneState::Announced
+            || record.steps.last().is_none_or(|st| st.starts != 0)
+        {
+            return Err(TuneError::OutOfOrder(
+                if record.steps.is_empty() {
+                    "There is no prepared step to adjust."
+                } else {
+                    "This step has already started, so it can't be adjusted."
+                }
+                .to_owned(),
+            ));
+        }
+        let Some(step) = record.steps.pop() else {
+            return Err(TuneError::OutOfOrder(
+                "There is no prepared step to adjust.".to_owned(),
+            ));
+        };
+        record.state = TuneState::Ready;
+        s.save(&record)?;
+        for session in [
+            step.sessions.probe,
+            step.sessions.tracking,
+            step.sessions.standstill,
+        ] {
+            if let Err(e) = s.store.remove_empty_session(&session) {
+                tracing::warn!(%session, error = %e, "a discarded step's session was not removed");
+            }
+        }
+        Ok(())
+    }
+
     /// Runs the one extra rung the step's recommendation offers, one exponent beyond the
     /// ladder's lower or upper end, then re-assesses the step. The drift re-run is not
     /// repeated.

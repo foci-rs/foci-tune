@@ -974,6 +974,7 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
             "/api/tunes/{id}/steps/confirm",
             post(confirm_tune_step::<M>),
         )
+        .route("/api/tunes/{id}/steps/cancel", post(cancel_tune_step::<M>))
         .route("/api/tunes/{id}/extension", post(tune_extension::<M>))
         .route("/api/tunes/{id}/choice", post(tune_choice::<M>))
         .route("/api/tunes/{id}/decision", post(tune_decision::<M>))
@@ -1599,6 +1600,15 @@ async fn tune_decision<M: MoonrakerApi + 'static>(
     let request: DecisionRequest = from_body(json_body(body)?)?;
     api.tunes.decide(&id, request.decision).await?;
     Ok(Json(json!({"tune": id, "decided": true})))
+}
+
+async fn cancel_tune_step<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Tune>> {
+    let id = tune_id(&id)?;
+    api.tunes.cancel_step(&id).await?;
+    Ok(Json(read_tune_record(&api, &id).await?))
 }
 
 async fn abandon_tune<M: MoonrakerApi + 'static>(

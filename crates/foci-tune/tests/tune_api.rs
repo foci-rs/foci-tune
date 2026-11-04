@@ -736,3 +736,95 @@ async fn only_the_offered_step_sizes_are_accepted() {
     let tune = get(&app, &format!("/api/tunes/{id}")).await.json();
     assert_eq!(tune["steps"], json!([]));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prepared_step_can_be_discarded_and_prepared_again() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let plan = post(&app, &format!("/api/tunes/{id}/steps"), step_body(-3, 3)).await;
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.error());
+    let prepared = get(&app, &format!("/api/tunes/{id}")).await.json();
+    let sessions: Vec<String> = ["probe", "tracking", "standstill"]
+        .iter()
+        .map(|k| {
+            prepared["steps"][0]["sessions"][k]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+
+    let reply = post_empty(&app, &format!("/api/tunes/{id}/steps/cancel")).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+    let after = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(after["state"], "Ready");
+    assert_eq!(after["steps"], json!([]));
+    let listed = get(&app, "/api/sessions").await.json();
+    for session in &sessions {
+        assert!(
+            !listed.to_string().contains(session),
+            "{session} is still listed"
+        );
+    }
+    let again = post(&app, &format!("/api/tunes/{id}/steps"), step_body(-1, 1)).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.error());
+    let replaced = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(replaced["steps"].as_array().unwrap().len(), 1);
+    assert_eq!(rung_raws(&replaced).len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_setup_can_change_again_once_the_prepared_step_is_discarded() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 0)).await;
+    post_empty(&app, &format!("/api/tunes/{id}/steps/cancel")).await;
+
+    let reply = put(
+        &app,
+        &format!("/api/tunes/{id}/setup"),
+        setup_body(&[100.0]),
+    )
+    .await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn there_is_nothing_to_discard_without_a_prepared_step() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+
+    let reply = post_empty(&app, &format!("/api/tunes/{id}/steps/cancel")).await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(
+        reply.error().contains("no prepared step to adjust"),
+        "{}",
+        reply.error()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_step_that_has_started_cannot_be_discarded() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 0)).await;
+    let started = post_empty(&app, &format!("/api/tunes/{id}/steps/confirm")).await;
+    assert_eq!(started.status, StatusCode::OK, "{}", started.error());
+
+    let reply = post_empty(&app, &format!("/api/tunes/{id}/steps/cancel")).await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(
+        reply.error().contains("already started"),
+        "{}",
+        reply.error()
+    );
+    wait_state(&app, &id, "AwaitingChoice").await;
+}
