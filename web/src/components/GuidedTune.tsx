@@ -35,7 +35,6 @@ import {
   nextAxis,
   recommendedGain,
   rungView,
-  stateText,
   stepSummary,
   DEFAULT_PREPARE,
   prepareProblem,
@@ -107,7 +106,7 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
           }}
         />
       ) : (
-        <TuneView key={current} id={current} engine={printer.engine} />
+        <TuneView key={current} id={current} printer={printer} />
       )}
     </div>
   );
@@ -179,7 +178,7 @@ function useEarlierTunes(id: TuneId, enabled: boolean): Tune[] {
   return earlier;
 }
 
-function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
+function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
   const { detail, error, refresh } = useTune(id);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -213,10 +212,24 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
   const preparing = actions.prepare && next !== null && axis === next;
   const starting = announced && actions.start && axis !== null && lastAxis === axis;
   const prepareBlocked = preparing ? prepareProblem(prepare) : null;
+  const setupEditable = actions.prepare && detail.steps.length === 0;
+  const abandon = actions.abandon ? (
+    <Button disabled={busy} onClick={() => run(() => postTuneAbandon(id))}>
+      Abandon tune
+    </Button>
+  ) : null;
 
   return (
     <div className="space-y-4">
       <Steps steps={GUIDED_STEPS} current={shown} onSelect={(next) => setPicked(next as GuidedStepId)} />
+
+      {detail.notes.length > 0 && (
+        <ul className="space-y-0.5 text-xs text-muted-foreground">
+          {detail.notes.map((n) => (
+            <li key={n.unix_ms}>{n.text}</li>
+          ))}
+        </ul>
+      )}
 
       {actions.restore && (
         <LockBanner
@@ -228,21 +241,16 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
       )}
 
       {shown === "setup" && (
-        <Card label="Tune">
-          <dl className="flex flex-wrap gap-x-8 gap-y-2">
-            <Field label="Stepper">{detail.setup.stepper}</Field>
-            <Field label="State">{stateText(detail.state)}</Field>
-            <Field label="Tracking speeds">{detail.setup.speeds_mm_s.join(", ")} mm/s</Field>
-            <Field label="Steps">{detail.steps.length} of 3</Field>
-          </dl>
-          {detail.notes.length > 0 && (
-            <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
-              {detail.notes.map((n) => (
-                <li key={n.unix_ms}>{n.text}</li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        <GuidedSetup
+          printer={printer}
+          tune={detail}
+          readOnly={!setupEditable}
+          onSaved={() => {
+            refresh();
+            setPicked(null);
+          }}
+          actions={abandon}
+        />
       )}
 
       {axis !== null && (
@@ -256,7 +264,7 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
           busy={busy}
           plan={plan}
           earlier={earlier}
-          engine={engine}
+          engine={printer.engine}
           announced={announced}
           onChoose={(choice) => run(() => postTuneChoice(id, choice))}
           onExtend={(direction) => run(() => postTuneExtension(id, direction))}
@@ -275,46 +283,44 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
           <p className="text-sm text-muted-foreground">There is no result yet. It appears when the tune is done.</p>
         ))}
 
-      <ActionBar
-        blocked={prepareBlocked === null ? [] : [prepareBlocked]}
-        message={actionError === null ? null : { tone: "error", text: actionError }}
-      >
-        {preparing && (
-          <Button
-            disabled={busy || prepareBlocked !== null}
-            onClick={() =>
-              run(() =>
-                postTuneStep(id, {
-                  seed: prepare.typed ? { typed: prepare.seed } : "live",
-                  repeats: prepare.repeats,
-                  lower_k: prepare.lower,
-                  upper_k: prepare.upper,
-                }).then(setPlan),
-              )
-            }
-          >
-            Prepare the step
-          </Button>
-        )}
-        {starting && (
-          <Button
-            disabled={busy}
-            onClick={() =>
-              run(
-                () => postTuneConfirm(id),
-                () => setPlan(null),
-              )
-            }
-          >
-            Start the step
-          </Button>
-        )}
-        {actions.abandon && (
-          <Button disabled={busy} onClick={() => run(() => postTuneAbandon(id))}>
-            Abandon tune
-          </Button>
-        )}
-      </ActionBar>
+      {!(shown === "setup" && setupEditable) && (
+        <ActionBar
+          blocked={prepareBlocked === null ? [] : [prepareBlocked]}
+          message={actionError === null ? null : { tone: "error", text: actionError }}
+        >
+          {preparing && (
+            <Button
+              disabled={busy || prepareBlocked !== null}
+              onClick={() =>
+                run(() =>
+                  postTuneStep(id, {
+                    seed: prepare.typed ? { typed: prepare.seed } : "live",
+                    repeats: prepare.repeats,
+                    lower_k: prepare.lower,
+                    upper_k: prepare.upper,
+                  }).then(setPlan),
+                )
+              }
+            >
+              Prepare the step
+            </Button>
+          )}
+          {starting && (
+            <Button
+              disabled={busy}
+              onClick={() =>
+                run(
+                  () => postTuneConfirm(id),
+                  () => setPlan(null),
+                )
+              }
+            >
+              Start the step
+            </Button>
+          )}
+          {abandon}
+        </ActionBar>
+      )}
     </div>
   );
 }

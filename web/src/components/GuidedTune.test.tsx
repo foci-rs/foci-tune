@@ -3,7 +3,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView, Tune, TuneDetail, TuneState } from "@/api";
 import { GuidedTune } from "./GuidedTune";
 
-vi.mock("./GuidedSetup", () => ({ GuidedSetup: () => <p>setup form</p> }));
+vi.mock("./GuidedSetup", () => ({
+  GuidedSetup: (p: { tune?: unknown; readOnly?: boolean; actions?: React.ReactNode }) => (
+    <div>
+      <p>{`setup form ${p.tune === undefined ? "new" : p.readOnly ? "read-only" : "editable"}`}</p>
+      {!p.readOnly && p.actions}
+    </div>
+  ),
+}));
 vi.mock("@/feed", () => ({ useFeed: () => ({ listen: () => () => undefined }) }));
 
 const gains = { velocity_p: 1000, velocity_i: 50, position_p: 800, position_i: 0 };
@@ -349,7 +356,7 @@ test("the header marks the axis being tuned and Setup shows the tune's settings 
   ]);
   expect(steps.getByRole("button", { name: /Velocity P/ })).toHaveAttribute("aria-current", "step");
   fireEvent.click(steps.getByRole("button", { name: /Setup/ }));
-  expect(screen.getByText("Tracking speeds")).toBeInTheDocument();
+  expect(screen.getByText("setup form read-only")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Accept the recommendation" })).not.toBeInTheDocument();
 });
 
@@ -429,14 +436,14 @@ test("a new tune shows the steps with Setup open, and the later ones wait for th
   current = detail("Done");
   listed = [{ id: "t1", state: "Done" }];
   render(<GuidedTune printer={printer} />);
-  await screen.findByText("setup form");
+  await screen.findByText("setup form new");
   const steps = within(screen.getByRole("navigation", { name: "Steps" }));
   expect(steps.getByRole("button", { name: /Setup/ })).toHaveAttribute("aria-current", "step");
   fireEvent.click(steps.getByRole("button", { name: /Position P/ }));
   expect(screen.getByText(/create the tune first/i)).toBeInTheDocument();
-  expect(screen.getByText("setup form")).not.toBeVisible();
+  expect(screen.getByText("setup form new")).not.toBeVisible();
   fireEvent.click(steps.getByRole("button", { name: /Setup/ }));
-  expect(screen.getByText("setup form")).toBeVisible();
+  expect(screen.getByText("setup form new")).toBeVisible();
 });
 
 test("finished and abandoned tunes are not listed: with only those, the page opens a new tune", async () => {
@@ -446,7 +453,7 @@ test("finished and abandoned tunes are not listed: with only those, the page ope
     { id: "t2", state: "Abandoned" },
   ];
   render(<GuidedTune printer={printer} />);
-  expect(await screen.findByText("setup form")).toBeInTheDocument();
+  expect(await screen.findByText("setup form new")).toBeInTheDocument();
 });
 
 test("a finished tune opened by link shows its steps and result", async () => {
@@ -454,4 +461,22 @@ test("a finished tune opened by link shows its steps and result", async () => {
   listed = [{ id: "t1", state: "Done" }];
   render(<GuidedTune printer={printer} initialTune="t1" />);
   expect(await screen.findByText(/no result yet/i)).toBeInTheDocument();
+});
+
+test("before any step the Setup step is the editable form, with Abandon beside Next", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Prepare the step" });
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
+  expect(screen.getByText("setup form editable")).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Abandon tune" })).toHaveLength(1);
+});
+
+test("once a step exists the Setup step is read-only and the bar keeps Abandon", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Start the step" });
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
+  expect(screen.getByText("setup form read-only")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Abandon tune" })).toBeInTheDocument();
 });
