@@ -234,7 +234,7 @@ test("on the Run step the bar has no Run button, but a way back and Cancel while
   const { rerender } = render(bar({ mode: "run", onBack }));
   expect(screen.queryByRole("button", { name: /^Run/ })).toBeNull();
   expect(screen.queryByRole("button", { name: "Cancel queued runs" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Set up another run" }));
+  fireEvent.click(screen.getByRole("button", { name: "New run" }));
   expect(onBack).toHaveBeenCalledTimes(1);
   rerender(bar({ mode: "run", onBack, running: true }));
   expect(screen.getByRole("button", { name: "Cancel queued runs" })).toBeInTheDocument();
@@ -291,4 +291,10 @@ test("Cancel appears only while a run is going, the message shows, and there is 
   fireEvent.click(screen.getByRole("button", { name: "Cancel queued runs" }));
   expect(onAbort).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("status")).toHaveTextContent("Run queued");
+});
+
+test("New run carries a plus icon", () => {
+  render(bar({ mode: "run", onBack: () => {} }));
+  const button = screen.getByRole("button", { name: "New run" });
+  expect(button.querySelector("svg")).not.toBeNull();
 });

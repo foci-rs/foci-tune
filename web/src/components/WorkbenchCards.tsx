@@ -1,7 +1,7 @@
 import type { LadderAxis, Pattern } from "@/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ReactNode } from "react";
-import { PlayIcon, TriangleAlertIcon, WandSparklesIcon } from "lucide-react";
+import { PlayIcon, PlusIcon, TriangleAlertIcon, WandSparklesIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -262,7 +262,8 @@ export function RunBar({
           )}
           {mode === "run" ? (
             <UiButton variant="outline" onClick={onBack}>
-              Set up another run
+              <PlusIcon />
+              New run
             </UiButton>
           ) : blocked.length > 0 ? (
             <Tooltip>

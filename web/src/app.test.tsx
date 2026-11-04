@@ -556,7 +556,7 @@ test("pressing Run switches to the Run step at once, with no flash of warning an
     fireEvent.click(run);
   });
 
-  expect(await screen.findByRole("button", { name: "Set up another run" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "New run" })).toBeInTheDocument();
   expect(screen.queryByText(/waiting for the engine/i)).toBeNull();
   expect(screen.queryByText(/queued/i)).toBeNull();
 });
@@ -623,13 +623,13 @@ test("the manual page opens on Prepare, with two steps and the setup cards", asy
   expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
 });
 
-test("the Run step shows no setup cards, and Set up another run goes back with everything kept", async () => {
+test("the Run step shows no setup cards, and New run goes back with everything kept", async () => {
   respond(stepperPage());
   render(<RouterProvider router={createTestRouter("/tune/manual?step=run")} />);
-  expect(await screen.findByRole("button", { name: "Set up another run" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "New run" })).toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Test setup" })).toBeNull();
   expect(screen.getByRole("button", { name: /Run/, description: "" })).toBeDefined();
-  fireEvent.click(screen.getByRole("button", { name: "Set up another run" }));
+  fireEvent.click(screen.getByRole("button", { name: "New run" }));
   expect(await screen.findByRole("region", { name: "Test setup" })).toBeInTheDocument();
 });
 
