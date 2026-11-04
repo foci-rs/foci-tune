@@ -559,8 +559,6 @@ function LockBanner({
   );
 }
 
-const fmt = (n: number | null, digits = 3) => (n === null ? "-" : n.toFixed(digits));
-
 function StepCard({ tune, index, extensionText }: { tune: Tune; index: number; extensionText: string | null }) {
   const step = tune.steps[index];
   const rows = rungView(tune, index);
@@ -585,7 +583,7 @@ function StepCard({ tune, index, extensionText }: { tune: Tune; index: number; e
       )}
       {driftCheckRunning(tune, index) && (
         <p className="mt-1 text-xs text-muted-foreground">
-          Drift check running: the seed rung is repeated once more, so the machine is still moving.
+          Final check: running the starting gain once more, so the machine is still moving.
         </p>
       )}
       {summary.notes.length > 0 && (
@@ -605,11 +603,6 @@ function StepCard({ tune, index, extensionText }: { tune: Tune; index: number; e
           {line}
         </p>
       ))}
-      {step.drift.length > 0 && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Drift of the seed rung: {step.drift.map((d) => `${d.metric} ${fmt(d.first)} to ${fmt(d.rerun)}`).join("; ")}
-        </p>
-      )}
 
       {extensionText !== null && <p className="mt-4 border-t pt-4 text-sm">{extensionText}</p>}
     </Card>

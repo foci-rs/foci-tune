@@ -437,9 +437,10 @@ test("the card keeps the drift lines but no recommendation or comparison sentenc
     spreads: [null, null, null],
   };
   current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
-  current.steps[0].drift = [{ metric: "p99 100", first: 4, rerun: 9, verdict: "Drifted" }];
+  current.steps[0].drift = [{ metric: "p99 100 mm/s", first: 4, rerun: 9, verdict: "Drifted" }];
   render(<GuidedTune printer={printer} />);
-  expect(await screen.findByText(/may depend on run order/i)).toBeInTheDocument();
+  expect(await screen.findByText(/may depend on the order they were run/i)).toBeInTheDocument();
+  expect(screen.queryByText(/Drift of the seed rung/)).toBeNull();
   expect(screen.queryByText(/^Recommended gain/)).toBeNull();
   expect(screen.queryByText(/too close to tell apart|next best gain|nothing to compare/)).toBeNull();
 });
@@ -448,7 +449,9 @@ test("the drift re-run is announced while the machine is still moving after the 
   current = detail("Running");
   current.steps[0].drift_rung = { ...current.steps[0].rungs[1], started_unix_ms: 1 };
   render(<GuidedTune printer={printer} />);
-  expect(await screen.findByText(/drift check running/i)).toBeInTheDocument();
+  expect(
+    await screen.findByText("Final check: running the starting gain once more, so the machine is still moving."),
+  ).toBeInTheDocument();
 });
 
 test("a paused tune shows the pause panel and no choice controls", async () => {

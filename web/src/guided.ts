@@ -173,13 +173,22 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
 
 /** One line per speed whose re-run drifted or could not be assessed. */
 export function driftLines(drift: TuneDrift[]): string[] {
+  const at = (metric: string) => /^p99 ([\d.]+)/.exec(metric)?.[1];
   return drift.flatMap((d) => {
+    const speed = at(d.metric);
     if (d.verdict === "Drifted") {
+      const what = speed === undefined ? d.metric : `The error at ${speed} mm/s`;
       return [
-        `${d.metric}: ${d.first ?? "n/a"} to ${d.rerun ?? "n/a"}, drifted by more than the ladder's resolution at this speed; the pick may depend on run order`,
+        `${what} changed from ${d.first ?? "n/a"} to ${d.rerun ?? "n/a"} μm between the first and the last run of the starting gain, so the best gain may depend on the order they were run.`,
       ];
     }
-    if (d.verdict === "Unassessed") return [`${d.metric}: drift could not be assessed`];
+    if (d.verdict === "Unassessed") {
+      return [
+        speed === undefined
+          ? `The final check of ${d.metric} could not be assessed.`
+          : `The final check at ${speed} mm/s could not be assessed.`,
+      ];
+    }
     return [];
   });
 }

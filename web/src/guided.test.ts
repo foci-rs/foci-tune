@@ -643,11 +643,10 @@ describe("driftLines", () => {
       { metric: "p99 400 mm/s", first: 84.8, rerun: null, verdict: "Unassessed" },
       { metric: "zeta", first: 0.03, rerun: 0.03, verdict: null },
     ]);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/195 mm\/s/);
-    expect(lines[0]).toMatch(/drift/i);
-    expect(lines[1]).toMatch(/400 mm\/s/);
-    expect(lines[1]).toMatch(/could not be assessed/i);
+    expect(lines).toEqual([
+      "The error at 195 mm/s changed from 84.8 to 80.6 μm between the first and the last run of the starting gain, so the best gain may depend on the order they were run.",
+      "The final check at 400 mm/s could not be assessed.",
+    ]);
   });
 });
 
