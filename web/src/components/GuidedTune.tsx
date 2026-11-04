@@ -13,7 +13,6 @@ import {
   type EngineView,
   type PrinterView,
   type Tune,
-  type TuneChoiceBody,
   type TuneDetail,
   type TuneId,
   type TuneSummary,
@@ -45,6 +44,9 @@ import {
   liveControlFor,
   liveSeed,
   plannedRuns,
+  acceptGain,
+  extensionOffer,
+  measuredGains,
   prepareState,
   type GuidedAction,
   type GuidedStepId,
@@ -53,13 +55,14 @@ import {
 } from "@/guided";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
+import { ChooseGain } from "./ChooseGain";
 import { NextStepCard } from "./NextStepCard";
 import { PausePanel } from "./PausePanel";
 import { Steps } from "./Steps";
 import { SweepResultsTable } from "./SweepResultsTable";
 import { TuneRunCard } from "./TuneRunCard";
 import { ActionBar } from "./WorkbenchCards";
-import { Button, Card, NumberField } from "./ui";
+import { Button, Card } from "./ui";
 
 const isOver = (s: TuneSummary) => s.state === "Done" || s.state === "Abandoned";
 
@@ -210,6 +213,9 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const lastAxis = last === null ? null : detail.steps[last].axis;
   const next = nextAxis(detail);
   const preparing = actions.prepare && next !== null && axis === next;
+  const choosing = actions.choose && axis !== null && lastAxis === axis && last !== null;
+  const offer = choosing && actions.extension && last !== null ? extensionOffer(detail, last) : null;
+  const recommended = choosing && last !== null ? recommendedGain(detail, last) : null;
   const deciding = actions.decide && axis !== null && lastAxis === axis;
   const starting = announced && actions.start && axis !== null && lastAxis === axis;
   const liveControl = liveControlFor(printer, detail.setup.stepper);
@@ -264,8 +270,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           busy={frozen}
           engine={printer.engine}
           announced={announced}
-          onChoose={(choice) => run("choose", () => postTuneChoice(id, choice))}
-          onExtend={(direction) => run("extend", () => postTuneExtension(id, direction))}
           prepare={prepare}
           prepared={prepared}
           runs={runs}
@@ -289,6 +293,36 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
           {abandon}
+          {choosing && last !== null && (
+            <>
+              {offer !== null && (
+                <UiButton
+                  variant="outline"
+                  disabled={frozen}
+                  onClick={() => run("extend", () => postTuneExtension(id, offer.direction))}
+                >
+                  {offer.direction === "below" ? "Try a lower gain" : "Try a higher gain"}
+                </UiButton>
+              )}
+              <ChooseGain
+                axis={detail.steps[last].axis}
+                accept={acceptGain(detail, last)}
+                initial={
+                  recommended === null
+                    ? null
+                    : detail.steps[last].axis === "VelocityICornerHz"
+                      ? Number(recommended.gain.toFixed(1))
+                      : Math.round(recommended.gain)
+                }
+                gains={measuredGains(detail, last)}
+                pwmHz={detail.steps[last].pwm_hz}
+                busy={frozen}
+                onAccept={() => run("choose", () => postTuneChoice(id, "recommended"))}
+                onPick={(rung) => run("choose", () => postTuneChoice(id, { rung }))}
+                onManual={(value) => run("choose", () => postTuneChoice(id, { value }))}
+              />
+            </>
+          )}
           {deciding && (
             <>
               <UiButton
@@ -385,8 +419,6 @@ function AxisStep({
   busy,
   engine,
   announced,
-  onChoose,
-  onExtend,
   prepare,
   prepared,
   runs,
@@ -402,8 +434,6 @@ function AxisStep({
   busy: boolean;
   engine: EngineView;
   announced: boolean;
-  onChoose: (choice: TuneChoiceBody) => void;
-  onExtend: (direction: "below" | "above") => void;
   prepare: PrepareForm;
   prepared: PrepareState | null;
   runs: number | undefined;
@@ -439,12 +469,7 @@ function AxisStep({
             <StepCard
               tune={tune}
               index={i}
-              active={i === last}
-              busy={busy}
-              canChoose={actions.choose && i === last}
-              canExtend={actions.extension && i === last}
-              onChoose={onChoose}
-              onExtend={onExtend}
+              extensionText={actions.extension && i === last ? (extensionOffer(tune, i)?.text ?? null) : null}
             />
           )}
           {actions.decide && i === last && <PausePanel tune={tune} step={i} />}
@@ -534,42 +559,12 @@ function LockBanner({
 
 const fmt = (n: number | null, digits = 3) => (n === null ? "-" : n.toFixed(digits));
 
-function StepCard({
-  tune,
-  index,
-  active,
-  busy,
-  canChoose,
-  canExtend,
-  onChoose,
-  onExtend,
-}: {
-  tune: Tune;
-  index: number;
-  active: boolean;
-  busy: boolean;
-  canChoose: boolean;
-  canExtend: boolean;
-  onChoose: (choice: TuneChoiceBody) => void;
-  onExtend: (direction: "below" | "above") => void;
-}) {
+function StepCard({ tune, index, extensionText }: { tune: Tune; index: number; extensionText: string | null }) {
   const step = tune.steps[index];
   const rows = rungView(tune, index);
   const summary = stepSummary(tune, index);
   const mark = recommendedGain(tune, index);
   const label = axisLabel(step.axis);
-  const measured = rows.filter((r) => r.skipped === null && r.repeatsDone >= step.repeats);
-  const [rungPick, setRungPick] = useState<number | null>(null);
-  const [typed, setTyped] = useState(mark?.gain ?? rows[0]?.shown ?? 0);
-  const typedByOperator = useRef(false);
-  const markGain = mark?.gain ?? null;
-  useEffect(() => {
-    if (markGain !== null && !typedByOperator.current) setTyped(markGain);
-  }, [markGain]);
-  const [extension, setExtension] = useState<"below" | "above" | null>(null);
-  const rec = summary.recommendation;
-  const pick = rungPick ?? measured[0]?.index ?? null;
-  const perRepeat = tune.setup.speeds_mm_s.length + 2;
 
   return (
     <Card label={`${axisTitle(step.axis)} sweep`}>
@@ -614,83 +609,7 @@ function StepCard({
         </p>
       )}
 
-      {active && canChoose && (
-        <div className="mt-4 space-y-3 border-t pt-4">
-          <div className="flex flex-wrap items-end gap-3">
-            <Button disabled={busy || rec === null || rec.kind === "none"} onClick={() => onChoose("recommended")}>
-              Accept the recommendation
-            </Button>
-            <label className="flex flex-col text-xs text-muted-foreground">
-              Rung
-              <select
-                value={pick ?? ""}
-                disabled={busy || measured.length === 0}
-                onChange={(e) => setRungPick(Number(e.target.value))}
-                className="rounded border bg-background px-1.5 py-1 text-sm text-foreground"
-              >
-                {measured.map((r) => (
-                  <option key={r.index} value={r.index}>
-                    {r.index + 1}: {r.shown.toFixed(2)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <Button disabled={busy || pick === null} onClick={() => pick !== null && onChoose({ rung: pick })}>
-              Use this rung
-            </Button>
-            <label className="flex flex-col text-xs text-muted-foreground">
-              Value
-              <NumberField
-                label="Value"
-                value={typed}
-                disabled={busy}
-                onValue={(v) => {
-                  typedByOperator.current = true;
-                  setTyped(v);
-                }}
-                className="w-28"
-              />
-            </label>
-            <Button disabled={busy || !(typed > 0)} onClick={() => onChoose({ value: typed })}>
-              Use this value
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {active && canExtend && summary.extend !== null && (
-        <div className="mt-3 space-y-2 border-t pt-3">
-          <p className="text-sm">
-            The best rung is at the {summary.extend === "Below" ? "low" : "high"} end of the ladder. Extending adds one
-            rung {summary.extend === "Below" ? "below" : "above"} it.
-          </p>
-          {extension === null ? (
-            <Button disabled={busy} onClick={() => setExtension(summary.extend === "Below" ? "below" : "above")}>
-              Extend the ladder {summary.extend === "Below" ? "below" : "above"}
-            </Button>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm font-medium">
-                This runs {step.repeats * perRepeat} more runs and the machine will move.
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  disabled={busy}
-                  onClick={() => {
-                    onExtend(extension);
-                    setExtension(null);
-                  }}
-                >
-                  Confirm the extension
-                </Button>
-                <Button disabled={busy} onClick={() => setExtension(null)}>
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {extensionText !== null && <p className="mt-4 border-t pt-4 text-sm">{extensionText}</p>}
     </Card>
   );
 }

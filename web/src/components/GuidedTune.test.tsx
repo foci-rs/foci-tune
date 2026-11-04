@@ -244,15 +244,7 @@ test("a locked tune shows the reason with only restore", async () => {
   }
 });
 
-test("choosing is offered once the step awaits a choice", async () => {
-  current = detail("AwaitingChoice");
-  render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept the recommendation" });
-  expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
-});
-
-test("the typed value follows the recommendation until the operator types", async () => {
-  current = detail("AwaitingChoice");
+const scoredStep = () => {
   const none = {
     inadmissible: null,
     marginal: false,
@@ -263,19 +255,89 @@ test("the typed value follows the recommendation until the operator types", asyn
     tolerance: null,
   };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
+  const done = { zeta: { Assessed: 0.1 }, p99_by_speed: [3, 4], worst_torque_sd: 1 };
+  current.steps[0].rungs.forEach((r) => (r.repeat_values = [done, done]));
   current.steps[0].assessment = {
     verdicts: [none, none, none],
     medians: [medians, medians, medians],
     halt: null,
-    best: null,
+    best: 1,
     runner_up: null,
-    tie: [],
-    spreads: [],
+    tie: [1],
+    spreads: [null, null, null],
   };
-  current.steps[0].recommendation = { choice: { Interpolated: { shown: 1100, between: [1, 2] } }, extend: null };
+};
+
+test("choosing is offered in the bar once the step awaits a choice", async () => {
+  current = detail("AwaitingChoice");
   render(<GuidedTune printer={printer} />);
-  const field = await screen.findByRole("spinbutton", { name: "Value" });
-  await waitFor(() => expect(field).toHaveValue(1100));
+  await screen.findByRole("button", { name: "More ways to choose" });
+  expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
+});
+
+test("Accept takes the recommended gain, named on the button", async () => {
+  current = detail("AwaitingChoice");
+  scoredStep();
+  current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Accept 1000" }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/choice"]));
+  expect(bodies[0]).toEqual({ choice: "recommended" });
+});
+
+test("a measured gain is picked from the menu", async () => {
+  current = detail("AwaitingChoice");
+  scoredStep();
+  current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
+  render(<GuidedTune printer={printer} />);
+  fireEvent.keyDown(await screen.findByRole("button", { name: "More ways to choose" }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("menuitem", { name: "1260" }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/choice"]));
+  expect(bodies[0]).toEqual({ choice: { rung: 2 } });
+});
+
+test("a typed gain is sent from the dialog, which starts at the recommendation", async () => {
+  current = detail("AwaitingChoice");
+  scoredStep();
+  current.steps[0].recommendation = { choice: { Interpolated: { shown: 1100.4, between: [1, 2] } }, extend: null };
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByRole("button", { name: "Accept 1100" })).toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole("button", { name: "More ways to choose" }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("menuitem", { name: "Enter a value…" }));
+  const input = screen.getByRole("spinbutton", { name: "Gain" });
+  expect(input).toHaveValue(1100);
+  fireEvent.change(input, { target: { value: "950" } });
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/choice"]));
+  expect(bodies[0]).toEqual({ choice: { value: 950 } });
+});
+
+test("when the best gain is at an edge the bar offers a lower or higher one, and the card says what it would try", async () => {
+  current = detail("AwaitingChoice");
+  scoredStep();
+  current.steps[0].assessment!.best = 0;
+  current.steps[0].recommendation = { choice: { Measured: { rung: 0 } }, extend: "Below" };
+  render(<GuidedTune printer={printer} />);
+  const extend = await screen.findByRole("button", { name: "Try a lower gain" });
+  const names = within(extend.closest(".sticky") as HTMLElement)
+    .getAllByRole("button")
+    .map((b) => b.textContent);
+  expect(names).toEqual(["Abandon tune", "Try a lower gain", "Accept 800", ""]);
+  expect(
+    screen.getByText(/is at the low end of what was tried, so a lower gain may be better\. Try \d+: 8 more runs\./),
+  ).toBeInTheDocument();
+  fireEvent.click(extend);
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/extension"]));
+  expect(bodies[0]).toEqual({ direction: "below" });
+});
+
+test("there is no extension button when the best gain is inside the range", async () => {
+  current = detail("AwaitingChoice");
+  scoredStep();
+  current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Accept 1000" });
+  expect(screen.queryByRole("button", { name: /Try a (lower|higher) gain/ })).toBeNull();
 });
 
 test("a running step with scored rungs does not claim scores can change", async () => {
@@ -394,7 +456,7 @@ test("a paused tune shows the pause panel and no choice controls", async () => {
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("button", { name: "Stop" });
-  expect(screen.queryByRole("button", { name: "Accept the recommendation" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "More ways to choose" })).not.toBeInTheDocument();
 });
 
 test("a pause decision is posted through the tune's decision route", async () => {
@@ -409,7 +471,7 @@ test("a pause decision is posted through the tune's decision route", async () =>
 test("the header marks the axis being tuned and Setup shows the tune's settings instead", async () => {
   current = detail("AwaitingChoice");
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept the recommendation" });
+  await screen.findByRole("button", { name: "More ways to choose" });
   const steps = within(screen.getByRole("navigation", { name: "Steps" }));
   expect(steps.getAllByRole("button").map((b) => b.textContent)).toEqual([
     "1Setup",
@@ -421,13 +483,13 @@ test("the header marks the axis being tuned and Setup shows the tune's settings 
   expect(steps.getByRole("button", { name: /Velocity P/ })).toHaveAttribute("aria-current", "step");
   fireEvent.click(steps.getByRole("button", { name: /Setup/ }));
   expect(screen.getByText("setup form read-only")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Accept the recommendation" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "More ways to choose" })).not.toBeInTheDocument();
 });
 
 test("an axis that has no step yet says so", async () => {
   current = detail("AwaitingChoice");
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept the recommendation" });
+  await screen.findByRole("button", { name: "More ways to choose" });
   fireEvent.click(screen.getByRole("button", { name: /Position P/ }));
   expect(screen.getByText(/not reached yet/i)).toBeInTheDocument();
 });
@@ -435,7 +497,7 @@ test("an axis that has no step yet says so", async () => {
 test("the result step explains that there is no result before the tune is done", async () => {
   current = detail("AwaitingChoice");
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept the recommendation" });
+  await screen.findByRole("button", { name: "More ways to choose" });
   fireEvent.click(screen.getByRole("button", { name: /Result/ }));
   expect(screen.getByText(/no result yet/i)).toBeInTheDocument();
 });
@@ -687,7 +749,7 @@ test("before Next the card already says how many runs the step makes", async () 
 test("the read-only Setup step has a Next that goes on to the step the tune is at", async () => {
   current = detail("AwaitingChoice");
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Accept the recommendation" });
+  await screen.findByRole("button", { name: "More ways to choose" });
   fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
   expect(screen.getByText("setup form read-only")).toBeInTheDocument();
   const next = screen.getByRole("button", { name: "Next" });
@@ -697,7 +759,7 @@ test("the read-only Setup step has a Next that goes on to the step the tune is a
       .map((b) => b.textContent),
   ).toEqual(["Abandon tune", "Next"]);
   fireEvent.click(next);
-  expect(await screen.findByRole("button", { name: "Accept the recommendation" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "More ways to choose" })).toBeInTheDocument();
   expect(screen.queryByText("setup form read-only")).toBeNull();
 });
 
