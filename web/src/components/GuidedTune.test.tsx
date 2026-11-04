@@ -503,7 +503,7 @@ test("a typed seed and a changed range are what Run sends", async () => {
   render(<GuidedTune printer={printer} />);
   fireEvent.change(await screen.findByRole("spinbutton", { name: "Seed" }), { target: { value: "1200" } });
   fireEvent.click(screen.getByRole("combobox", { name: "Highest step" }));
-  fireEvent.click(screen.getByRole("option", { name: "5" }));
+  fireEvent.click(screen.getByRole("option", { name: /^5 / }));
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps"]));
   expect(bodies[0]).toEqual({ seed: { typed: 1200 }, repeats: 3, lower_k: -3, upper_k: 5, octave_divisions: 3 });

@@ -19,11 +19,13 @@ const STEPS = Array.from({ length: 19 }, (_, i) => i - 9);
 function StepSelect({
   label,
   value,
+  divisions,
   disabled,
   onValue,
 }: {
   label: string;
   value: number;
+  divisions: number;
   disabled: boolean;
   onValue: (v: number) => void;
 }) {
@@ -31,13 +33,13 @@ function StepSelect({
     <div className="flex flex-col text-xs text-muted-foreground">
       {label}
       <Select value={String(value)} disabled={disabled} onValueChange={(v) => onValue(Number(v))}>
-        <SelectTrigger aria-label={label} className="w-24 font-mono text-foreground">
+        <SelectTrigger aria-label={label} className="w-36 font-mono text-foreground">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {STEPS.map((step) => (
             <SelectItem key={step} value={String(step)} className="font-mono">
-              {step}
+              {step === 0 ? "0 (seed)" : `${step} (${change(step, divisions)})`}
             </SelectItem>
           ))}
         </SelectContent>
@@ -184,8 +186,20 @@ export function NextStepCard({
             </SelectContent>
           </Select>
         </div>
-        <StepSelect label="Lowest step" value={form.lower} disabled={busy} onValue={(lower) => set({ lower })} />
-        <StepSelect label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
+        <StepSelect
+          label="Lowest step"
+          value={form.lower}
+          divisions={form.divisions}
+          disabled={busy}
+          onValue={(lower) => set({ lower })}
+        />
+        <StepSelect
+          label="Highest step"
+          value={form.upper}
+          divisions={form.divisions}
+          disabled={busy}
+          onValue={(upper) => set({ upper })}
+        />
       </div>
       {state.preview !== null && <LadderTable preview={state.preview} corner={corner} divisions={form.divisions} />}
       {state.preview !== null && runs !== undefined && (

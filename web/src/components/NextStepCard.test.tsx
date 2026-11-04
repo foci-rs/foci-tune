@@ -52,7 +52,7 @@ test("the lowest and highest step are dropdowns of whole steps", () => {
   expect(screen.getByRole("combobox", { name: "Lowest step" })).toHaveTextContent("-3");
   expect(screen.getByRole("combobox", { name: "Highest step" })).toHaveTextContent("3");
   fireEvent.click(screen.getByRole("combobox", { name: "Highest step" }));
-  fireEvent.click(screen.getByRole("option", { name: "5" }));
+  fireEvent.click(screen.getByRole("option", { name: /^5 / }));
   expect(onForm).toHaveBeenCalledWith({ ...DEFAULT_PREPARE, upper: 5 });
 });
 
@@ -163,4 +163,22 @@ test("under the ladder the card says how many runs the step makes, and nothing a
 test("without a ladder there are no runs to count", () => {
   render(card({ ...DEFAULT_PREPARE, seed: 0 }, { runs: 0 }));
   expect(screen.queryByText("Runs:")).toBeNull();
+});
+
+test("the step dropdowns say how far each step is from the seed", () => {
+  render(card());
+  expect(screen.getByRole("combobox", { name: "Lowest step" })).toHaveTextContent("-3 (-50%)");
+  expect(screen.getByRole("combobox", { name: "Highest step" })).toHaveTextContent("3 (+100%)");
+  fireEvent.click(screen.getByRole("combobox", { name: "Highest step" }));
+  const options = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(options).toContain("0 (seed)");
+  expect(options).toContain("1 (+26%)");
+  expect(options).toContain("-1 (-21%)");
+});
+
+test("the percentages follow the step size", () => {
+  const form = { ...DEFAULT_PREPARE, divisions: 6 };
+  render(card(form, { state: prepareState("VelocityP", form, control) }));
+  expect(screen.getByRole("combobox", { name: "Highest step" })).toHaveTextContent("3 (+41%)");
+  expect(screen.getByRole("combobox", { name: "Lowest step" })).toHaveTextContent("-3 (-29%)");
 });
