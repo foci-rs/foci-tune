@@ -895,7 +895,7 @@ describe("stepSentence", () => {
 
 describe("axisTitle", () => {
   test("names the axis without its unit", () => {
-    expect(axisTitle("VelocityICornerHz")).toBe("Velocity I corner");
+    expect(axisTitle("VelocityICornerHz")).toBe("Velocity I");
     expect(axisTitle("VelocityP")).toBe("Velocity P");
   });
 });

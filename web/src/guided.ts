@@ -460,7 +460,7 @@ export type GuidedStepId = "setup" | "velocity-p" | "velocity-i" | "position-p" 
 export const GUIDED_STEPS: { id: GuidedStepId; label: string }[] = [
   { id: "setup", label: "Setup" },
   { id: "velocity-p", label: "Velocity P" },
-  { id: "velocity-i", label: "Velocity I corner" },
+  { id: "velocity-i", label: "Velocity I" },
   { id: "position-p", label: "Position P" },
   { id: "result", label: "Result" },
 ];

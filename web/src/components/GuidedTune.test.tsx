@@ -479,7 +479,7 @@ test("the header marks the axis being tuned and Setup shows the tune's settings 
   expect(steps.getAllByRole("button").map((b) => b.textContent)).toEqual([
     "1Setup",
     "2Velocity P",
-    "3Velocity I corner",
+    "3Velocity I",
     "4Position P",
     "5Result",
   ]);
@@ -878,7 +878,7 @@ test("going back to a finished axis step leaves a Next that goes on to the follo
   ).toEqual(["Abandon tune", "Next"]);
   fireEvent.click(next);
   expect(await screen.findByRole("button", { name: "Run" })).toBeInTheDocument();
-  expect(steps.getByRole("button", { name: /Velocity I corner/ })).toHaveAttribute("aria-current", "step");
+  expect(steps.getByRole("button", { name: /Velocity I$/ })).toHaveAttribute("aria-current", "step");
 });
 
 test("the step the tune is at has no Next of its own", async () => {
@@ -886,4 +886,14 @@ test("the step the tune is at has no Next of its own", async () => {
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("button", { name: "Run" });
   expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+});
+
+test("the third step is called Velocity I in the header and on its card", async () => {
+  current = detail("Running");
+  current.steps[0].axis = "VelocityICornerHz";
+  render(<GuidedTune printer={printer} />);
+  const steps = within(await screen.findByRole("navigation", { name: "Steps" }));
+  expect(steps.getByRole("button", { name: /Velocity I$/ })).toBeInTheDocument();
+  expect(steps.queryByText(/corner/i)).toBeNull();
+  expect(await screen.findByRole("region", { name: "Velocity I sweep" })).toBeInTheDocument();
 });

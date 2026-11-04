@@ -446,7 +446,7 @@ function AxisStep({
   const preparing = prepareAxis === axis;
   const announcing = announced && actions.start && lastAxis === axis;
   if (indices.length === 0 && !preparing) {
-    return <p className="text-sm text-muted-foreground">{axisLabel(axis)} is not reached yet.</p>;
+    return <p className="text-sm text-muted-foreground">{axisTitle(axis)} is not reached yet.</p>;
   }
   const sessions = lastAxis === axis && last !== null ? Object.values(tune.steps[last].sessions) : [];
   return (
