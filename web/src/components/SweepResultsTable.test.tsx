@@ -46,6 +46,7 @@ test("the columns use words a person would: gain, status, score, behind best, da
     .getAllByRole("columnheader")
     .map((c) => c.textContent);
   expect(names).toEqual([
+    "#",
     "Gain",
     "Status",
     "Score (μm)",
@@ -62,11 +63,11 @@ test("the headers are not forced to upper case, which turns μm into a capital M
   expect(head.className).not.toMatch(/uppercase/);
 });
 
-test("the gain is the written value; the rung number and the duplicate shown value are gone", () => {
+test("the gain is the written value, once", () => {
   render(table());
   const first = within(screen.getByRole("table", { name: "Velocity P results" })).getAllByRole("row")[1];
-  expect(within(first).getAllByRole("cell")[0]).toHaveTextContent("841");
-  expect(within(first).getAllByRole("cell")).toHaveLength(7);
+  expect(within(first).getAllByRole("cell")[1]).toHaveTextContent("841");
+  expect(within(first).getAllByRole("cell")).toHaveLength(8);
 });
 
 test("a corner ladder shows its gains in Hz", () => {
@@ -74,7 +75,7 @@ test("a corner ladder shows its gains in Hz", () => {
     table({ axis: "VelocityICornerHz", label: "Velocity I corner (Hz)", rows: [row(0, { shown: 50.04, raw: 4200 })] }),
   );
   const first = within(screen.getByRole("table", { name: "Velocity I corner (Hz) results" })).getAllByRole("row")[1];
-  expect(within(first).getAllByRole("cell")[0]).toHaveTextContent("50.0 Hz");
+  expect(within(first).getAllByRole("cell")[1]).toHaveTextContent("50.0 Hz");
 });
 
 test("the score, damping and error headers explain themselves", async () => {
@@ -100,4 +101,12 @@ test("the best gain says so and the others say how far behind", () => {
   const rows = within(screen.getByRole("table", { name: "Velocity P results" })).getAllByRole("row");
   expect(within(rows[2]).getByText("best")).toBeInTheDocument();
   expect(within(rows[3]).getByText("5.1 μm ± 3.1 μm")).toBeInTheDocument();
+});
+
+test("each row is numbered from 1, in the order the gains are run", () => {
+  render(table());
+  const rows = within(screen.getByRole("table", { name: "Velocity P results" }))
+    .getAllByRole("row")
+    .slice(1);
+  expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["1", "2", "3"]);
 });

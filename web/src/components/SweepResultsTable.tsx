@@ -37,6 +37,7 @@ export function SweepResultsTable({
       <table aria-label={`${label} results`} className="w-full text-left text-sm">
         <thead className="text-xs text-muted-foreground">
           <tr>
+            <th className="pr-4 font-medium">#</th>
             <th className="pr-4 font-medium">Gain</th>
             <th className="pr-4 font-medium">Status</th>
             <th className="pr-4 font-medium">
@@ -72,6 +73,7 @@ export function SweepResultsTable({
                 r.skipped !== null && "text-muted-foreground",
               )}
             >
+              <td className="pr-4 text-muted-foreground">{r.index + 1}</td>
               <td className="pr-4">{corner ? `${r.shown.toFixed(1)} Hz` : r.raw}</td>
               <td className="pr-4 font-sans">
                 {r.verdict}
