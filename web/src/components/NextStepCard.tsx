@@ -5,7 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  axisLabel,
+  axisTitle,
   STEP_DIVISIONS,
   stepPercent,
   type LadderPreview,
@@ -138,7 +138,7 @@ export function NextStepCard({
   const set = (patch: Partial<PrepareForm>) => onForm({ ...form, ...patch });
   const seedShown = state.seed === null ? 0 : form.seed === null && corner ? Number(state.seed.toFixed(1)) : state.seed;
   return (
-    <Card label={`Next step: ${axisLabel(axis)}`}>
+    <Card label={`${axisTitle(axis)} sweep`}>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-col text-xs text-muted-foreground">
           Seed

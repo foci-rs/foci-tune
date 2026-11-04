@@ -19,7 +19,7 @@ import {
   type TuneId,
   type TuneSummary,
 } from "@/api";
-import { ArrowRightIcon, PlayIcon } from "lucide-react";
+import { PlayIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
@@ -300,19 +300,26 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
             <UiButton
               disabled={frozen || prepareBlocked !== null}
               onClick={() =>
-                run("prepare", () =>
-                  postTuneStep(id, {
+                run("start", async () => {
+                  await postTuneStep(id, {
                     seed: prepare.seed === null ? "live" : { typed: prepare.seed },
                     repeats: prepare.repeats,
                     lower_k: prepare.lower,
                     upper_k: prepare.upper,
                     octave_divisions: prepare.divisions,
-                  }),
-                )
+                  });
+                  try {
+                    await postTuneConfirm(id);
+                  } catch (e) {
+                    await postTuneStepCancel(id).catch(() => undefined);
+                    throw e;
+                  }
+                })
               }
+              className="border border-emerald-600 bg-emerald-700 text-white hover:bg-emerald-600"
             >
-              Next
-              <ArrowRightIcon />
+              <PlayIcon />
+              Run
             </UiButton>
           )}
           {starting && announcedStep !== null && (
