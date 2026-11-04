@@ -259,9 +259,17 @@ describe("rungView", () => {
   test("lists omitted and merged rungs as notes", () => {
     const s = step({ notes: [{ OutOfRange: 99999 }, { RoundedToZero: 0.1 }, { Merged: { shown: 1001, into: 1000 } }] });
     const notes = stepSummary(tune("Running", [s]), 0).notes;
-    expect(notes).toHaveLength(3);
-    expect(notes[0]).toMatch(/99999/);
-    expect(notes[2]).toMatch(/1001.*1000/);
+    expect(notes).toEqual([
+      "Gain 99999 was left out: it is outside what the stepper accepts.",
+      "Gain 0 was left out: it rounds to zero.",
+      "Gain 1001 was left out: it is the same as 1000.",
+    ]);
+  });
+  test("a corner's left-out gains are in Hz", () => {
+    const s = step({ axis: "VelocityICornerHz", notes: [{ OutOfRange: 250.04 }] });
+    expect(stepSummary(tune("Running", [s]), 0).notes).toEqual([
+      "Gain 250.0 Hz was left out: it is outside what the stepper accepts.",
+    ]);
   });
 });
 

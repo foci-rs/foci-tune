@@ -230,14 +230,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
     <div className="space-y-4">
       <Steps steps={GUIDED_STEPS} current={shown} onSelect={(next) => setPicked(next as GuidedStepId)} />
 
-      {detail.notes.length > 0 && (
-        <ul className="space-y-0.5 text-xs text-muted-foreground">
-          {detail.notes.map((n) => (
-            <li key={n.unix_ms}>{n.text}</li>
-          ))}
-        </ul>
-      )}
-
       {actions.restore && (
         <LockBanner
           detail={detail}

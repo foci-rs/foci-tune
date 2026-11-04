@@ -125,10 +125,12 @@ export function gainText(rung: TuneStep["rungs"][number] | undefined, axis: Tune
 const gainAt = (step: TuneStep, index: number): string =>
   step.rungs[index] === undefined ? `${index + 1}` : gainText(step.rungs[index], step.axis);
 
-export function noteText(note: RungNote): string {
-  if ("OutOfRange" in note) return `${note.OutOfRange} left out: outside the writable range`;
-  if ("RoundedToZero" in note) return `${note.RoundedToZero} left out: rounds to a raw value of zero`;
-  return `${note.Merged.shown} merged into ${note.Merged.into}: same raw value`;
+export function noteText(note: RungNote, axis: TuneAxis = "VelocityP"): string {
+  const gain = (shown: number) => (axis === "VelocityICornerHz" ? `${shown.toFixed(1)} Hz` : String(Math.round(shown)));
+  if ("OutOfRange" in note)
+    return `Gain ${gain(note.OutOfRange)} was left out: it is outside what the stepper accepts.`;
+  if ("RoundedToZero" in note) return `Gain ${gain(note.RoundedToZero)} was left out: it rounds to zero.`;
+  return `Gain ${gain(note.Merged.shown)} was left out: it is the same as ${gain(note.Merged.into)}.`;
 }
 
 function usableAssessment(step: TuneStep): LadderAssessment | null {
@@ -158,7 +160,7 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
     s.paused !== null ? [s.paused.rung, s.paused.reason] : (assessment?.pause ?? null);
   return {
     axis: s.axis,
-    notes: s.notes.map(noteText),
+    notes: s.notes.map((n) => noteText(n, s.axis)),
     recommendation,
     extend: assessment === null ? null : (s.recommendation?.extend ?? null),
     halt: halt === null ? null : `The sweep stopped at gain ${gainAt(s, halt[0])}: ${haltText(halt[1])}.`,

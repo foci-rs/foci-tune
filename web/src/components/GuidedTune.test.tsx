@@ -784,3 +784,14 @@ test.each([
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
   expect(bodies[0]).toEqual({ decision });
 });
+
+test("the tune's event log is not printed above the page: decisions already show in the table", async () => {
+  current = detail("Running");
+  current.notes = [
+    { unix_ms: 1, text: "operator continued past rung 0: damping unassessable" },
+    { unix_ms: 2, text: "operator continued past rung 1: damping unassessable" },
+  ];
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("table", { name: /results/ });
+  expect(screen.queryByText(/operator continued/)).toBeNull();
+});
