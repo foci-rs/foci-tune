@@ -628,6 +628,8 @@ describe("comparison fields", () => {
     expect(rows[2]).toMatchObject({ decidingSpeed: null, gap: null, tolerance: null, best: false });
   });
 
+  const gainOf = (i: number) => String([421, 530, 668, 841][i]);
+
   test("the comparison line names the tie, its gap and tolerance, and the lower gain", () => {
     const text = comparisonText(
       ladder({
@@ -636,11 +638,11 @@ describe("comparison fields", () => {
         verdicts: [none, scored({ gap: 0 }), scored({ gap: 2.0, tolerance: 3.1 }), none],
       }),
       3,
+      gainOf,
     );
-    expect(text).toMatch(/rungs 2 and 3/);
-    expect(text).toMatch(/2\.0/);
-    expect(text).toMatch(/3\.1/);
-    expect(text).toMatch(/lower gain/i);
+    expect(text).toBe(
+      "Gains 530 and 668 are too close to tell apart (widest gap 2.0 μm, within 3.1 μm), so the lowest of them is recommended.",
+    );
   });
 
   test("a three-rung tie reports the largest gap in the set with that rung's tolerance", () => {
@@ -656,8 +658,9 @@ describe("comparison fields", () => {
         ],
       }),
       3,
+      gainOf,
     );
-    expect(text).toMatch(/rungs 1, 2 and 3/);
+    expect(text).toMatch(/Gains 421, 530 and 668/);
     expect(text).toMatch(/2\.5/);
     expect(text).toMatch(/3\.3/);
     expect(text).not.toMatch(/1\.0 μm/);
@@ -673,11 +676,9 @@ describe("comparison fields", () => {
         verdicts: [none, scored({ gap: 0 }), scored({ gap: 5.1, tolerance: 3.1 }), none],
       }),
       3,
+      gainOf,
     );
-    expect(text).toMatch(/rung 3/);
-    expect(text).toMatch(/5\.1/);
-    expect(text).toMatch(/3\.1/);
-    expect(text).not.toMatch(/tie/i);
+    expect(text).toBe("The next best gain, 668, is 5.1 μm behind, more than the 3.1 μm the repeats varied by.");
   });
 
   test("one repeat names the runner-up without a tolerance and says ties are undetectable", () => {
@@ -689,16 +690,16 @@ describe("comparison fields", () => {
         verdicts: [none, scored({ gap: 0 }), scored({ gap: 0.1, tolerance: null }), none],
       }),
       1,
+      gainOf,
     );
-    expect(text).toMatch(/rung 3/);
-    expect(text).toMatch(/0\.1/);
-    expect(text).toMatch(/one repeat/i);
-    expect(text).not.toMatch(/0\.1 μm[^.]*\d\.\d μm/);
+    expect(text).toBe(
+      "The next best gain, 668, is 0.1 μm behind. With one repeat the tool cannot tell whether a small difference is real.",
+    );
   });
 
   test("a single eligible rung says nothing was compared", () => {
-    const text = comparisonText(ladder({ best: 0, runner_up: null, tie: [0] }), 3);
-    expect(text).toMatch(/nothing to compare|only scored rung/i);
+    const text = comparisonText(ladder({ best: 0, runner_up: null, tie: [0] }), 3, gainOf);
+    expect(text).toBe("Only one gain was scored, so there was nothing to compare it with.");
   });
 
   test("no best rung gives no comparison line", () => {

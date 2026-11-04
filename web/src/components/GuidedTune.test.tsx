@@ -374,9 +374,10 @@ test("the recommendation card carries the comparison line and the drift lines", 
     tie: [1, 2],
     spreads: [null, null, null],
   };
+  current.steps[0].recommendation = { choice: { Measured: { rung: 1 } }, extend: null };
   current.steps[0].drift = [{ metric: "p99 100", first: 4, rerun: 9, verdict: "Drifted" }];
   render(<GuidedTune printer={printer} />);
-  expect(await screen.findByText(/lower gain/i)).toBeInTheDocument();
+  expect(await screen.findByText(/too close to tell apart.*lowest of them/i)).toBeInTheDocument();
   expect(await screen.findByText(/may depend on run order/i)).toBeInTheDocument();
 });
 
@@ -794,4 +795,40 @@ test("the tune's event log is not printed above the page: decisions already show
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("table", { name: /results/ });
   expect(screen.queryByText(/operator continued/)).toBeNull();
+});
+
+test("while the step is still running there is no comparison line, only once it has a recommendation", async () => {
+  current = detail("Running");
+  const one = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: 2,
+    deciding_speed: 1,
+    gap: null,
+    tolerance: null,
+  };
+  const none = {
+    inadmissible: null,
+    marginal: false,
+    unscored: null,
+    score: null,
+    deciding_speed: null,
+    gap: null,
+    tolerance: null,
+  };
+  const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
+  current.steps[0].assessment = {
+    verdicts: [one, none, none],
+    medians: [medians, medians, medians],
+    halt: null,
+    best: 0,
+    runner_up: null,
+    tie: [0],
+    spreads: [null, null, null],
+  };
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("table", { name: /results/ });
+  expect(screen.queryByText(/nothing to compare/i)).toBeNull();
+  expect(screen.queryByText(/next best gain/i)).toBeNull();
 });

@@ -166,37 +166,42 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
     halt: halt === null ? null : `The sweep stopped at gain ${gainAt(s, halt[0])}: ${haltText(halt[1])}.`,
     pause: pause === null ? null : `Paused at gain ${gainAt(s, pause[0])}: ${pauseText(pause[1])}.`,
     failed: s.failed,
-    comparison: assessment === null ? null : comparisonText(assessment, s.repeats),
+    comparison:
+      assessment === null || s.recommendation === null || s.recommendation === undefined
+        ? null
+        : comparisonText(assessment, s.repeats, (i) => gainAt(s, i)),
     driftLines: driftLines(s.drift),
   };
 }
 
 const um = (value: number): string => `${value.toFixed(1)} μm`;
 
-function rungList(indices: number[]): string {
-  const shown = indices.map((i) => i + 1);
-  return shown.length < 2 ? `${shown[0]}` : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+function gainList(gains: string[]): string {
+  return gains.length < 2 ? (gains[0] ?? "") : `${gains.slice(0, -1).join(", ")} and ${gains[gains.length - 1]}`;
 }
 
-/** How the recommended rung was chosen over its closest competitor; null without a best rung. */
-export function comparisonText(a: LadderAssessment, repeats: number): string | null {
+/** How the recommended gain was chosen over its closest competitor; null without a best gain. */
+export function comparisonText(
+  a: LadderAssessment,
+  repeats: number,
+  gain: (rung: number) => string = (i) => String(i + 1),
+): string | null {
   if (a.best === null) return null;
   if (a.tie.length > 1) {
     const widest = a.tie
       .filter((i) => i !== a.best)
       .map((i) => a.verdicts[i])
       .reduce((max, v) => ((v.gap ?? 0) > (max.gap ?? 0) ? v : max));
-    const tolerance = widest.tolerance === null ? "" : ` within ${um(widest.tolerance)}`;
-    return `Tied: rungs ${rungList(a.tie)}, widest gap ${um(widest.gap ?? 0)}${tolerance}, so the lower gain was preferred.`;
+    const tolerance = widest.tolerance === null ? "" : `, within ${um(widest.tolerance)}`;
+    return `Gains ${gainList(a.tie.map(gain))} are too close to tell apart (widest gap ${um(widest.gap ?? 0)}${tolerance}), so the lowest of them is recommended.`;
   }
-  if (a.runner_up === null) return "This is the only scored rung: there was nothing to compare.";
+  if (a.runner_up === null) return "Only one gain was scored, so there was nothing to compare it with.";
   const runnerUp = a.verdicts[a.runner_up];
-  const name = `rung ${a.runner_up + 1}`;
-  if (repeats < 2) {
-    return `The runner-up, ${name}, is ${um(runnerUp.gap ?? 0)} behind; with one repeat ties cannot be detected.`;
-  }
-  const tolerance = runnerUp.tolerance === null ? "" : `, beyond the ${um(runnerUp.tolerance)} tolerance`;
-  return `The runner-up, ${name}, is ${um(runnerUp.gap ?? 0)} behind${tolerance}.`;
+  const name = `The next best gain, ${gain(a.runner_up)}, is ${um(runnerUp.gap ?? 0)} behind`;
+  if (repeats < 2) return `${name}. With one repeat the tool cannot tell whether a small difference is real.`;
+  const tolerance =
+    runnerUp.tolerance === null ? "" : `, more than the ${um(runnerUp.tolerance)} the repeats varied by`;
+  return `${name}${tolerance}.`;
 }
 
 /** One line per speed whose re-run drifted or could not be assessed. */
