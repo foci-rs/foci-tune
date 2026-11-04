@@ -508,7 +508,7 @@ test("the result step explains that there is no result before the tune is done",
       .getAllByRole("listitem")
       .map((li) => li.textContent),
   ).toEqual(["Velocity P: not chosen yet", "Velocity I: not chosen yet", "Position P: not chosen yet"]);
-  expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThan(0);
+  expect(document.querySelectorAll("[data-slot=skeleton]")).toHaveLength(0);
   expect(screen.queryByText(/no result yet/i)).toBeNull();
 });
 
@@ -920,4 +920,17 @@ test("the waiting result ticks off the axes that have a chosen gain", async () =
   ]);
   expect(items[0]).toHaveAttribute("data-done", "true");
   expect(items[1]).toHaveAttribute("data-done", "false");
+});
+
+test("the waiting checklist is one line, its items separated by midpoints", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(
+    within(await screen.findByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Result/ }),
+  );
+  const list = screen.getByRole("list", { name: "Gains chosen" });
+  expect(list).toHaveClass("flex-row");
+  const items = within(list).getAllByRole("listitem");
+  expect(items[0].className).toContain("after:content-['·']");
+  expect(items[2].className).toContain("last:after:content-none");
 });
