@@ -223,14 +223,14 @@ async fn printer_names_the_failing_precondition_per_stepper() {
 
     let x = find(&p["preconditions"], "stepper", "stepper_x");
     assert_eq!(x["ok"], false);
-    assert_eq!(x["failing"], json!(["axis x is not homed"]));
+    assert_eq!(x["failing"], json!(["the printer is not fully homed"]));
     assert_eq!(
         find(&p["preconditions"], "stepper", "stepper_y")["failing"],
-        json!([])
+        json!(["the printer is not fully homed"])
     );
     assert_eq!(
         find(&p["preconditions"], "stepper", "stepper_y")["ok"],
-        true
+        false
     );
 }
 
@@ -246,7 +246,7 @@ async fn a_failing_precondition_is_a_409_with_its_reason_and_creates_no_session(
     let reply = post(&app, "/api/runs", tracking_body()).await;
 
     assert_eq!(reply.status, StatusCode::CONFLICT);
-    assert_eq!(reply.error(), "axis x is not homed");
+    assert_eq!(reply.error(), "the printer is not fully homed");
     assert_eq!(
         rig.store.scan().unwrap().len(),
         1,
@@ -1064,7 +1064,7 @@ async fn printer_names_every_failing_precondition_of_a_stepper() {
     assert_eq!(
         x["failing"],
         json!([
-            "axis x is not homed",
+            "the printer is not fully homed",
             "the stepper has no identified electrical model"
         ])
     );

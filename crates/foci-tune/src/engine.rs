@@ -98,9 +98,10 @@ pub enum Precondition {
     /// A print is running or paused.
     #[error("the printer is printing")]
     Printing,
-    /// The stepper's axis is not homed.
-    #[error("axis {0} is not homed")]
-    NotHomed(char),
+    /// The printer is not fully homed: a run moves the toolhead across the bed, so X, Y and Z
+    /// must all be homed.
+    #[error("the printer is not fully homed")]
+    NotHomed,
     /// The stepper's `foci` section has no identified electrical model.
     #[error("the stepper has no identified electrical model")]
     NoElectricalModel,
@@ -1668,8 +1669,11 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             failing.push(Precondition::Printing);
         }
         failing.extend(self.trace_failure(&resolved.stepper));
-        if !resolved.printer.homed_axes.contains(resolved.stepper.axis) {
-            failing.push(Precondition::NotHomed(resolved.stepper.axis));
+        if !["x", "y", "z"]
+            .iter()
+            .all(|axis| resolved.printer.homed_axes.contains(axis))
+        {
+            failing.push(Precondition::NotHomed);
         }
         if !resolved.stepper.electrical_model_present {
             failing.push(Precondition::NoElectricalModel);

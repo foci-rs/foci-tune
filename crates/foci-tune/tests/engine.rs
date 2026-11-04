@@ -133,7 +133,18 @@ async fn an_unhomed_axis_is_refused() {
     })
     .await;
 
-    assert_eq!(refused(&rig).await, Precondition::NotHomed('x'));
+    assert_eq!(refused(&rig).await, Precondition::NotHomed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_needs_the_printer_fully_homed_not_just_the_steppers_axis() {
+    let rig = rig_with(Options {
+        homed: "xy",
+        ..Options::default()
+    })
+    .await;
+
+    assert_eq!(refused(&rig).await, Precondition::NotHomed);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1300,10 +1311,10 @@ async fn preconditions_list_every_failing_item_and_check_reports_the_first() {
 
     assert_eq!(
         x,
-        vec![Precondition::NotHomed('x'), Precondition::NoElectricalModel]
+        vec![Precondition::NotHomed, Precondition::NoElectricalModel]
     );
-    assert!(y.is_empty(), "{y:?}");
-    assert_eq!(first, Err(Precondition::NotHomed('x')));
+    assert_eq!(y, vec![Precondition::NotHomed]);
+    assert_eq!(first, Err(Precondition::NotHomed));
 }
 
 fn ensemble_only_record() -> ProbeRecord {
