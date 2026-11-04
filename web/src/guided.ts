@@ -39,14 +39,14 @@ export function defaultProbeSpeed(speeds: number[], context: Omit<ProbeEdgeInput
   if (valid.length === 0) {
     return {
       speed: fastestFirst[0],
-      warning: "No speed gives gain toggles far enough apart for the probe fit: raise the segments between toggles",
+      warning: "No speed leaves enough time between gain changes for the probe fit. Raise Moves between gain changes.",
     };
   }
   return {
     speed: valid[0],
     warning:
-      `No speed reaches ${PROBE_MIN_EDGES} expected probe edges ` +
-      `(${edges(valid[0]) ?? 0} at ${valid[0]} mm/s): add strokes or lengthen the pattern`,
+      `No speed gives the probe enough step responses: about ${edges(valid[0]) ?? 0} at ` +
+      `${valid[0]} mm/s, and it needs ${PROBE_MIN_EDGES}. Add strokes or lengthen the pattern.`,
   };
 }
 
@@ -74,23 +74,25 @@ export interface RungView {
 }
 
 const UNSCORED_TEXT: Record<UnscoredReason, string> = {
-  TrackingMissing: "tracking missing",
-  StandstillMissing: "standstill missing",
-  DampingWaived: "damping waived",
+  TrackingMissing: "no tracking result",
+  StandstillMissing: "no standstill result",
+  DampingWaived: "damping check skipped",
 };
 
 const INADMISSIBLE_TEXT: Record<InadmissibleReason, string> = {
-  DampingBelowFloor: "damping below the floor",
-  StandstillHigh: "standstill high",
+  DampingBelowFloor: "damping below the stop limit",
+  StandstillHigh: "too much noise at standstill",
 };
 
 function pauseText(reason: Pause): string {
-  return reason === "DampingUnassessable" ? "damping unassessable" : "standstill baseline unassessable";
+  return reason === "DampingUnassessable"
+    ? "the damping could not be measured"
+    : "the noise at standstill could not be measured";
 }
 
 function haltText(halt: Halt): string {
   if (typeof halt === "string") return pauseText(halt);
-  return `damping median ${halt.BelowFloor.median.toFixed(3)} below the floor`;
+  return `the damping, ${halt.BelowFloor.median.toFixed(3)}, was below the stop limit`;
 }
 
 export type RecommendationView =
@@ -109,6 +111,8 @@ export interface StepSummary {
   comparison: string | null;
   driftLines: string[];
 }
+
+const gainAt = (step: TuneStep, index: number): string => step.rungs[index]?.shown.toFixed(2) ?? `${index + 1}`;
 
 export function noteText(note: RungNote): string {
   if ("OutOfRange" in note) return `${note.OutOfRange} left out: outside the writable range`;
@@ -146,8 +150,8 @@ export function stepSummary(tune: Tune, step: number): StepSummary {
     notes: s.notes.map(noteText),
     recommendation,
     extend: assessment === null ? null : (s.recommendation?.extend ?? null),
-    halt: halt === null ? null : `Assessment stopped at rung ${halt[0] + 1}: ${haltText(halt[1])}`,
-    pause: pause === null ? null : `Paused at rung ${pause[0] + 1}: ${pauseText(pause[1])}`,
+    halt: halt === null ? null : `The sweep stopped at gain ${gainAt(s, halt[0])}: ${haltText(halt[1])}.`,
+    pause: pause === null ? null : `Paused at gain ${gainAt(s, pause[0])}: ${pauseText(pause[1])}.`,
     failed: s.failed,
     comparison: assessment === null ? null : comparisonText(assessment, s.repeats),
     driftLines: driftLines(s.drift),
@@ -196,16 +200,21 @@ export function driftLines(drift: TuneDrift[]): string[] {
 }
 
 /** One row per rung of a step: gain, verdict with its reason, scores and per-speed p99. */
-function notAssessedText(index: number, pause: [number, Pause] | null, halt: [number, Halt] | null): string {
+function notAssessedText(
+  s: TuneStep,
+  index: number,
+  pause: [number, Pause] | null,
+  halt: [number, Halt] | null,
+): string {
   if (pause !== null) {
-    if (index === pause[0]) return `Not assessed: ${pauseText(pause[1])}`;
-    if (index > pause[0]) return `Not assessed: paused at rung ${pause[0] + 1}`;
+    if (index === pause[0]) return `Not checked: ${pauseText(pause[1])}`;
+    if (index > pause[0]) return `Not checked: paused at gain ${gainAt(s, pause[0])}`;
   }
   if (halt !== null) {
-    if (index > halt[0]) return `Not assessed: assessment stopped at rung ${halt[0] + 1}`;
-    if (index === halt[0]) return `Not assessed: ${haltText(halt[1])}`;
+    if (index > halt[0]) return `Not checked: the sweep stopped at gain ${gainAt(s, halt[0])}`;
+    if (index === halt[0]) return `Not checked: ${haltText(halt[1])}`;
   }
-  return "Not assessed";
+  return "Not checked";
 }
 
 export interface GatesForm {
@@ -239,19 +248,19 @@ export function rungView(tune: Tune, step: number): RungView[] {
 
     let text: string;
     if (rung.skipped !== null) text = `Skipped: ${rung.skipped}`;
-    else if (rung.waived !== null) text = `Waived: ${pauseText(rung.waived.reason)}`;
-    else if (verdict?.inadmissible != null) text = `Inadmissible: ${INADMISSIBLE_TEXT[verdict.inadmissible]}`;
-    else if (verdict?.unscored != null) text = `Unscored: ${UNSCORED_TEXT[verdict.unscored]}`;
-    else if (verdict?.marginal) text = "Marginal damping";
-    else if (verdict?.score != null) text = "Admissible";
+    else if (rung.waived !== null) text = `Continued anyway: ${pauseText(rung.waived.reason)}`;
+    else if (verdict?.inadmissible != null) text = `Rejected: ${INADMISSIBLE_TEXT[verdict.inadmissible]}`;
+    else if (verdict?.unscored != null) text = `Not scored: ${UNSCORED_TEXT[verdict.unscored]}`;
+    else if (verdict?.marginal) text = "Low damping";
+    else if (verdict?.score != null) text = "Accepted";
     else if (assessment !== null && !flagged && (repeatsDone >= s.repeats || pause !== null || halt !== null)) {
-      text = notAssessedText(index, pause, halt);
-    } else if (repeatsDone >= s.repeats) text = "Measured, awaiting verdict";
+      text = notAssessedText(s, index, pause, halt);
+    } else if (repeatsDone >= s.repeats) text = "Measured, waiting for the verdict";
     else if (repeatsDone > 0) text = `${repeatsDone} of ${s.repeats} repeats`;
     else text = "Pending";
 
     if (s.standstill_gate_off !== null || tune.setup.gates.standstill_factor === null)
-      text = `${text} (Standstill gate off)`;
+      text = `${text} (standstill check off)`;
 
     let recommended: RecommendationKind | null = null;
     if (choice !== undefined && "Measured" in choice && choice.Measured.rung === index) recommended = "measured";

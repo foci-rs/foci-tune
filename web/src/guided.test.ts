@@ -136,10 +136,10 @@ describe("driftCheckRunning", () => {
 describe("rungView", () => {
   test("states why a rung is unscored and why another is inadmissible", () => {
     const rows = rungView(tune("AwaitingChoice", [assessed()]), 0);
-    expect(rows[0].verdict).toMatch(/unscored/i);
-    expect(rows[0].verdict).toMatch(/tracking missing/i);
-    expect(rows[1].verdict).toMatch(/inadmissible/i);
-    expect(rows[1].verdict).toMatch(/damping below (the )?floor/i);
+    expect(rows[0].verdict).toMatch(/not scored/i);
+    expect(rows[0].verdict).toMatch(/no tracking result/i);
+    expect(rows[1].verdict).toMatch(/rejected/i);
+    expect(rows[1].verdict).toMatch(/damping below the stop limit/i);
   });
 
   test("a running step shows finished rungs assessed and the others as still to run", () => {
@@ -162,7 +162,7 @@ describe("rungView", () => {
       },
     });
     const rows = rungView(tune("Running", [s]), 0);
-    expect(rows[0].verdict).toBe("Admissible");
+    expect(rows[0].verdict).toBe("Accepted");
     expect(rows[0].score).toBe(1);
     expect(rows[1].verdict).toBe("1 of 2 repeats");
     expect(rows[2].verdict).toBe("Pending");
@@ -173,8 +173,8 @@ describe("rungView", () => {
     s.assessment!.verdicts[0] = { ...none, unscored: "StandstillMissing" };
     s.assessment!.verdicts[1] = { ...none, inadmissible: "StandstillHigh" };
     const rows = rungView(tune("AwaitingChoice", [s]), 0);
-    expect(rows[0].verdict).toMatch(/standstill missing/i);
-    expect(rows[1].verdict).toMatch(/standstill high/i);
+    expect(rows[0].verdict).toMatch(/no standstill result/i);
+    expect(rows[1].verdict).toMatch(/too much noise at standstill/i);
   });
 
   test("flags marginal rungs and carries score, gain and per-speed p99", () => {
@@ -220,7 +220,7 @@ describe("rungView", () => {
       rungs: [rung(0, { repeat_values: [repeat, repeat] }), rung(1, { repeat_values: [repeat] }), rung(2)],
     });
     const rows = rungView(tune("Running", [s]), 0);
-    expect(rows.map((r) => r.verdict)).toEqual(["Measured, awaiting verdict", "1 of 2 repeats", "Pending"]);
+    expect(rows.map((r) => r.verdict)).toEqual(["Measured, waiting for the verdict", "1 of 2 repeats", "Pending"]);
   });
 
   test("explains a rung left unassessed after a halt", () => {
@@ -236,7 +236,7 @@ describe("rungView", () => {
       },
     });
     const rows = rungView(tune("AwaitingChoice", [s]), 0);
-    expect(rows[2].verdict).toMatch(/not assessed/i);
+    expect(rows[2].verdict).toMatch(/not checked/i);
     expect(rows[2].verdict).toMatch(/stopped/i);
   });
 
@@ -385,7 +385,8 @@ describe("defaultProbeSpeed", () => {
     const ctx = { ...context, strokes: 8 };
     const result = defaultProbeSpeed([400], ctx);
     expect(result.speed).toBe(400);
-    expect(result.warning).toMatch(/edges/);
+    expect(result.warning).toMatch(/step responses/);
+    expect(result.warning).not.toMatch(/edges/i);
   });
 
   test("ignores speeds whose toggles are too close together", () => {
@@ -397,7 +398,8 @@ describe("defaultProbeSpeed", () => {
     const ctx = { ...context, segmentsBetweenToggles: 1 };
     const result = defaultProbeSpeed([300, 600], ctx);
     expect(result.speed).toBe(600);
-    expect(result.warning).toMatch(/toggle/i);
+    expect(result.warning).toMatch(/Moves between gain changes/);
+    expect(result.warning).not.toMatch(/toggle/i);
   });
 
   test("judges a speed above max_velocity at the clamped speed, as the probe runs it", () => {
@@ -489,7 +491,9 @@ describe("a paused step", () => {
       tie: [],
       spreads: [],
     };
-    expect(stepSummary(t, 0).pause).toBe("Paused at rung 2: damping unassessable");
+    expect(stepSummary(t, 0).pause).toBe(
+      `Paused at gain ${t.steps[0].rungs[1].shown.toFixed(2)}: the damping could not be measured.`,
+    );
   });
   test("explains a waived rung and a paused rung", () => {
     const t = tune("Running");
@@ -505,8 +509,8 @@ describe("a paused step", () => {
       pause: [2, "StandstillBaselineUnassessable"],
     };
     const rows = rungView(t, 0);
-    expect(rows[1].verdict).toContain("Waived: damping unassessable");
-    expect(rows[2].verdict).toContain("Not assessed: standstill baseline unassessable");
+    expect(rows[1].verdict).toContain("Continued anyway: the damping could not be measured");
+    expect(rows[2].verdict).toContain("Not checked: the noise at standstill could not be measured");
   });
   test("a halt of DampingUnassessable from an old record still reads as a halt", () => {
     const t = tune("AwaitingChoice");
@@ -521,12 +525,13 @@ describe("a paused step", () => {
     };
     t.steps[0].assessment.verdicts = [none, none, none, none];
     t.steps[0].assessment.medians = [medians([]), medians([]), medians([]), medians([])];
-    expect(stepSummary(t, 0).halt).toContain("damping unassessable");
+    expect(stepSummary(t, 0).halt).toContain("The sweep stopped at gain");
+    expect(stepSummary(t, 0).halt).toContain("the damping could not be measured");
   });
   test("names the standstill gate as off", () => {
     const t = tune("Running");
     t.steps[0].standstill_gate_off = 5;
-    expect(rungView(t, 0)[0].verdict).toContain("Standstill gate off");
+    expect(rungView(t, 0)[0].verdict).toContain("standstill check off");
   });
 });
 
@@ -545,15 +550,15 @@ describe("gatesBody", () => {
 test("a setup without a standstill factor labels every rung gate-off once", () => {
   const off = tune("AwaitingChoice", [step({ standstill_gate_off: 123 })]);
   off.setup.gates.standstill_factor = null;
-  for (const row of rungView(off, 0)) expect(row.verdict.match(/\(Standstill gate off\)/g)).toHaveLength(1);
+  for (const row of rungView(off, 0)) expect(row.verdict.match(/\(standstill check off\)/g)).toHaveLength(1);
 
   const setupOnly = tune("AwaitingChoice", [step()]);
   setupOnly.setup.gates.standstill_factor = null;
-  for (const row of rungView(setupOnly, 0)) expect(row.verdict.match(/\(Standstill gate off\)/g)).toHaveLength(1);
+  for (const row of rungView(setupOnly, 0)) expect(row.verdict.match(/\(standstill check off\)/g)).toHaveLength(1);
 
   const on = tune("AwaitingChoice", [step({ standstill_gate_off: null })]);
   on.setup.gates.standstill_factor = 2;
-  for (const row of rungView(on, 0)) expect(row.verdict).not.toContain("Standstill gate off");
+  for (const row of rungView(on, 0)) expect(row.verdict).not.toContain("standstill check off");
 });
 
 describe("comparison fields", () => {
