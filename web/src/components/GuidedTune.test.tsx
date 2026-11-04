@@ -150,7 +150,13 @@ afterEach(() => {
 });
 
 const printer = {
-  steppers: [],
+  steppers: [{ name: "stepper_x", serial: "s1", channel: 0 }],
+  boards: [
+    {
+      serial: "s1",
+      channels: [{ channel: 0, control: { velocity_p: 1000, velocity_i: 50, position_p: 800, pwm_hz: 50000 } }],
+    },
+  ],
   preconditions: [],
   moonraker: { max_velocity: 500 },
   engine: { current: null, queue: [] },
@@ -179,10 +185,10 @@ test("the duration estimate uses the run times of the tune's own earlier steps",
   expect(screen.getByText(/about \d+ min/)).toBeInTheDocument();
 });
 
-test("preparing a step posts the request and never the confirmation", async () => {
+test("Next prepares the step from the live seed and never confirms it", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Prepare the step" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Next" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps"]));
   expect(bodies[0]).toMatchObject({ seed: "live", repeats: 3 });
   expect(screen.queryByRole("button", { name: "Start the step" })).not.toBeInTheDocument();
@@ -424,7 +430,7 @@ test("a run of another session is not shown on this tune's step", async () => {
 test("the bar prepares the step, and says why it cannot while the form is wrong", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
-  const prepare = await screen.findByRole("button", { name: "Prepare the step" });
+  const prepare = await screen.findByRole("button", { name: "Next" });
   expect(prepare.closest(".sticky")).not.toBeNull();
   fireEvent.change(screen.getByRole("spinbutton", { name: "Repeats" }), { target: { value: "0" } });
   expect(prepare).toBeDisabled();
@@ -440,13 +446,49 @@ test("an announced step is started from the bar", async () => {
   expect(start.closest(".sticky")).not.toBeNull();
 });
 
-test("the prepare form speaks of steps, not rungs", async () => {
+test("the next-step card shows the seed, the range as dropdowns and the ladder they give", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Prepare the step" });
-  expect(screen.getByRole("spinbutton", { name: "Lowest step" })).toBeInTheDocument();
-  expect(screen.getByRole("spinbutton", { name: "Highest step" })).toBeInTheDocument();
+  await screen.findByRole("button", { name: "Next" });
+  expect(screen.getByRole("spinbutton", { name: "Seed" })).toHaveValue(1000);
+  expect(screen.getByRole("combobox", { name: "Lowest step" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "Highest step" })).toBeInTheDocument();
+  expect(within(screen.getByRole("list", { name: "Ladder" })).getAllByRole("listitem")).toHaveLength(7);
   expect(screen.queryByText(/rung/i)).toBeNull();
+});
+
+test("a typed seed and a changed range are what Next sends", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  fireEvent.change(await screen.findByRole("spinbutton", { name: "Seed" }), { target: { value: "1200" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Highest step" }));
+  fireEvent.click(screen.getByRole("option", { name: "5" }));
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/steps"]));
+  expect(bodies[0]).toEqual({ seed: { typed: 1200 }, repeats: 3, lower_k: -3, upper_k: 5 });
+});
+
+test("reload puts the live seed back and Next sends live again", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  fireEvent.change(await screen.findByRole("spinbutton", { name: "Seed" }), { target: { value: "1200" } });
+  fireEvent.click(screen.getByRole("button", { name: "Use the live value" }));
+  expect(screen.getByRole("spinbutton", { name: "Seed" })).toHaveValue(1000);
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(bodies[0]).toMatchObject({ seed: "live" }));
+});
+
+test("without a live value Next waits for a seed and says so", async () => {
+  current = detail("Ready", null, false);
+  const silent = { ...printer, boards: [] } as unknown as PrinterView;
+  render(<GuidedTune printer={silent} />);
+  const next = await screen.findByRole("button", { name: "Next" });
+  expect(next).toBeDisabled();
+  expect(
+    within(next.closest(".sticky") as HTMLElement).getAllByText(/no live value.*enter a seed/i).length,
+  ).toBeGreaterThan(0);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Seed" }), { target: { value: "900" } });
+  expect(next).toBeEnabled();
 });
 
 test("a new tune shows the steps with Setup open, and the later ones wait for the tune", async () => {
@@ -483,7 +525,7 @@ test("a finished tune opened by link shows its steps and result", async () => {
 test("before any step the Setup step is the editable form, with Abandon beside Next", async () => {
   current = detail("Ready", null, false);
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Prepare the step" });
+  await screen.findByRole("button", { name: "Next" });
   fireEvent.click(within(screen.getByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Setup/ }));
   expect(screen.getByText("setup form editable")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Abandon tune" })).toHaveLength(1);

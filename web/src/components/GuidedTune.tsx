@@ -19,6 +19,8 @@ import {
   type TuneStepPlan,
   type TuneSummary,
 } from "@/api";
+import { ArrowRightIcon } from "lucide-react";
+import { Button as UiButton } from "@/components/ui/button";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
 import {
@@ -38,25 +40,23 @@ import {
   rungView,
   stepSummary,
   DEFAULT_PREPARE,
-  prepareProblem,
+  liveControlFor,
+  prepareState,
   type GuidedAction,
   type GuidedStepId,
   type PrepareForm,
+  type PrepareState,
   type RungView,
 } from "@/guided";
 import { cn } from "@/lib/utils";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
+import { NextStepCard } from "./NextStepCard";
 import { PausePanel } from "./PausePanel";
 import { Steps } from "./Steps";
 import { TuneRunCard } from "./TuneRunCard";
 import { ActionBar } from "./WorkbenchCards";
 import { Button, Card, Field, NumberField } from "./ui";
-
-const pillClass = (active: boolean) =>
-  active
-    ? "flex items-center gap-2 rounded-full border border-emerald-500 px-3 py-1 text-sm text-emerald-300"
-    : "flex items-center gap-2 rounded-full border px-3 py-1 text-sm text-muted-foreground";
 
 const isOver = (s: TuneSummary) => s.state === "Done" || s.state === "Abandoned";
 
@@ -234,7 +234,9 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const next = nextAxis(detail);
   const preparing = actions.prepare && next !== null && axis === next;
   const starting = announced && actions.start && axis !== null && lastAxis === axis;
-  const prepareBlocked = preparing ? prepareProblem(prepare) : null;
+  const liveControl = liveControlFor(printer, detail.setup.stepper);
+  const prepared = preparing && next !== null ? prepareState(next, prepare, liveControl) : null;
+  const prepareBlocked = prepared?.problem ?? null;
   const setupEditable = actions.prepare && detail.steps.length === 0;
   const abandon = actions.abandon ? (
     <Button disabled={frozen} onClick={() => run("abandon", () => postTuneAbandon(id))}>
@@ -294,6 +296,8 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           onExtend={(direction) => run("extend", () => postTuneExtension(id, direction))}
           onDecide={(d) => run("decide", () => postTuneDecision(id, d))}
           prepare={prepare}
+          prepared={prepared}
+          canReload={liveControl !== null}
           onPrepare={setPrepare}
         />
       )}
@@ -313,12 +317,12 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
           {preparing && (
-            <Button
+            <UiButton
               disabled={frozen || prepareBlocked !== null}
               onClick={() =>
                 run("prepare", () =>
                   postTuneStep(id, {
-                    seed: prepare.typed ? { typed: prepare.seed } : "live",
+                    seed: prepare.seed === null ? "live" : { typed: prepare.seed },
                     repeats: prepare.repeats,
                     lower_k: prepare.lower,
                     upper_k: prepare.upper,
@@ -326,8 +330,9 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
                 )
               }
             >
-              Prepare the step
-            </Button>
+              Next
+              <ArrowRightIcon />
+            </UiButton>
           )}
           {starting && (
             <Button
@@ -366,6 +371,8 @@ function AxisStep({
   onExtend,
   onDecide,
   prepare,
+  prepared,
+  canReload,
   onPrepare,
 }: {
   tune: TuneDetail;
@@ -383,6 +390,8 @@ function AxisStep({
   onExtend: (direction: "below" | "above") => void;
   onDecide: (d: TuneDecision) => void;
   prepare: PrepareForm;
+  prepared: PrepareState | null;
+  canReload: boolean;
   onPrepare: (form: PrepareForm) => void;
 }) {
   const indices = tune.steps.flatMap((s, i) => (s.axis === axis ? [i] : []));
@@ -411,7 +420,16 @@ function AxisStep({
         </div>
       ))}
       {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} />}
-      {preparing && <PrepareFormCard axis={axis} busy={busy} form={prepare} onForm={onPrepare} />}
+      {preparing && prepared !== null && (
+        <NextStepCard
+          axis={axis}
+          busy={busy}
+          form={prepare}
+          state={prepared}
+          canReload={canReload}
+          onForm={onPrepare}
+        />
+      )}
     </>
   );
 }
@@ -453,70 +471,6 @@ function LockBanner({
         )}
       </div>
     </div>
-  );
-}
-
-function PrepareFormCard({
-  axis,
-  busy,
-  form,
-  onForm,
-}: {
-  axis: NonNullable<ReturnType<typeof nextAxis>>;
-  busy: boolean;
-  form: PrepareForm;
-  onForm: (form: PrepareForm) => void;
-}) {
-  const set = (patch: Partial<PrepareForm>) => onForm({ ...form, ...patch });
-  return (
-    <Card label={`Next step: ${axisLabel(axis)}`}>
-      <div className="flex flex-wrap items-end gap-3">
-        <div role="radiogroup" aria-label="Seed" className="flex gap-1">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={!form.typed}
-            disabled={busy}
-            onClick={() => set({ typed: false })}
-            className={pillClass(!form.typed)}
-          >
-            Live value
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={form.typed}
-            disabled={busy}
-            onClick={() => set({ typed: true })}
-            className={pillClass(form.typed)}
-          >
-            Typed value
-          </button>
-        </div>
-        {form.typed && (
-          <label className="flex flex-col text-xs text-muted-foreground">
-            Seed
-            <NumberField label="Seed" value={form.seed} disabled={busy} onValue={(seed) => set({ seed })} />
-          </label>
-        )}
-        <label className="flex flex-col text-xs text-muted-foreground">
-          Repeats
-          <NumberField label="Repeats" value={form.repeats} disabled={busy} onValue={(repeats) => set({ repeats })} />
-        </label>
-        <label className="flex flex-col text-xs text-muted-foreground">
-          Lowest step
-          <NumberField label="Lowest step" value={form.lower} disabled={busy} onValue={(lower) => set({ lower })} />
-        </label>
-        <label className="flex flex-col text-xs text-muted-foreground">
-          Highest step
-          <NumberField label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
-        </label>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Each step changes the gain by about 26% from the seed, so -3 is half the seed and 3 is double it. Preparing a
-        step announces it; nothing moves until you start it.
-      </p>
-    </Card>
   );
 }
 
