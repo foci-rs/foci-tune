@@ -1,10 +1,14 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
-import type { PrinterView, StepperView } from "@/api";
+import { putTuneSetup, type PrinterView, type StepperView, type Tune } from "@/api";
 import { browserStorage, savePattern } from "@/tune";
 import { GuidedSetup } from "./GuidedSetup";
 
-vi.mock("@/api", async (orig) => ({ ...(await orig<typeof import("@/api")>()), postTune: vi.fn() }));
+vi.mock("@/api", async (orig) => ({
+  ...(await orig<typeof import("@/api")>()),
+  postTune: vi.fn(),
+  putTuneSetup: vi.fn(async () => ({})),
+}));
 
 const stepper = (name: string, axis: string): StepperView =>
   ({
@@ -107,4 +111,54 @@ test("the gain-change spacing warning sits with the probe settings too", () => {
   fireEvent.change(screen.getByRole("spinbutton", { name: "Moves between gain changes" }), { target: { value: "3" } });
   const note = screen.getByText(/apart; the fit needs/i);
   expect(note.closest("section")).toHaveAccessibleName("Tune setup");
+});
+
+const recorded = {
+  id: "t1",
+  setup: {
+    stepper: "stepper_x",
+    speeds_mm_s: [50, 100],
+    pattern: { start: [60, 60], end: [160, 160] },
+    probe: { speed_mm_s: 200, high_gain: 1.4, segments_between_toggles: 6, strokes: 9 },
+    tracking_strokes: 5,
+    standstill: { rests: 4, dwell_s: 2 },
+    gates: { damping_floor: 0.03, marginal: 0.06, standstill_factor: 3 },
+    include_marginal: true,
+  },
+} as unknown as Tune;
+
+test("a tune's setup opens with the recorded values and a fixed stepper", () => {
+  render(<GuidedSetup printer={printer} tune={recorded} onSaved={() => undefined} />);
+  expect(screen.getByRole("textbox", { name: "Test speeds (mm/s)" })).toHaveValue("50, 100");
+  expect(screen.getByRole("spinbutton", { name: "Boost factor" })).toHaveValue(1.4);
+  expect(screen.getByRole("spinbutton", { name: "Damping stop limit" })).toHaveValue(0.03);
+  expect(screen.getByRole("switch", { name: "Check noise at standstill" })).toBeChecked();
+  expect(screen.getByRole("spinbutton", { name: "Noise limit (times the baseline)" })).toHaveValue(3);
+  expect(screen.getByRole("switch", { name: "Include low-damping gains" })).toBeChecked();
+  expect(screen.getByRole("combobox", { name: "Stepper" })).toBeDisabled();
+});
+
+test("Next saves the edited setup to the tune and reports it", async () => {
+  const onSaved = vi.fn();
+  render(<GuidedSetup printer={printer} tune={recorded} onSaved={onSaved} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "Test speeds (mm/s)" }), { target: { value: "50, 100, 200" } });
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+  expect(putTuneSetup).toHaveBeenCalledWith(
+    "t1",
+    expect.objectContaining({
+      stepper: "stepper_x",
+      speeds_mm_s: [50, 100, 200],
+      include_marginal: true,
+      gates: { damping_floor: 0.03, marginal: 0.06, standstill_factor: 3 },
+    }),
+  );
+});
+
+test("a read-only setup shows the values, locks every control and has no Next", () => {
+  render(<GuidedSetup printer={printer} tune={recorded} readOnly onSaved={() => undefined} />);
+  expect(screen.getByRole("textbox", { name: "Test speeds (mm/s)" })).toBeDisabled();
+  for (const field of screen.getAllByRole("spinbutton")) expect(field).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "Include low-damping gains" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
 });

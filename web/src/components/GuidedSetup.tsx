@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ApiRequestError,
   postTune,
+  putTuneSetup,
   type Pattern,
   type PrinterView,
   type StepperView,
@@ -44,24 +45,59 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : "request failed";
 }
 
-/** Creating a tune only records its setup; nothing moves until a step is confirmed. */
-export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCreated: (tune: Tune) => void }) {
+/**
+ * The setup of a tune: a form that creates one, the same form on a tune that has no step yet (saving
+ * replaces its setup), or the recorded setup read-only. Nothing moves until a step is confirmed.
+ */
+export function GuidedSetup({
+  printer,
+  tune,
+  readOnly = false,
+  onCreated,
+  onSaved,
+  actions,
+}: {
+  printer: PrinterView;
+  tune?: Tune;
+  readOnly?: boolean;
+  onCreated?: (tune: Tune) => void;
+  onSaved?: (tune: Tune) => void;
+  /** Shown in the bar before Next, for a tune that already exists. */
+  actions?: ReactNode;
+}) {
+  const recorded = tune?.setup;
   const storage = useMemo(() => browserStorage(), []);
   const limits = useMemo(() => bedLimits(printer.steppers), [printer.steppers]);
   const [stepperName, setStepperName] = useState(
-    () => (printer.steppers.find((s) => s.unusable === null) ?? printer.steppers[0]).name,
+    () => recorded?.stepper ?? (printer.steppers.find((s) => s.unusable === null) ?? printer.steppers[0]).name,
   );
   const stepper: StepperView | undefined = printer.steppers.find((s) => s.name === stepperName);
-  const [speedsText, setSpeedsText] = useState(DEFAULT_PARAMETERS.tracking.speeds_mm_s.join(", "));
-  const [typedPattern, setTypedPattern] = useState<Record<string, Pattern>>({});
-  const [trackingStrokes, setTrackingStrokes] = useState<number>(DEFAULT_PARAMETERS.tracking.strokes);
-  const [probe, setProbe] = useState(DEFAULT_PARAMETERS.probe);
-  const [probeSpeedTouched, setProbeSpeedTouched] = useState(false);
-  const [probeStrokesTouched, setProbeStrokesTouched] = useState(false);
-  const [standstill, setStandstill] = useState(DEFAULT_PARAMETERS.standstill);
-  const [gates, setGates] = useState(DEFAULT_GATES);
-  const [includeMarginal, setIncludeMarginal] = useState(false);
+  const [speedsText, setSpeedsText] = useState(
+    (recorded?.speeds_mm_s ?? DEFAULT_PARAMETERS.tracking.speeds_mm_s).join(", "),
+  );
+  const [typedPattern, setTypedPattern] = useState<Record<string, Pattern>>(() =>
+    recorded === undefined ? {} : { [recorded.stepper]: recorded.pattern },
+  );
+  const [trackingStrokes, setTrackingStrokes] = useState<number>(
+    recorded?.tracking_strokes ?? DEFAULT_PARAMETERS.tracking.strokes,
+  );
+  const [probe, setProbe] = useState(recorded?.probe ?? DEFAULT_PARAMETERS.probe);
+  const [probeSpeedTouched, setProbeSpeedTouched] = useState(recorded !== undefined);
+  const [probeStrokesTouched, setProbeStrokesTouched] = useState(recorded !== undefined);
+  const [standstill, setStandstill] = useState(recorded?.standstill ?? DEFAULT_PARAMETERS.standstill);
+  const [gates, setGates] = useState<GatesForm>(() =>
+    recorded === undefined
+      ? DEFAULT_GATES
+      : {
+          damping_floor: recorded.gates.damping_floor,
+          marginal: recorded.gates.marginal,
+          standstill_gate: recorded.gates.standstill_factor !== null,
+          standstill_factor: recorded.gates.standstill_factor ?? DEFAULT_GATES.standstill_factor,
+        },
+  );
+  const [includeMarginal, setIncludeMarginal] = useState(recorded?.include_marginal ?? false);
   const [busy, setBusy] = useState(false);
+  const frozen = busy || readOnly;
   const [error, setError] = useState<string | null>(null);
 
   const [patternModes, setPatternModes] = useState<Record<string, PatternMode>>({});
@@ -181,7 +217,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
 
   const heldByPattern = patternError !== null || spacingProblem !== null || isolation?.ok === false;
 
-  const create = () => {
+  const submit = () => {
     if (stepper === undefined || pattern === null || !speeds.ok) return;
     const body: TuneSetup = {
       stepper: stepper.name,
@@ -195,9 +231,11 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
     };
     setBusy(true);
     setError(null);
-    postTune(body)
-      .then(onCreated, (e: unknown) => setError(errorText(e)))
-      .finally(() => setBusy(false));
+    const sent =
+      tune === undefined
+        ? postTune(body).then((t) => onCreated?.(t))
+        : putTuneSetup(tune.id, body).then((t) => onSaved?.(t));
+    sent.catch((e: unknown) => setError(errorText(e))).finally(() => setBusy(false));
   };
 
   const asSetup = (parameters: Setup["parameters"], type: Setup["type"]): Setup | null =>
@@ -213,14 +251,14 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         label={label}
         value={gates[key]}
         step={step}
-        disabled={busy}
+        disabled={frozen}
         onValue={(v) => setGates((g) => ({ ...g, [key]: v }))}
       />
     </label>
   );
   const toggle = (label: string, checked: boolean, onChange: (on: boolean) => void) => (
     <label className="flex items-center gap-2 text-sm">
-      <Switch aria-label={label} checked={checked} disabled={busy} onCheckedChange={onChange} />
+      <Switch aria-label={label} checked={checked} disabled={frozen} onCheckedChange={onChange} />
       {label}
     </label>
   );
@@ -231,7 +269,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         <div className="space-y-3">
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             Stepper
-            <Select value={stepperName} disabled={busy} onValueChange={setStepperName}>
+            <Select value={stepperName} disabled={frozen || tune !== undefined} onValueChange={setStepperName}>
               <SelectTrigger aria-label="Stepper" className="w-full">
                 <SelectValue />
               </SelectTrigger>
@@ -251,7 +289,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               type="tracking"
               setup={trackingSetup}
               speedsText={speedsText}
-              disabled={busy}
+              disabled={frozen}
               onSpeedsText={setSpeedsText}
               onSetup={(s) => s.type === "tracking" && setTrackingStrokes(s.parameters.strokes)}
             />
@@ -262,7 +300,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               type="probe"
               setup={probeSetup}
               speedsText={speedsText}
-              disabled={busy}
+              disabled={frozen}
               onSpeedsText={setSpeedsText}
               onSetup={(s) => {
                 if (s.type !== "probe") return;
@@ -284,7 +322,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               type="standstill"
               setup={standstillSetup}
               speedsText={speedsText}
-              disabled={busy}
+              disabled={frozen}
               onSpeedsText={setSpeedsText}
               onSetup={(s) => s.type === "standstill" && setStandstill(s.parameters)}
             />
@@ -300,7 +338,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
                   <Switch
                     aria-label="Check noise at standstill"
                     checked={gates.standstill_gate}
-                    disabled={busy}
+                    disabled={frozen}
                     onCheckedChange={(on) => setGates((g) => ({ ...g, standstill_gate: on }))}
                   />
                 </InputGroupAddon>
@@ -309,7 +347,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
                   label="Noise limit (times the baseline)"
                   value={gates.standstill_factor}
                   step={0.5}
-                  disabled={busy || !gates.standstill_gate}
+                  disabled={frozen || !gates.standstill_gate}
                   onValue={(v) => setGates((g) => ({ ...g, standstill_factor: v }))}
                 />
                 <InputGroupAddon align="inline-end">
@@ -337,18 +375,21 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         refusal={stepper?.proposal.refusal ?? null}
         error={patternError}
         notes={[]}
-        disabled={busy}
+        disabled={frozen}
         onPattern={setPattern}
         onMode={chooseMode}
       />
-      <div className="lg:col-span-2">
-        <ActionBar blocked={[...new Set(blocked)]} message={error === null ? null : { tone: "error", text: error }}>
-          <UiButton disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={create}>
-            Next
-            <ArrowRightIcon />
-          </UiButton>
-        </ActionBar>
-      </div>
+      {!readOnly && (
+        <div className="lg:col-span-2">
+          <ActionBar blocked={[...new Set(blocked)]} message={error === null ? null : { tone: "error", text: error }}>
+            {actions}
+            <UiButton disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={submit}>
+              Next
+              <ArrowRightIcon />
+            </UiButton>
+          </ActionBar>
+        </div>
+      )}
     </div>
   );
 }

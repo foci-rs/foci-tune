@@ -664,7 +664,12 @@ export class ApiRequestError extends Error {
 
 const KILL_TIMEOUT_MS = 3000;
 
-async function request<T>(method: "GET" | "POST", path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+async function request<T>(
+  method: "GET" | "POST" | "PUT",
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+): Promise<T> {
   let response: Response;
   const controller = new AbortController();
   const timer = timeoutMs === undefined ? null : setTimeout(() => controller.abort(), timeoutMs);
@@ -721,6 +726,8 @@ export const postRevert = (session: SessionId) =>
 const tunePath = (id: TuneId, tail = "") => `/api/tunes/${encodeURIComponent(id)}${tail}`;
 
 export const postTune = (body: TuneSetup) => request<Tune>("POST", "/api/tunes", body);
+
+export const putTuneSetup = (id: TuneId, body: TuneSetup) => request<Tune>("PUT", tunePath(id, "/setup"), body);
 
 export const getTunes = () => request<TuneSummary[]>("GET", "/api/tunes");
 
