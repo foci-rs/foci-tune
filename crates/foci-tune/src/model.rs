@@ -791,6 +791,10 @@ pub struct Run {
     pub clamped_speeds: Vec<(f64, f64)>,
     /// Applied stepper speeds in script block order.
     pub applied_speeds: Vec<f64>,
+    /// Predicted duration of the stimulus script in seconds; absent in runs recorded before it
+    /// was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicted_s: Option<f64>,
     /// Stored capture size.
     pub capture: Option<CaptureInfo>,
     /// Verification outcomes.

@@ -61,6 +61,37 @@ fn probe(speed: f64, every: usize) -> RunKind {
 }
 
 #[test]
+fn the_predicted_duration_grows_with_the_strokes_at_their_feed() {
+    let four = cartesian(&tracking(&[100.0], 4)).predicted_s;
+    let eight = cartesian(&tracking(&[100.0], 8)).predicted_s;
+
+    assert!(
+        (eight - four - 4.0).abs() < 1e-9,
+        "100 mm strokes at 100 mm/s add 1 s each: {four} to {eight}"
+    );
+}
+
+#[test]
+fn the_predicted_duration_covers_a_probe_and_a_standstill_too() {
+    let probe_one = cartesian(&probe(100.0, 3)).predicted_s;
+    let two_strokes = cartesian(&RunKind::Probe {
+        speed_mm_s: 100.0,
+        high_gain: 1.3,
+        segments_between_toggles: 3,
+        strokes: 2,
+    })
+    .predicted_s;
+    assert!((two_strokes - probe_one - 1.0).abs() < 1e-9);
+
+    let rests = cartesian(&RunKind::Standstill {
+        rests: 3,
+        dwell_s: 5.0,
+    })
+    .predicted_s;
+    assert!(rests >= 15.0, "three 5 s rests take at least 15 s: {rests}");
+}
+
+#[test]
 fn cartesian_tracking_clamps_to_max_velocity_and_reports_it() {
     let st = cartesian(&tracking(&[50.0, 195.0, 600.0], 2));
     assert_eq!(st.clamped_speeds, vec![(600.0, 500.0)]);

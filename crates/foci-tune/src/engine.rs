@@ -1492,6 +1492,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
             }],
             clamped_speeds: Vec::new(),
             applied_speeds: Vec::new(),
+            predicted_s: None,
             capture: None,
             verification: Vec::new(),
             metrics: None,
@@ -1905,6 +1906,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         self.update_run(|run| {
             run.clamped_speeds = stimulus.clamped_speeds.clone();
             run.applied_speeds = stimulus.applied_speeds.clone();
+            run.predicted_s = Some(stimulus.predicted_s);
         });
         self.set_state(RunState::WritingGains);
         self.gcode("M400").await?;

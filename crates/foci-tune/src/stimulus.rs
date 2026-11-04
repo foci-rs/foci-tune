@@ -72,6 +72,9 @@ pub struct Stimulus {
     pub clamped_speeds: Vec<(f64, f64)>,
     /// Applied stepper speeds in script block order, slowest first, duplicates kept.
     pub applied_speeds: Vec<f64>,
+    /// Predicted script duration in seconds: the strokes at their sent feed, the settle dwells
+    /// and the rests. The approach to the pattern is not counted.
+    pub predicted_s: f64,
 }
 
 /// Why a stimulus could not be composed.
@@ -330,6 +333,7 @@ pub fn compose(
     let mut applied = Vec::new();
     let length = (pattern.end.0 - pattern.start.0).hypot(pattern.end.1 - pattern.start.1);
     let mut s = Script::new(stepper, pattern);
+    let predicted_s;
     match kind {
         RunKind::Tracking {
             speeds_mm_s,
@@ -359,6 +363,7 @@ pub fn compose(
                 total + SETTLE_S + strokes_s(*strokes, length, feed_mm_min(v, ratio))
             });
             within_budget(predicted, "speeds_mm_s")?;
+            predicted_s = predicted;
             s.lines.insert(1, feedforward_reset_line(stepper));
             for (i, speed) in applied.iter().enumerate() {
                 if i > 0 {
@@ -394,10 +399,9 @@ pub fn compose(
                 *segments_between_toggles,
                 speed,
             )?;
-            within_budget(
-                SETTLE_S + strokes_s(*strokes, length, feed_mm_min(speed, ratio)),
-                "speed_mm_s",
-            )?;
+            let predicted = SETTLE_S + strokes_s(*strokes, length, feed_mm_min(speed, ratio));
+            within_budget(predicted, "speed_mm_s")?;
+            predicted_s = predicted;
             applied.push(speed);
             let f = feed(speed, ratio);
             let every = *segments_between_toggles;
@@ -432,10 +436,9 @@ pub fn compose(
             let (ux, uy) = (dx / length, dy / length);
             let offsets = &REST_OFFSETS_MM[..*rests];
             let moves_mm: f64 = offsets.windows(2).map(|w| (w[1] - w[0]) * ratio).sum();
-            within_budget(
-                SETTLE_S + *rests as f64 * dwell_s + moves_mm * 60.0 / f64::from(REST_FEED),
-                "dwell_s",
-            )?;
+            let predicted =
+                SETTLE_S + *rests as f64 * dwell_s + moves_mm * 60.0 / f64::from(REST_FEED);
+            within_budget(predicted, "dwell_s")?;
             let dwell_ms = (dwell_s * 1000.0).round() as u64;
             for off in offsets {
                 let path = off * ratio;
@@ -450,6 +453,7 @@ pub fn compose(
                 gcode: s.lines.join("\n"),
                 clamped_speeds: clamped,
                 applied_speeds: applied,
+                predicted_s: predicted,
             });
         }
     }
@@ -457,6 +461,7 @@ pub fn compose(
         gcode: s.finish(),
         clamped_speeds: clamped,
         applied_speeds: applied,
+        predicted_s,
     })
 }
 

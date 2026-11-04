@@ -97,6 +97,7 @@ fn run(session: &SessionId, id: &RunId) -> Run {
         steps: Vec::new(),
         clamped_speeds: vec![(400.0, 300.0)],
         applied_speeds: vec![50.0, 195.0, 300.0],
+        predicted_s: Some(12.5),
         capture: Some(CaptureInfo {
             frames: 10,
             file_bytes: 100,
@@ -203,6 +204,19 @@ fn run_and_session_round_trip_with_format_version() {
         summaries[0].runs[0].state,
         RunState::Skipped("damping unassessable".into())
     );
+}
+
+#[test]
+fn a_run_file_without_a_predicted_time_still_loads() {
+    let sid = SessionId::generate(UNIX_EPOCH + Duration::from_secs(1_793_382_400));
+    let rid = RunId::generate(UNIX_EPOCH + Duration::from_secs(1_793_382_400));
+    let mut value = serde_json::to_value(run(&sid, &rid)).unwrap();
+    assert_eq!(value["predicted_s"], 12.5);
+    value.as_object_mut().unwrap().remove("predicted_s");
+
+    let loaded: Run = serde_json::from_value(value).unwrap();
+
+    assert_eq!(loaded.predicted_s, None);
 }
 
 #[test]

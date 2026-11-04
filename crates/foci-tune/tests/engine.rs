@@ -86,6 +86,11 @@ async fn a_speed_above_max_velocity_is_clamped_in_run_json() {
     assert_eq!(run.clamped_speeds[0].0, 1000.0);
     assert!((run.clamped_speeds[0].1 - limit).abs() < 1e-9);
     assert_eq!(run.applied_speeds.len(), 2);
+    assert!(
+        run.predicted_s.is_some_and(|s| s > 0.0),
+        "the run keeps the predicted script time: {:?}",
+        run.predicted_s
+    );
 }
 
 async fn refused(rig: &Rig) -> Precondition {
