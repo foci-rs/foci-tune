@@ -746,3 +746,14 @@ test("the rows are numbered", async () => {
   const rows = within(table).getAllByRole("row").slice(1);
   expect(rows.map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["1", "2", "3"]);
 });
+
+test("the standstill run of a step reads Measuring while it is in its motion stage", async () => {
+  current = detail("Running");
+  const standstillRunning = {
+    ...printer,
+    engine: { current: { session: "c", run: "run1", state: "moving" }, queue: [] },
+  } as unknown as PrinterView;
+  render(<GuidedTune printer={standstillRunning} />);
+  expect(await screen.findByText("Measuring")).toBeInTheDocument();
+  expect(screen.queryByText("Moving")).toBeNull();
+});

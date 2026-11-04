@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import { getSession, type EngineView, type Run, type SessionId } from "@/api";
 import { useNow } from "@/useNow";
+import type { RunType } from "@/tune";
 import { RunQueueCard } from "./RunQueueCard";
 
 /** The run in flight, when it belongs to one of the given sessions; nothing otherwise. */
 export function TuneRunCard({
   engine,
   sessions,
+  kinds,
   sweep,
 }: {
   engine: EngineView;
   sessions: SessionId[];
+  /** The kind of run each of the sessions holds. */
+  kinds?: Record<SessionId, RunType>;
   /** The whole step's runs, shown even between two runs while the step is running. */
   sweep?: { done: number; total: number };
 }) {
@@ -38,6 +42,7 @@ export function TuneRunCard({
   return (
     <RunQueueCard
       current={current}
+      kind={current === null ? undefined : kinds?.[current.session]}
       otherSession={false}
       position={null}
       steps={record?.steps ?? []}

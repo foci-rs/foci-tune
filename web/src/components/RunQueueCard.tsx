@@ -1,5 +1,5 @@
 import type { CurrentRunView, StepTime } from "@/api";
-import { RUN_STEPS, runProgress, stateLabel } from "@/tune";
+import { RUN_STEPS, runProgress, runStatusLabel, stateLabel, type RunType } from "@/tune";
 import { Card } from "./ui";
 
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -22,6 +22,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 /** The run in flight, how far along it is, and the runs waiting behind it. */
 export function RunQueueCard({
   current,
+  kind,
   otherSession,
   position,
   steps,
@@ -33,6 +34,8 @@ export function RunQueueCard({
   showQueue = true,
 }: {
   current: CurrentRunView | null;
+  /** What kind of run it is, which decides what its motion stage is called. */
+  kind?: RunType;
   otherSession: boolean;
   /** Which run of a multi-run session this is. */
   position: { run: number; of: number } | null;
@@ -62,7 +65,7 @@ export function RunQueueCard({
               {otherSession && <span className="ml-2 text-muted-foreground">in another session</span>}
             </Row>
             <Row label="Status">
-              <span className="text-emerald-300">{capital(stateLabel(current.state))}</span>
+              <span className="text-emerald-300">{capital(runStatusLabel(current.state, kind))}</span>
               {"reason" in current && <span className="ml-2 text-muted-foreground">{current.reason}</span>}
             </Row>
             {progress !== null && (

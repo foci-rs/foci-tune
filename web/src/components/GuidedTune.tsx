@@ -412,6 +412,15 @@ function AxisStep({
       <TuneRunCard
         engine={engine}
         sessions={sessions}
+        kinds={
+          lastAxis === axis && last !== null
+            ? {
+                [tune.steps[last].sessions.probe]: "probe",
+                [tune.steps[last].sessions.tracking]: "tracking",
+                [tune.steps[last].sessions.standstill]: "standstill",
+              }
+            : undefined
+        }
         sweep={tune.state === "Running" && lastAxis === axis && last !== null ? sweepProgress(tune, last) : undefined}
       />
       {indices.map((i) => (

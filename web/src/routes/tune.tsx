@@ -620,6 +620,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
           {(current !== null || queue.length > 0) && (
             <RunQueueCard
               current={current}
+              kind={currentRecord === null ? undefined : runTypeOfKind(currentRecord.request.kind)}
               otherSession={current !== null && active !== null && current.session !== active.id}
               position={position}
               steps={currentRecord?.steps ?? []}

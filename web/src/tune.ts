@@ -1086,3 +1086,8 @@ export const TERMINAL_STATES: ReadonlySet<string> = new Set([
 export function stateLabel(state: string): string {
   return state.replace(/_/g, " ");
 }
+
+/** A run's stage as the operator reads it: a standstill run holds position, so its motion stage is measuring. */
+export function runStatusLabel(state: string, type: RunType | undefined): string {
+  return state === "moving" && type === "standstill" ? "measuring" : stateLabel(state);
+}

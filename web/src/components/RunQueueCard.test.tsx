@@ -97,3 +97,22 @@ test("between two runs the sweep row is still there", () => {
   expect(screen.getByRole("progressbar", { name: "Sweep progress" })).toHaveAttribute("aria-valuenow", "10");
   expect(screen.queryByText("Queue")).toBeNull();
 });
+
+test("a standstill run reads Measuring in its motion stage, a probe run Moving", () => {
+  const { rerender } = show({ current: current("moving"), kind: "standstill" });
+  expect(screen.getByRole("region", { name: "Run queue" })).toHaveTextContent("Measuring");
+  rerender(
+    <RunQueueCard
+      current={current("moving")}
+      kind="probe"
+      otherSession={false}
+      position={null}
+      steps={[]}
+      predictedS={null}
+      nowMs={0}
+      pending={[]}
+      queued={0}
+    />,
+  );
+  expect(screen.getByRole("region", { name: "Run queue" })).toHaveTextContent("Moving");
+});

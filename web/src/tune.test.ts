@@ -26,6 +26,7 @@ import {
   suggestedProbeStrokes,
   probeToggleSpacing,
   segmentTravelMm,
+  runStatusLabel,
   toggleSpacingProblem,
   isUnknownSession,
   pickRestoreSession,
@@ -1113,5 +1114,18 @@ describe("skipReasonText", () => {
   test("any other reason is shown as it is", () => {
     expect(skipReasonText("ladder floor reached")).toBe("ladder floor reached");
     expect(skipReasonText("run.json: truncated")).toBe("run.json: truncated");
+  });
+});
+
+describe("runStatusLabel", () => {
+  test("a standstill run holds position, so its motion stage is measuring", () => {
+    expect(runStatusLabel("moving", "standstill")).toBe("measuring");
+  });
+  test("tracking and probe runs, and every other stage, keep their stage name", () => {
+    expect(runStatusLabel("moving", "tracking")).toBe("moving");
+    expect(runStatusLabel("moving", "probe")).toBe("moving");
+    expect(runStatusLabel("moving", undefined)).toBe("moving");
+    expect(runStatusLabel("verifying", "standstill")).toBe("verifying");
+    expect(runStatusLabel("writing_gains", "standstill")).toBe("writing gains");
   });
 });
