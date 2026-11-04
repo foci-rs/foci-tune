@@ -84,6 +84,22 @@ beforeEach(() => {
         bodies.push(typeof init.body === "string" ? JSON.parse(init.body) : init.body);
         return new Response("{}");
       }
+      if (path.startsWith("/api/sessions/")) {
+        return new Response(
+          JSON.stringify({
+            id: "a",
+            session: null,
+            error: null,
+            runs: [
+              {
+                id: "run1",
+                state: "moving",
+                run: { steps: [{ step: "moving", unix_ms: Date.now() }], predicted_s: 20 },
+              },
+            ],
+          }),
+        );
+      }
       if (path === "/api/tunes") {
         return new Response(
           JSON.stringify([
@@ -97,7 +113,12 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-const printer = { steppers: [], preconditions: [], moonraker: { max_velocity: 500 } } as unknown as PrinterView;
+const printer = {
+  steppers: [],
+  preconditions: [],
+  moonraker: { max_velocity: 500 },
+  engine: { current: null, queue: [] },
+} as unknown as PrinterView;
 
 test("an announced step states what will happen and only Start confirms it", async () => {
   current = detail("Announced");
@@ -341,4 +362,25 @@ test("abandoning is offered from the bar", async () => {
   render(<GuidedTune printer={printer} />);
   const bar = (await screen.findByRole("button", { name: "Abandon tune" })).closest(".sticky");
   expect(bar).not.toBeNull();
+});
+
+test("while a run of the step is in flight, the step shows its progress", async () => {
+  current = detail("Running");
+  const running = {
+    ...printer,
+    engine: { current: { session: "a", run: "run1", state: "moving" }, queue: [] },
+  } as unknown as PrinterView;
+  render(<GuidedTune printer={running} />);
+  expect(await screen.findByRole("progressbar", { name: "Run progress" })).toBeInTheDocument();
+});
+
+test("a run of another session is not shown on this tune's step", async () => {
+  current = detail("Running");
+  const other = {
+    ...printer,
+    engine: { current: { session: "zzz", run: "run9", state: "moving" }, queue: [] },
+  } as unknown as PrinterView;
+  render(<GuidedTune printer={other} />);
+  await screen.findByRole("table");
+  expect(screen.queryByRole("progressbar", { name: "Run progress" })).not.toBeInTheDocument();
 });

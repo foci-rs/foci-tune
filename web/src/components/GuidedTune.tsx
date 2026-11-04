@@ -10,6 +10,7 @@ import {
   postTuneExtension,
   postTuneRestore,
   postTuneStep,
+  type EngineView,
   type PrinterView,
   type Tune,
   type TuneChoiceBody,
@@ -44,6 +45,7 @@ import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
 import { PausePanel } from "./PausePanel";
 import { Steps } from "./Steps";
+import { TuneRunCard } from "./TuneRunCard";
 import { ActionBar } from "./WorkbenchCards";
 import { Button, Card, Field, NumberField } from "./ui";
 
@@ -118,7 +120,7 @@ export function GuidedTune({ printer }: { printer: PrinterView }) {
           }}
         />
       ) : (
-        <TuneView key={current} id={current} />
+        <TuneView key={current} id={current} engine={printer.engine} />
       )}
     </div>
   );
@@ -176,7 +178,7 @@ function useEarlierTunes(id: TuneId, enabled: boolean): Tune[] {
   return earlier;
 }
 
-function TuneView({ id }: { id: TuneId }) {
+function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
   const { detail, error, refresh } = useTune(id);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -249,6 +251,7 @@ function TuneView({ id }: { id: TuneId }) {
           busy={busy}
           plan={plan}
           earlier={earlier}
+          engine={engine}
           announced={announced}
           onChoose={(choice) => run(() => postTuneChoice(id, choice))}
           onExtend={(direction) => run(() => postTuneExtension(id, direction))}
@@ -293,6 +296,7 @@ function AxisStep({
   busy,
   plan,
   earlier,
+  engine,
   announced,
   onChoose,
   onExtend,
@@ -309,6 +313,7 @@ function AxisStep({
   busy: boolean;
   plan: TuneStepPlan | null;
   earlier: Tune[];
+  engine: EngineView;
   announced: boolean;
   onChoose: (choice: TuneChoiceBody) => void;
   onExtend: (direction: "below" | "above") => void;
@@ -322,8 +327,10 @@ function AxisStep({
   if (indices.length === 0 && !preparing) {
     return <p className="text-sm text-muted-foreground">{axisLabel(axis)} is not reached yet.</p>;
   }
+  const sessions = lastAxis === axis && last !== null ? Object.values(tune.steps[last].sessions) : [];
   return (
     <>
+      <TuneRunCard engine={engine} sessions={sessions} />
       {indices.map((i) => (
         <div key={i} className="space-y-4">
           <StepCard

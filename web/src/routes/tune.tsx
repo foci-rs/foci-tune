@@ -41,6 +41,7 @@ import { finishedMs, ResultsTable } from "@/components/ResultsTable";
 import { TracePanels, type OverlayRun } from "@/components/TracePanels";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
+import { useNow } from "@/useNow";
 import { workbench, type WorkbenchState } from "@/workbench";
 import {
   assignColors,
@@ -134,18 +135,6 @@ function useStored<K extends keyof WorkbenchState>(
     workbench[key] = value;
   }, [key, value]);
   return [value, setValue];
-}
-
-/** The current time in ms, refreshed every second while `active`. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [active]);
-  return now;
 }
 
 function errorText(e: unknown): string {
