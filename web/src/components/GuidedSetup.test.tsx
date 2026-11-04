@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView, StepperView } from "@/api";
 import { browserStorage, savePattern } from "@/tune";
@@ -72,4 +72,15 @@ test("the path starts on the default and offers a custom one", () => {
 test("the test speeds start at 100, 200 and 400 mm/s", () => {
   render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
   expect(screen.getByRole("textbox", { name: "Test speeds (mm/s)" })).toHaveValue("100, 200, 400");
+});
+
+test("the noise check switch sits in the same input group as the noise limit, before it", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  const group = screen
+    .getByRole("spinbutton", { name: "Noise limit (times the baseline)" })
+    .closest("[data-slot=input-group]") as HTMLElement;
+  expect(group).not.toBeNull();
+  const toggle = within(group).getByRole("switch", { name: "Check noise at standstill" });
+  const input = within(group).getByRole("spinbutton");
+  expect(toggle.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

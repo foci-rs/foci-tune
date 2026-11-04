@@ -11,6 +11,7 @@ import {
 import { ArrowRightIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InputGroup, InputGroupAddon, InputGroupText } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
 import { defaultProbeSpeed, gatesBody, type GatesForm } from "@/guided";
 import {
@@ -210,14 +211,14 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   const trackingSetup = asSetup({ speeds_mm_s: speeds.ok ? speeds.values : [], strokes: trackingStrokes }, "tracking");
   const standstillSetup = asSetup(standstill, "standstill");
 
-  const gateField = (label: string, key: "damping_floor" | "marginal" | "standstill_factor", step: number) => (
+  const gateField = (label: string, key: "damping_floor" | "marginal", step: number) => (
     <label className="flex flex-col text-xs text-muted-foreground">
       {label}
       <NumberField
         label={label}
         value={gates[key]}
         step={step}
-        disabled={busy || (key === "standstill_factor" && !gates.standstill_gate)}
+        disabled={busy}
         onValue={(v) => setGates((g) => ({ ...g, [key]: v }))}
       />
     </label>
@@ -291,10 +292,32 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
           <div className="flex flex-wrap items-end gap-3">
             {gateField("Damping stop limit", "damping_floor", 0.01)}
             {gateField("Low damping below", "marginal", 0.01)}
-            {toggle("Check noise at standstill", gates.standstill_gate, (on) =>
-              setGates((g) => ({ ...g, standstill_gate: on })),
-            )}
-            {gateField("Noise limit (times the baseline)", "standstill_factor", 0.5)}
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              Noise limit
+              <InputGroup className="w-48">
+                <InputGroupAddon align="inline-start">
+                  <Switch
+                    aria-label="Check noise at standstill"
+                    checked={gates.standstill_gate}
+                    disabled={busy}
+                    onCheckedChange={(on) => setGates((g) => ({ ...g, standstill_gate: on }))}
+                  />
+                </InputGroupAddon>
+                <NumberField
+                  inGroup
+                  label="Noise limit (times the baseline)"
+                  value={gates.standstill_factor}
+                  step={0.5}
+                  disabled={busy || !gates.standstill_gate}
+                  onValue={(v) => setGates((g) => ({ ...g, standstill_factor: v }))}
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupText>x baseline</InputGroupText>
+                </InputGroupAddon>
+              </InputGroup>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
             {toggle("Include low-damping gains", includeMarginal, setIncludeMarginal)}
           </div>
         </div>

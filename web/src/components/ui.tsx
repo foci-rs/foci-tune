@@ -90,6 +90,7 @@ export function NumberField({
   invalid = false,
   describedBy,
   className,
+  inGroup = false,
 }: {
   label: string;
   value: number;
@@ -100,6 +101,8 @@ export function NumberField({
   invalid?: boolean;
   describedBy?: string;
   className?: string;
+  /** Drops the field's own border so it sits inside an input group. */
+  inGroup?: boolean;
 }) {
   const [text, setText] = useState(String(value));
   const focused = useRef(false);
@@ -126,7 +129,12 @@ export function NumberField({
         const v = Number(e.target.value);
         if (e.target.value.trim() !== "" && Number.isFinite(v)) onValue(v);
       }}
-      className={cn("w-24 font-mono", className)}
+      {...(inGroup ? { "data-slot": "input-group-control" } : {})}
+      className={cn(
+        "w-24 font-mono",
+        inGroup && "flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
+        className,
+      )}
     />
   );
 }
