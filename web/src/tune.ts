@@ -896,12 +896,7 @@ export function sweepRejectionNotes(input: {
   return lines;
 }
 
-/**
- * How far the path itself may move the other motor, in mm of its belt: a whole-number rounding
- * of the coordinates. The engine's own allowance (2% of the tested motor's travel) is for the
- * belt flexing during a run, so the geometry should use none of it.
- */
-const GEOMETRY_TOLERANCE_MM = 1;
+const PATH_ROUNDING_TOLERANCE_MM = 1;
 
 export interface Isolation {
   ok: boolean;
@@ -938,11 +933,10 @@ export function patternIsolation(input: {
     : axis === "x"
       ? [Math.abs(dx), Math.abs(dy)]
       : [Math.abs(dy), Math.abs(dx)];
-  if (other <= GEOMETRY_TOLERANCE_MM) return unchecked;
+  if (other <= PATH_ROUNDING_TOLERANCE_MM) return unchecked;
 
   const sign = (v: number) => (v < 0 ? -1 : 1);
   const length = Math.hypot(dx, dy);
-  // The stroke's direction on the isolating line, and the reach per unit of half-length.
   const dir: [number, number] = corexy
     ? [sign(axis === "x" ? dx + dy : dx - dy), 0]
     : axis === "x"
