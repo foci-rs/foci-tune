@@ -92,3 +92,11 @@ test("the low-damping switch says what it changes and why it starts off", () => 
   expect(screen.getByText(/never recommended/i)).toBeInTheDocument();
   expect(screen.getByText(/close to instability/i)).toBeInTheDocument();
 });
+
+test("the step-response warning belongs to the probe settings, not the path card", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Passes" }), { target: { value: "2" } });
+  const hint = screen.getByText(/step responses/i);
+  expect(hint.closest("section")).toHaveAccessibleName("Tune setup");
+  expect(within(screen.getByRole("region", { name: "Path" })).queryByText(/step responses/i)).toBeNull();
+});

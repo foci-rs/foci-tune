@@ -32,6 +32,7 @@ import {
   type PatternMode,
   type Setup,
 } from "@/tune";
+import { EdgeHintLine } from "./EdgeHint";
 import { ParametersBlock } from "./ParametersBlock";
 import { Card, NumberField } from "./ui";
 import { ActionBar, PatternCard, type PatternNote } from "./WorkbenchCards";
@@ -170,8 +171,6 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
 
   const patternNotes: PatternNote[] = [
     ...(spacingProblem === null ? [] : [{ tone: "caution" as const, text: spacingProblem }]),
-    ...(derived?.warning != null && !probeSpeedTouched ? [{ tone: "caution" as const, text: derived.warning }] : []),
-    ...(edgeHint === null ? [] : [{ tone: edgeHint.tone, text: edgeHint.text }]),
   ];
 
   const blocked: string[] = [];
@@ -277,6 +276,12 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               }}
             />
           )}
+          {derived?.warning != null && !probeSpeedTouched && (
+            <p role="note" className="rounded border border-amber-500/60 px-2 py-1 text-xs text-amber-300">
+              {derived.warning}
+            </p>
+          )}
+          {edgeHint !== null && <EdgeHintLine hint={edgeHint} />}
           <p className="text-sm font-bold text-muted-foreground">Standstill</p>
           {standstillSetup !== null && (
             <ParametersBlock
