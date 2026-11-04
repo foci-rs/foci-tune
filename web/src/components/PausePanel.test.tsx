@@ -26,7 +26,7 @@ vi.mock("./EnsemblePlot", () => ({
 const gains = { velocity_p: 1000, velocity_i: 50, position_p: 800, position_i: 0 };
 const filters = { velocity_hz: 500, torque_hz: 1000, position_hz: 500, flux_hz: 1000 };
 
-const fit = (zeta: number, starts: number): FitOutcome => ({
+const fitted = (zeta: number, starts: number): FitOutcome => ({
   status: "fit",
   damped_hz: 90,
   zeta,
@@ -40,8 +40,8 @@ const fit = (zeta: number, starts: number): FitOutcome => ({
 
 const probeRecord = (velocity: FitOutcome, edges: number): ProbeRecord => ({
   velocity,
-  torque: fit(0.5, 3),
-  position_error: fit(0.4, 3),
+  torque: fitted(0.5, 3),
+  position_error: fitted(0.4, 3),
   edges,
   stderr_at_peak: 0.0125,
   torque_psd_peak_hz: null,
@@ -130,7 +130,7 @@ beforeEach(() => {
         probeRecord({ status: "failed", reason: "fitted damping ratio 1.70 is outside (0, 1)" }, 12),
         null,
       );
-    if (id === "p0") return channel(probeRecord(fit(0.09, 24), 41), null);
+    if (id === "p0") return channel(probeRecord(fitted(0.09, 24), 41), null);
     if (id === "s1") return channel(null, standstill([2.5, 3.5, null]));
     return channel(null, null);
   });

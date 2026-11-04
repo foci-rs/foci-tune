@@ -55,10 +55,11 @@ test("under strict mode exactly one live subscription reaches the open socket", 
   unmount();
 });
 
+function Toggle({ on }: { on: boolean }) {
+  return <FeedProvider>{on && <Consumer />}</FeedProvider>;
+}
+
 test("the last unsubscribe sends unsubscribe", () => {
-  function Toggle({ on }: { on: boolean }) {
-    return <FeedProvider>{on && <Consumer />}</FeedProvider>;
-  }
   const { rerender } = render(<Toggle on />);
   const socket = Sock.all[0]!;
   act(() => {

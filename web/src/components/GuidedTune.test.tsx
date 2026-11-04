@@ -23,7 +23,9 @@ vi.mock("@/feed", () => ({
     connected: feedConnected,
     listen: (fn: (m: FeedMessage) => void) => {
       feedListeners.add(fn);
-      feedListener = (m) => feedListeners.forEach((l) => l(m));
+      feedListener = (m) => {
+        for (const l of feedListeners) l(m);
+      };
       return () => {
         feedListeners.delete(fn);
       };
@@ -261,7 +263,7 @@ const scoredStep = () => {
   };
   const medians = { zeta: 0.1, p99_by_speed: [null, null], worst_torque_sd: 1 };
   const done = { zeta: { Assessed: 0.1 }, p99_by_speed: [3, 4], worst_torque_sd: 1 };
-  current.steps[0].rungs.forEach((r) => (r.repeat_values = [done, done]));
+  for (const r of current.steps[0].rungs) r.repeat_values = [done, done];
   current.steps[0].assessment = {
     verdicts: [none, none, none],
     medians: [medians, medians, medians],

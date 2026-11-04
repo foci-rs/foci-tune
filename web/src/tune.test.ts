@@ -619,7 +619,7 @@ describe("expected probe edges", () => {
     const byStrokes = [1, 4, 8, 16, 32, 50].map((n) => edges(400, 6, diag(100), n)!);
     const bySpan = [50, 100, 150, 200, 250].map((r) => edges(400, 6, diag(r))!);
     for (const series of [byStrokes, bySpan]) {
-      series.slice(1).forEach((v, i) => expect(v).toBeGreaterThanOrEqual(series[i]));
+      for (const [i, v] of series.slice(1).entries()) expect(v).toBeGreaterThanOrEqual(series[i]);
     }
     expect(byStrokes[5]).toBeGreaterThan(byStrokes[0]);
     expect(bySpan[4]).toBeGreaterThan(bySpan[0]);
