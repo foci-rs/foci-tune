@@ -117,3 +117,17 @@ test("the reload button says which live value it goes back to", async () => {
   fireEvent.focus(screen.getByRole("button", { name: "Use the live value" }).parentElement as HTMLElement);
   expect(await screen.findByRole("tooltip")).toHaveTextContent("Use the live value: 1000");
 });
+
+test("the ladder sits under a separator and a Sweep subtitle, formatted like the setup subtitles", () => {
+  render(card());
+  const title = screen.getByText("Sweep");
+  expect(title).toHaveClass("text-sm", "font-bold", "text-muted-foreground");
+  const section = title.closest("[data-slot=ladder]") as HTMLElement;
+  expect(section.querySelector("[data-slot=separator]")).not.toBeNull();
+  expect(within(section).getByRole("table", { name: "Ladder" })).toBeInTheDocument();
+});
+
+test("without a ladder there is no Sweep title", () => {
+  render(card({ ...DEFAULT_PREPARE, seed: 0 }));
+  expect(screen.queryByText("Sweep")).toBeNull();
+});

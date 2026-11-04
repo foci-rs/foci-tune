@@ -1,6 +1,7 @@
 import { RotateCcwIcon } from "lucide-react";
 import type { TuneAxis } from "@/api";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupText } from "@/components/ui/input-group";
+import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { axisLabel, type LadderPreview, type PrepareForm, type PrepareState } from "@/guided";
@@ -58,7 +59,9 @@ function LadderTable({ preview, corner }: { preview: LadderPreview; corner: bool
   const cell = (c: (typeof columns)[number]) =>
     `px-3 py-1 text-right font-mono ${c.left ? "text-muted-foreground" : ""} ${c.step === 0 ? "bg-muted/50 font-semibold" : ""}`;
   return (
-    <div className="mt-3 space-y-1">
+    <div data-slot="ladder" className="mt-4 space-y-3">
+      <Separator />
+      <p className="text-sm font-bold text-muted-foreground">Sweep</p>
       <div className="overflow-x-auto">
         <table aria-label="Ladder" className="text-sm">
           <tbody>
