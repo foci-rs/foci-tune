@@ -297,4 +297,5 @@ test("New run carries a plus icon", () => {
   render(bar({ mode: "run", onBack: () => {} }));
   const button = screen.getByRole("button", { name: "New run" });
   expect(button.querySelector("svg")).not.toBeNull();
+  expect(button.className).toContain("bg-primary");
 });

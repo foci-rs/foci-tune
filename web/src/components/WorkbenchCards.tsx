@@ -261,7 +261,7 @@ export function RunBar({
             </UiButton>
           )}
           {mode === "run" ? (
-            <UiButton variant="outline" onClick={onBack}>
+            <UiButton onClick={onBack}>
               <PlusIcon />
               New run
             </UiButton>
