@@ -1,10 +1,17 @@
+import { useId } from "react";
 import type { ControlSnapshot, Filters, LadderAxis } from "@/api";
-import { formatNumber, PID_GAIN_MAX_RAW, type LadderInput, type OuterGains } from "@/tune";
+import { formatNumber, PID_GAIN_MAX_RAW, type LadderFieldErrors, type LadderInput, type OuterGains } from "@/tune";
 import { cornerHz, velocityIRaw } from "@/units";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { MinusIcon, PlusIcon, RefreshCwIcon } from "lucide-react";
+import { MinusIcon, PlusIcon, RefreshCwIcon, WandSparklesIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  InputGroupText,
+} from "@/components/ui/input-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button, Card, NumberField } from "./ui";
 
@@ -111,45 +118,6 @@ function Stepper({
   );
 }
 
-function LadderValues({
-  ladder,
-  onLadder,
-  disabled,
-  defaults,
-}: {
-  ladder: LadderInput;
-  onLadder: (l: LadderInput) => void;
-  disabled: boolean;
-  defaults: number[];
-}) {
-  const axis = LADDER_AXES.find((a) => a.axis === ladder.axis);
-  return (
-    <div className="min-w-0 rounded-md border border-emerald-700/60 p-2">
-      <p className="text-[0.65rem] uppercase tracking-wider text-emerald-300">
-        {axis?.label} sweep ({axis?.unit})
-      </p>
-      <div className="flex flex-wrap items-center gap-1">
-        <Input
-          type="text"
-          aria-label={`${axis?.label} sweep values`}
-          value={ladder.text}
-          disabled={disabled}
-          onChange={(e) => onLadder({ ...ladder, text: e.target.value })}
-          placeholder="100, 120, 140"
-          className="w-56 font-mono"
-        />
-        <Button
-          disabled={disabled || defaults.length === 0}
-          onClick={() => onLadder({ ...ladder, text: defaults.join(", ") })}
-          className="px-2 py-0.5 text-xs"
-        >
-          Defaults
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function HeadingHint({ hint, last = false, children }: { hint: string; last?: boolean; children: string }) {
   return (
     <th className={last ? "py-1 text-left font-normal" : "py-1 pr-4 text-left font-normal"}>
@@ -198,26 +166,21 @@ export function GainsCard({
   live,
   pwmHz,
   disabled,
-  ladder,
-  ladderOn,
-  ladderDefaults,
+  sweptAxis,
   canLoadLive,
   onGains,
   onLoadLive,
-  onLadder,
 }: {
   gains: OuterGains | null;
   positionI: number;
   live: ControlSnapshot | undefined;
   pwmHz: number | null;
   disabled: boolean;
-  ladder: LadderInput;
-  ladderOn: boolean;
-  ladderDefaults: number[];
+  /** The gain the sweep sets, locked here; null while the sweep is off. */
+  sweptAxis: LadderAxis | null;
   canLoadLive: boolean;
   onGains: (g: OuterGains) => void;
   onLoadLive: () => void;
-  onLadder: (l: LadderInput) => void;
 }) {
   const action = <LoadLiveButton label="Load live gains" disabled={disabled || !canLoadLive} onClick={onLoadLive} />;
   if (gains === null) {
@@ -227,10 +190,7 @@ export function GainsCard({
       </Card>
     );
   }
-  const laddered = (axis: LadderAxis) => ladderOn && ladder.axis === axis;
-  const ladderField = (
-    <LadderValues ladder={ladder} onLadder={onLadder} disabled={disabled} defaults={ladderDefaults} />
-  );
+  const swept = (axis: LadderAxis) => sweptAxis === axis;
   const corner = pwmHz === null ? null : cornerHz(gains.velocity_i, pwmHz);
   return (
     <Card label="Gains" action={action}>
@@ -252,23 +212,18 @@ export function GainsCard({
               Velocity
             </th>
             <td className="py-2 pr-4">
-              {laddered("velocity_p") ? (
-                ladderField
-              ) : (
-                <Stepper
-                  label="Velocity P"
-                  value={gains.velocity_p}
-                  step={GAIN_STEPS.velocity_p}
-                  unit="raw"
-                  disabled={disabled}
-                  onValue={(v) => onGains({ ...gains, velocity_p: Math.round(v) })}
-                />
-              )}
+              <Stepper
+                label="Velocity P"
+                value={gains.velocity_p}
+                step={GAIN_STEPS.velocity_p}
+                unit="raw"
+                disabled={disabled}
+                locked={swept("velocity_p")}
+                onValue={(v) => onGains({ ...gains, velocity_p: Math.round(v) })}
+              />
             </td>
             <td className="py-2">
-              {laddered("velocity_i_corner_hz") ? (
-                ladderField
-              ) : corner === null || pwmHz === null ? (
+              {corner === null || pwmHz === null ? (
                 <p className="text-amber-400">Velocity I cannot be shown as a corner: the PWM frequency is unknown.</p>
               ) : (
                 <Stepper
@@ -278,6 +233,7 @@ export function GainsCard({
                   unit="Hz"
                   disabled={disabled}
                   hint={`Raw value ${gains.velocity_i}, as written to the config`}
+                  locked={swept("velocity_i_corner_hz")}
                   onValue={(v) => onGains({ ...gains, velocity_i: velocityIRaw(v, pwmHz) })}
                 />
               )}
@@ -288,18 +244,15 @@ export function GainsCard({
               Position
             </th>
             <td className="py-2 pr-4">
-              {laddered("position_p") ? (
-                ladderField
-              ) : (
-                <Stepper
-                  label="Position P"
-                  value={gains.position_p}
-                  step={GAIN_STEPS.position_p}
-                  unit="raw"
-                  disabled={disabled}
-                  onValue={(v) => onGains({ ...gains, position_p: Math.round(v) })}
-                />
-              )}
+              <Stepper
+                label="Position P"
+                value={gains.position_p}
+                step={GAIN_STEPS.position_p}
+                unit="raw"
+                disabled={disabled}
+                locked={swept("position_p")}
+                onValue={(v) => onGains({ ...gains, position_p: Math.round(v) })}
+              />
             </td>
             <td className="py-2">
               <Stepper
@@ -359,76 +312,154 @@ export function FiltersCard({
   );
 }
 
-/** The ladder's axis, repeats and stop-rule thresholds. */
+function LabelHint({ hint, children }: { hint: string; children: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="w-fit">
+          {children}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" align="start" className="max-w-xs">
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function FieldError({ id, message }: { id: string; message: string | null }) {
+  if (message === null) return null;
+  return (
+    <p id={id} role="alert" className="max-w-sm text-xs text-red-400">
+      {message}
+    </p>
+  );
+}
+
+/** The sweep's gain and values, runs per value and stop-rule thresholds. */
 export function LadderFields({
   ladder,
+  defaultsFor,
+  errors,
   probe,
   disabled,
   onLadder,
 }: {
   ladder: LadderInput;
+  /** The suggested values for a gain. */
+  defaultsFor: (axis: LadderAxis) => number[];
+  errors: LadderFieldErrors;
   probe: boolean;
   disabled: boolean;
   onLadder: (l: LadderInput) => void;
 }) {
+  const axis = LADDER_AXES.find((a) => a.axis === ladder.axis);
+  const id = useId();
+  const [valuesId, runsId, thresholdsId] = [`${id}-values`, `${id}-runs`, `${id}-thresholds`];
   return (
-    <div className="flex flex-wrap items-end gap-3">
-      <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-        Gain to sweep
-        <Select
-          value={ladder.axis}
-          disabled={disabled}
-          onValueChange={(axis) => onLadder({ ...ladder, axis: axis as LadderAxis, text: "" })}
-        >
-          <SelectTrigger aria-label="Gain to sweep" className="text-foreground">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {LADDER_AXES.map((a) => (
-              <SelectItem key={a.axis} value={a.axis}>
-                {a.label} ({a.unit})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+          Gain to sweep
+          <Select
+            value={ladder.axis}
+            disabled={disabled}
+            onValueChange={(next) =>
+              onLadder({ ...ladder, axis: next as LadderAxis, text: defaultsFor(next as LadderAxis).join(", ") })
+            }
+          >
+            <SelectTrigger aria-label="Gain to sweep" className="text-foreground">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LADDER_AXES.map((a) => (
+                <SelectItem key={a.axis} value={a.axis}>
+                  {a.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex w-[22rem] max-w-full flex-col gap-1 text-xs text-muted-foreground">
+          Values
+          <InputGroup className="w-full">
+            <InputGroupAddon align="inline-start">
+              <InputGroupButton
+                aria-label="Fill in suggested values"
+                disabled={disabled || defaultsFor(ladder.axis).length === 0}
+                onClick={() => onLadder({ ...ladder, text: defaultsFor(ladder.axis).join(", ") })}
+              >
+                <WandSparklesIcon />
+              </InputGroupButton>
+            </InputGroupAddon>
+            <InputGroupInput
+              type="text"
+              aria-label={`${axis?.label} sweep values`}
+              aria-invalid={errors.values !== null || undefined}
+              aria-describedby={errors.values === null ? undefined : valuesId}
+              value={ladder.text}
+              disabled={disabled}
+              onChange={(e) => onLadder({ ...ladder, text: e.target.value })}
+              placeholder="100, 120, 140"
+              className="font-mono text-foreground"
+            />
+            <InputGroupAddon align="inline-end">
+              <InputGroupText>{axis?.unit}</InputGroupText>
+            </InputGroupAddon>
+          </InputGroup>
+          <FieldError id={valuesId} message={errors.values} />
+        </div>
       </div>
-      <label className="flex flex-col text-xs text-muted-foreground">
-        Runs per value
-        <NumberField
-          label="Runs per value"
-          value={ladder.repeats}
-          disabled={disabled}
-          onValue={(v) => onLadder({ ...ladder, repeats: v })}
-          className="w-16"
-        />
-      </label>
-      <label className="flex flex-col text-xs text-muted-foreground">
-        Stop below damping
-        <NumberField
-          label="Stop below damping"
-          value={ladder.floor}
-          step={0.01}
-          disabled={disabled}
-          onValue={(v) => onLadder({ ...ladder, floor: v })}
-          className="w-20"
-        />
-      </label>
-      <label className="flex flex-col text-xs text-muted-foreground">
-        Mark as marginal below
-        <NumberField
-          label="Mark as marginal below"
-          value={ladder.marginal}
-          step={0.01}
-          disabled={disabled}
-          onValue={(v) => onLadder({ ...ladder, marginal: v })}
-          className="w-20"
-        />
-      </label>
-      {!probe && (
-        <p className="text-xs text-muted-foreground">
-          The stop rule applies to probe sweeps only; this sweep runs to completion.
-        </p>
-      )}
+      <div className="flex flex-wrap items-start gap-3">
+        <label className="flex flex-col text-xs text-muted-foreground">
+          Runs per value
+          <NumberField
+            label="Runs per value"
+            value={ladder.repeats}
+            disabled={disabled}
+            invalid={errors.runs !== null}
+            describedBy={errors.runs === null ? undefined : runsId}
+            onValue={(v) => onLadder({ ...ladder, repeats: v })}
+            className="w-16"
+          />
+          <FieldError id={runsId} message={errors.runs} />
+        </label>
+        {probe && (
+          <>
+            <label className="flex flex-col text-xs text-muted-foreground">
+              <LabelHint hint="The sweep stops after a value whose median damping comes out below this number. Lower damping means the motion rings more.">
+                Stop below damping
+              </LabelHint>
+              <NumberField
+                label="Stop below damping"
+                value={ladder.floor}
+                step={0.01}
+                disabled={disabled}
+                invalid={errors.thresholds !== null}
+                describedBy={errors.thresholds === null ? undefined : thresholdsId}
+                onValue={(v) => onLadder({ ...ladder, floor: v })}
+                className="w-20"
+              />
+            </label>
+            <label className="flex flex-col text-xs text-muted-foreground">
+              <LabelHint hint="A value whose median damping is below this number is marked as marginal in the results. The sweep carries on.">
+                Mark as marginal below
+              </LabelHint>
+              <NumberField
+                label="Mark as marginal below"
+                value={ladder.marginal}
+                step={0.01}
+                disabled={disabled}
+                invalid={errors.thresholds !== null}
+                describedBy={errors.thresholds === null ? undefined : thresholdsId}
+                onValue={(v) => onLadder({ ...ladder, marginal: v })}
+                className="w-20"
+              />
+            </label>
+            <FieldError id={thresholdsId} message={errors.thresholds} />
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -395,6 +395,8 @@ test("the manual tune page lays out Test, Pattern, Gains, Filters and Ladder abo
     expect(await screen.findByRole("region", { name })).toBeInTheDocument();
   }
   expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("switch", { name: "Gain sweep" }));
+  expect(await screen.findByRole("textbox", { name: "Velocity P sweep values" })).not.toHaveValue("");
   expect(screen.getByRole("spinbutton", { name: "Position I (raw)" })).toHaveAttribute("readonly");
   expect(
     within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem").length,

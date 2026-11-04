@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import type { Pattern } from "@/api";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import type { LadderInput } from "@/tune";
 import { LadderCard, PatternCard, RunBar } from "./WorkbenchCards";
 
@@ -80,18 +81,112 @@ test("a refused proposal explains itself and leaves only Custom", () => {
 
 const ladder: LadderInput = { axis: "velocity_p", text: "", repeats: 2, floor: 0.05, marginal: 0.08 };
 
-test("the ladder card is one line while off and shows its setup when on", () => {
+const sweepCard = (over: Partial<Parameters<typeof LadderCard>[0]> = {}) => (
+  <TooltipProvider>
+    <LadderCard
+      on
+      ladder={ladder}
+      defaultsFor={() => []}
+      errors={{ values: null, runs: null, thresholds: null }}
+      probe
+      disabled={false}
+      onToggle={() => {}}
+      onLadder={() => {}}
+      {...over}
+    />
+  </TooltipProvider>
+);
+
+test("the stop-rule thresholds are hidden unless the test is a probe", () => {
+  const { rerender } = render(sweepCard({ probe: false }));
+  expect(screen.queryByText("Stop below damping")).toBeNull();
+  expect(screen.queryByText("Mark as marginal below")).toBeNull();
+  expect(screen.queryByText(/stop rule applies/)).toBeNull();
+  rerender(sweepCard({ probe: true }));
+  expect(screen.getByText("Stop below damping")).toBeInTheDocument();
+  expect(screen.getByText("Mark as marginal below")).toBeInTheDocument();
+});
+
+test("the stop and marginal thresholds explain themselves on focus", async () => {
+  render(sweepCard());
+  fireEvent.focus(screen.getByText("Stop below damping"));
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("stops after a value whose median damping");
+  fireEvent.blur(screen.getByText("Stop below damping"));
+  fireEvent.focus(screen.getByText("Mark as marginal below"));
+  expect(await screen.findByText(/marked as marginal in the results/)).toBeInTheDocument();
+});
+
+test("the sweep card is one line while off and shows its setup when on", () => {
   const onToggle = vi.fn();
-  const { rerender } = render(
-    <LadderCard on={false} ladder={ladder} probe disabled={false} onToggle={onToggle} onLadder={() => {}} />,
-  );
+  const { rerender } = render(sweepCard({ on: false, onToggle }));
   const sw = screen.getByRole("switch", { name: "Gain sweep" });
   expect(sw).toHaveAttribute("aria-checked", "false");
   expect(screen.queryByText("Runs per value")).toBeNull();
   fireEvent.click(sw);
   expect(onToggle).toHaveBeenCalledWith(true);
-  rerender(<LadderCard on ladder={ladder} probe disabled={false} onToggle={onToggle} onLadder={() => {}} />);
+  rerender(sweepCard({ onToggle }));
   expect(screen.getByText("Runs per value")).toBeInTheDocument();
+});
+
+test("the gain dropdown has no units, and the values input shows the unit of the chosen gain", () => {
+  const { rerender } = render(sweepCard());
+  const card = screen.getByRole("region", { name: "Gain sweep" });
+  expect(within(card).getByRole("textbox", { name: "Velocity P sweep values" })).toBeInTheDocument();
+  expect(within(card).getByText("raw")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("combobox", { name: "Gain to sweep" }));
+  expect(screen.getByRole("option", { name: "Velocity I" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /\(Hz\)|\(raw\)/ })).toBeNull();
+  fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+  rerender(sweepCard({ ladder: { ...ladder, axis: "velocity_i_corner_hz" } }));
+  expect(within(screen.getByRole("region", { name: "Gain sweep" })).getByText("Hz")).toBeInTheDocument();
+});
+
+test("choosing another gain fills in that gain's default values", () => {
+  const onLadder = vi.fn();
+  render(sweepCard({ onLadder, defaultsFor: (axis) => (axis === "position_p" ? [90, 100] : [1]) }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Gain to sweep" }));
+  fireEvent.click(screen.getByRole("option", { name: "Position P" }));
+  expect(onLadder).toHaveBeenCalledWith({ ...ladder, axis: "position_p", text: "90, 100" });
+});
+
+test("validation errors show on the input they belong to", () => {
+  const { rerender } = render(sweepCard());
+  expect(screen.queryByRole("alert")).toBeNull();
+  rerender(
+    sweepCard({
+      errors: {
+        values: "Enter at least one value, separated by commas.",
+        runs: "Runs per value must be a whole number from 1 to 10.",
+        thresholds: null,
+      },
+    }),
+  );
+  const values = screen.getByRole("textbox", { name: "Velocity P sweep values" });
+  expect(values).toHaveAttribute("aria-invalid", "true");
+  expect(values).toHaveAccessibleDescription("Enter at least one value, separated by commas.");
+  const runs = screen.getByRole("spinbutton", { name: "Runs per value" });
+  expect(runs).toHaveAttribute("aria-invalid", "true");
+  expect(runs).toHaveAccessibleDescription("Runs per value must be a whole number from 1 to 10.");
+  expect(screen.getAllByRole("alert")).toHaveLength(2);
+});
+
+test("the sweep values are typed next to the dropdown, and a wand inside the input fills in the suggestions", () => {
+  const onLadder = vi.fn();
+  render(sweepCard({ onLadder, defaultsFor: () => [100, 120, 140] }));
+  const input = screen.getByRole("textbox", { name: "Velocity P sweep values" });
+  fireEvent.change(input, { target: { value: "90, 110" } });
+  expect(onLadder).toHaveBeenCalledWith({ ...ladder, text: "90, 110" });
+  const group = input.closest("[data-slot=input-group]") as HTMLElement;
+  expect(within(group).getByText("raw")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Defaults" })).toBeNull();
+  const wand = within(group).getByRole("button", { name: "Fill in suggested values" });
+  fireEvent.click(wand);
+  expect(onLadder).toHaveBeenCalledWith({ ...ladder, text: "100, 120, 140" });
+});
+
+test("the wand is disabled while there are no suggestions", () => {
+  render(sweepCard({ defaultsFor: () => [] }));
+  expect(screen.getByRole("button", { name: "Fill in suggested values" })).toBeDisabled();
 });
 
 function bar(over: Partial<Parameters<typeof RunBar>[0]> = {}) {

@@ -11,6 +11,7 @@ import {
   postRevert,
   postRun,
   type ChannelPlot,
+  type LadderAxis,
   type Pattern,
   type PrinterView,
   type RunSetup,
@@ -47,6 +48,7 @@ import {
   defaultLadderValues,
   headlineMetric,
   ladderMedians,
+  ladderFieldErrors,
   loadPattern,
   patternMode,
   nextSession,
@@ -427,7 +429,18 @@ function Workbench({ printer }: { printer: PrinterView }) {
     const base = runBody();
     return ladderOn && base !== null ? buildLadderRequest(base, ladder, pwmHz) : null;
   })();
-  if (ladderBuilt !== null && !ladderBuilt.ok) blocked.push(ladderBuilt.error);
+  const defaultsForAxis = (axis: LadderAxis): number[] =>
+    gains === null || (pwmHz === null && axis === "velocity_i_corner_hz")
+      ? []
+      : defaultLadderValues(axis, gains, pwmHz ?? 0);
+  const toggleSweep = (on: boolean) => {
+    setLadderOn(on);
+    if (on && ladder.text.trim() === "") setLadder({ ...ladder, text: defaultsForAxis(ladder.axis).join(", ") });
+  };
+  const sweepErrors = ladderFieldErrors(ladder, pwmHz, type === "probe");
+  const sweepInvalid = ladderOn && (sweepErrors.values ?? sweepErrors.runs ?? sweepErrors.thresholds) !== null;
+  if (sweepInvalid) blocked.push("Gain sweep: fix the highlighted fields");
+  else if (ladderBuilt !== null && !ladderBuilt.ok) blocked.push(ladderBuilt.error);
   const uniqueBlocked = [...new Set(blocked)];
 
   const submit = () => {
@@ -529,17 +542,10 @@ function Workbench({ printer }: { printer: PrinterView }) {
           live={channel?.control}
           pwmHz={pwmHz}
           disabled={busy}
-          ladder={ladder}
-          ladderOn={ladderOn}
-          ladderDefaults={
-            gains === null || (pwmHz === null && ladder.axis === "velocity_i_corner_hz")
-              ? []
-              : defaultLadderValues(ladder.axis, gains, pwmHz ?? 0)
-          }
+          sweptAxis={ladderOn ? ladder.axis : null}
           canLoadLive={channel !== undefined}
           onGains={setGains}
           onLoadLive={loadLiveGains}
-          onLadder={setLadder}
         />
         <FiltersCard
           filters={filters}
@@ -552,9 +558,11 @@ function Workbench({ printer }: { printer: PrinterView }) {
       <LadderCard
         on={ladderOn}
         ladder={ladder}
+        errors={sweepErrors}
+        defaultsFor={defaultsForAxis}
         probe={type === "probe"}
         disabled={busy}
-        onToggle={setLadderOn}
+        onToggle={toggleSweep}
         onLadder={setLadder}
       />
       <RunBar

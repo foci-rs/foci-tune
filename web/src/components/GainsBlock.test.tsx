@@ -2,7 +2,6 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import type { ControlSnapshot, Filters } from "@/api";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { LadderInput } from "@/tune";
 import { FiltersCard, GainsCard, RunControls } from "./GainsBlock";
 
 const live = {
@@ -11,7 +10,6 @@ const live = {
   flux_p: 310,
   flux_i: 21,
 } as ControlSnapshot;
-const ladder: LadderInput = { axis: "velocity_p", text: "", repeats: 2, floor: 0.05, marginal: 0.08 };
 const filters: Filters = { velocity_hz: 200, torque_hz: 1000, position_hz: 300, flux_hz: 1100 };
 
 function gainsCard(over: Partial<Parameters<typeof GainsCard>[0]> = {}) {
@@ -23,13 +21,10 @@ function gainsCard(over: Partial<Parameters<typeof GainsCard>[0]> = {}) {
         live={live}
         pwmHz={50_000}
         disabled={false}
-        ladder={ladder}
-        ladderOn={false}
-        ladderDefaults={[]}
+        sweptAxis={null}
         canLoadLive
         onGains={() => {}}
         onLoadLive={() => {}}
-        onLadder={() => {}}
         {...over}
       />
     </TooltipProvider>
@@ -75,6 +70,15 @@ test("Position I looks like the other gains but is locked, with no tooltip", () 
   expect(within(row).getByRole("button", { name: "Decrease Position I" })).toBeDisabled();
   fireEvent.focus(input);
   expect(screen.queryByRole("tooltip")).toBeNull();
+});
+
+test("the gain being swept is locked in the Gains card, and the others stay editable", () => {
+  render(gainsCard({ sweptAxis: "velocity_p" }));
+  const row = screen.getByRole("row", { name: /Velocity/ });
+  expect(within(row).getByRole("spinbutton", { name: "Velocity P (raw)" })).toHaveAttribute("readonly");
+  expect(within(row).getByRole("button", { name: "Increase Velocity P" })).toBeDisabled();
+  expect(within(row).getByRole("spinbutton", { name: "Velocity I (Hz)" })).not.toHaveAttribute("readonly");
+  expect(screen.queryByRole("textbox")).toBeNull();
 });
 
 test("the P and I column headings explain themselves on focus", async () => {

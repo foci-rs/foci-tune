@@ -1,7 +1,7 @@
-import type { Pattern } from "@/api";
+import type { LadderAxis, Pattern } from "@/api";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { LadderInput, Limits, PatternMode } from "@/tune";
+import type { LadderFieldErrors, LadderInput, Limits, PatternMode } from "@/tune";
 import { BedMap } from "./BedMap";
 import { LadderFields, RunControls } from "./GainsBlock";
 import { Button, Card } from "./ui";
@@ -88,6 +88,8 @@ export function PatternCard({
 export function LadderCard({
   on,
   ladder,
+  defaultsFor,
+  errors,
   probe,
   disabled,
   onToggle,
@@ -95,6 +97,8 @@ export function LadderCard({
 }: {
   on: boolean;
   ladder: LadderInput;
+  defaultsFor: (axis: LadderAxis) => number[];
+  errors: LadderFieldErrors;
   probe: boolean;
   disabled: boolean;
   onToggle: (on: boolean) => void;
@@ -106,7 +110,14 @@ export function LadderCard({
       action={<Switch aria-label="Gain sweep" checked={on} disabled={disabled} onCheckedChange={onToggle} />}
     >
       {on ? (
-        <LadderFields ladder={ladder} probe={probe} disabled={disabled} onLadder={onLadder} />
+        <LadderFields
+          ladder={ladder}
+          defaultsFor={defaultsFor}
+          errors={errors}
+          probe={probe}
+          disabled={disabled}
+          onLadder={onLadder}
+        />
       ) : (
         <p className="text-sm text-muted-foreground">Off: a run uses the gains above as they are.</p>
       )}
