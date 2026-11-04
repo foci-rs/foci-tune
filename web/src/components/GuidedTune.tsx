@@ -44,8 +44,8 @@ import {
   DEFAULT_PREPARE,
   liveControlFor,
   liveSeed,
+  plannedRuns,
   prepareState,
-  runSentence,
   type GuidedAction,
   type GuidedStepId,
   type PrepareForm,
@@ -197,7 +197,8 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const announced = detail?.state === "Announced";
-  const earlier = useEarlierTunes(id, announced);
+  const preparingNow = detail !== null && detail.state === "Ready";
+  const earlier = useEarlierTunes(id, announced || preparingNow);
   const [prepare, setPrepare] = useState<PrepareForm>(DEFAULT_PREPARE);
   const [picked, setPicked] = useState<GuidedStepId | null>(null);
   const followed = detail === null ? null : currentGuidedStep(detail);
@@ -239,6 +240,12 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const liveControl = liveControlFor(printer, detail.setup.stepper);
   const prepared = preparing && next !== null ? prepareState(next, prepare, liveControl) : null;
   const prepareBlocked = prepared?.problem ?? null;
+  const plannedCount =
+    prepared?.preview == null ? null : plannedRuns(prepared.preview, prepare.repeats, detail.setup.speeds_mm_s.length);
+  const runs =
+    plannedCount === null
+      ? undefined
+      : { count: plannedCount, seconds: expectedDurationSeconds([detail, ...earlier], plannedCount) };
   const setupEditable = actions.prepare && detail.steps.length === 0;
   const announcedStep = starting && last !== null ? detail.steps[last] : null;
   const abandon = actions.abandon ? (
@@ -299,6 +306,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           onDecide={(d) => run("decide", () => postTuneDecision(id, d))}
           prepare={prepare}
           prepared={prepared}
+          runs={runs}
           live={next !== null && liveControl !== null ? liveSeed(next, liveControl) : null}
           onPrepare={setPrepare}
         />
@@ -387,6 +395,7 @@ function AxisStep({
   onDecide,
   prepare,
   prepared,
+  runs,
   live,
   onPrepare,
 }: {
@@ -405,6 +414,7 @@ function AxisStep({
   onDecide: (d: TuneDecision) => void;
   prepare: PrepareForm;
   prepared: PrepareState | null;
+  runs: { count: number; seconds: number | null } | undefined;
   live: number | null;
   onPrepare: (form: PrepareForm) => void;
 }) {
@@ -439,7 +449,15 @@ function AxisStep({
         <AnnouncedStep tune={tune} step={tune.steps[last]} earlier={earlier} live={live} />
       )}
       {preparing && prepared !== null && (
-        <NextStepCard axis={axis} busy={busy} form={prepare} state={prepared} live={live} onForm={onPrepare} />
+        <NextStepCard
+          axis={axis}
+          busy={busy}
+          form={prepare}
+          state={prepared}
+          live={live}
+          runs={runs}
+          onForm={onPrepare}
+        />
       )}
     </>
   );
@@ -469,11 +487,7 @@ function AnnouncedStep({
       state={prepareState(step.axis, form, control)}
       live={live}
       onForm={() => undefined}
-      footer={
-        announcement === null ? null : (
-          <p className="mt-4 text-sm">{runSentence(tune.setup.stepper, announcement.runCount, seconds)}</p>
-        )
-      }
+      runs={announcement === null ? undefined : { count: announcement.runCount, seconds }}
     />
   );
 }

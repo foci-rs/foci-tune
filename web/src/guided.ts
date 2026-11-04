@@ -613,6 +613,8 @@ export interface LadderGain {
 }
 
 export interface LadderPreview {
+  /** The written value of the seed itself, whether or not the range includes it. */
+  seedRaw: number;
   gains: LadderGain[];
   left: { step: number; shown: number; reason: string }[];
 }
@@ -647,7 +649,7 @@ export function previewLadder(
       return { problem: "The seed is too small: it rounds to zero when written to the stepper. Use a larger value." };
   }
   const base = corner ? (seedRaw === 0 ? SEED_CORNER_HZ : (cornerHz(seedRaw, pwmHz) as number)) : seedRaw;
-  const preview: LadderPreview = { gains: [], left: [] };
+  const preview: LadderPreview = { seedRaw: toRaw(base), gains: [], left: [] };
   for (let step = lower; step <= upper; step += 1) {
     const shown = base * 2 ** (step / divisions);
     const raw = toRaw(shown);
@@ -686,10 +688,23 @@ export function stepSentence(step: TuneStep): string {
   return `${step.rungs.length} gains from ${from} to ${to}, around the starting gain of ${corner ? `${start.toFixed(1)} Hz` : start}, each tested ${times}.`;
 }
 
-/** What running a prepared step does, in one sentence: it moves the stepper, for so many runs and so long. */
-export function runSentence(stepper: string, runCount: number, seconds: number | null): string {
-  const duration = seconds === null ? "" : `, ${durationText(seconds)}`;
-  return `Running this step moves ${stepper}: ${runCount} test runs${duration}.`;
+/**
+ * How many runs the step makes, as the service counts them: every gain is run for each repeat as
+ * a recording at each test speed, a probe and a standstill, plus one more such set when the seed's
+ * own gain is in the ladder, for the drift check.
+ */
+export function plannedRuns(preview: LadderPreview, repeats: number, speedCount: number): number {
+  const perRepeat = speedCount + 2;
+  const seedInLadder = preview.gains.some((g) => g.raw === preview.seedRaw);
+  return preview.gains.length * repeats * perRepeat + (seedInLadder ? perRepeat : 0);
+}
+
+/** A duration for the operator: whole minutes, or seconds for a short one, or that it is not known. */
+export function durationWords(seconds: number | null): string {
+  if (seconds === null) return "not known yet";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 1) return `${Math.round(seconds)} seconds`;
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
 }
 
 /** The next-step form a prepared step was made from, so it can be adjusted from where it was. */

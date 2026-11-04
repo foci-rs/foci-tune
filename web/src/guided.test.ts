@@ -16,7 +16,8 @@ import {
   stepSentence,
   axisTitle,
   formFromStep,
-  runSentence,
+  durationWords,
+  plannedRuns,
   previewLadder,
   defaultProbeSpeed,
   expectedDurationSeconds,
@@ -957,15 +958,32 @@ describe("axisTitle", () => {
   });
 });
 
-describe("runSentence", () => {
-  test("says the machine moves, how many test runs, and how long when that is known", () => {
-    expect(runSentence("stepper_x", 110, 1500)).toBe("Running this step moves stepper_x: 110 test runs, about 25 min.");
+describe("plannedRuns", () => {
+  const preview = (range: [number, number]) => {
+    const r = previewLadder("VelocityP", 841, 50000, range[0], range[1]);
+    if ("problem" in r) throw new Error(r.problem);
+    return r;
+  };
+  test("is the gains times the repeats times a recording per speed plus a probe and a standstill", () => {
+    expect(plannedRuns(preview([1, 3]), 3, 3)).toBe(3 * 3 * 5);
   });
-  test("leaves the duration out when there is nothing to base it on", () => {
-    expect(runSentence("stepper_x", 110, null)).toBe("Running this step moves stepper_x: 110 test runs.");
+  test("adds one more set when the seed's own gain is in the ladder, for the drift check", () => {
+    expect(plannedRuns(preview([-3, 3]), 3, 3)).toBe(7 * 3 * 5 + 5);
   });
-  test("a short step is told in seconds", () => {
-    expect(runSentence("stepper_x", 5, 20)).toBe("Running this step moves stepper_x: 5 test runs, 20 s.");
+  test("matches the service's own count for the default ladder", () => {
+    expect(plannedRuns(preview([-3, 3]), 3, 3)).toBe(110);
+  });
+});
+
+describe("durationWords", () => {
+  test.each([
+    [null, "not known yet"],
+    [20, "20 seconds"],
+    [60, "1 minute"],
+    [1020, "17 minutes"],
+    [1049, "17 minutes"],
+  ])("%j reads %s", (seconds, text) => {
+    expect(durationWords(seconds)).toBe(text);
   });
 });
 
