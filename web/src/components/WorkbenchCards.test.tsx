@@ -192,44 +192,63 @@ test("the wand is disabled while there are no suggestions", () => {
 
 function bar(over: Partial<Parameters<typeof RunBar>[0]> = {}) {
   return (
-    <RunBar
-      runLabel="Run"
-      blocked={[]}
-      busy={false}
-      onRun={() => {}}
-      canRevert={false}
-      onRevert={() => {}}
-      running={false}
-      onAbort={() => {}}
-      message={null}
-      sessionNote="The first run starts a new session."
-      {...over}
-    />
+    <TooltipProvider>
+      <RunBar
+        runLabel="Run"
+        blocked={[]}
+        busy={false}
+        onRun={() => {}}
+        running={false}
+        onAbort={() => {}}
+        message={null}
+        {...over}
+      />
+    </TooltipProvider>
   );
 }
 
-test("the run bar lists every blocker and keeps Run disabled", () => {
+test("a blocked run bar shows the first reason as a sentence and counts the rest", async () => {
   const onRun = vi.fn();
-  render(bar({ blocked: ["axis y is not homed", "velocity P 99999 is outside 0..=65535"], onRun }));
+  render(bar({ blocked: ["the printer is not fully homed", "velocity P 99999 is outside 0..=32767"], onRun }));
+  expect(screen.getByText("The printer is not fully homed.")).toBeInTheDocument();
+  const more = screen.getByText("+1 more");
+  fireEvent.focus(more);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("Velocity P 99999 is outside 0..=32767.");
   const run = screen.getByRole("button", { name: "Run" });
   expect(run).toBeDisabled();
   fireEvent.click(run);
   expect(onRun).not.toHaveBeenCalled();
-  const reasons = within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem");
-  expect(reasons.map((r) => r.textContent)).toEqual(["axis y is not homed", "velocity P 99999 is outside 0..=65535"]);
 });
 
-test("Revert follows the session, Abort appears only while a run is going, and the message shows", () => {
-  const onRevert = vi.fn();
+test("every reason stays available to screen readers as a list", () => {
+  render(bar({ blocked: ["the printer is not fully homed", "no control-state frame yet"] }));
+  const reasons = within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem");
+  expect(reasons.map((r) => r.textContent)).toEqual(["the printer is not fully homed", "no control-state frame yet"]);
+});
+
+test("a disabled Run explains itself on hover or focus", async () => {
+  render(bar({ blocked: ["the printer is not fully homed"] }));
+  fireEvent.focus(screen.getByRole("button", { name: "Run" }).parentElement!);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("The printer is not fully homed.");
+});
+
+test("an unblocked Run runs once per press and shows no warning", () => {
+  const onRun = vi.fn();
+  render(bar({ onRun }));
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+  expect(onRun).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/more$/)).toBeNull();
+  expect(screen.queryByRole("list")).toBeNull();
+});
+
+test("Cancel appears only while a run is going, the message shows, and there is no session note or Restore", () => {
   const onAbort = vi.fn();
   const { rerender } = render(bar());
-  expect(screen.getByRole("button", { name: "Restore starting values" })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Cancel queued runs" })).toBeNull();
-  rerender(bar({ canRevert: true, running: true, onRevert, onAbort, message: { tone: "ok", text: "Run queued" } }));
-  fireEvent.click(screen.getByRole("button", { name: "Restore starting values" }));
+  expect(screen.queryByRole("button", { name: "Restore starting values" })).toBeNull();
+  expect(screen.queryByText(/new session/)).toBeNull();
+  rerender(bar({ running: true, onAbort, message: { tone: "ok", text: "Run queued" } }));
   fireEvent.click(screen.getByRole("button", { name: "Cancel queued runs" }));
-  expect(onRevert).toHaveBeenCalledTimes(1);
   expect(onAbort).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("status")).toHaveTextContent("Run queued");
-  expect(screen.getByText("The first run starts a new session.")).toBeInTheDocument();
 });

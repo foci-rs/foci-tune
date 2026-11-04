@@ -385,7 +385,7 @@ test("the manual tune page lays out Test, Pattern, Gains, Filters and Ladder abo
       }),
     ],
     preconditions: [
-      { stepper: "stepper_x", ok: false, failing: ["axis x is not homed"] },
+      { stepper: "stepper_x", ok: false, failing: ["the printer is not fully homed"] },
       { stepper: "stepper_y", ok: true, failing: [] },
     ],
   } as PrinterView;

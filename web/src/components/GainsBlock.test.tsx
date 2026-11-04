@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, test, vi } from "vitest";
 import type { ControlSnapshot, Filters } from "@/api";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { FiltersCard, GainsCard, RunControls } from "./GainsBlock";
+import { FiltersCard, GainsCard } from "./GainsBlock";
 
 const live = {
   torque_p: 300,
@@ -137,35 +137,6 @@ test("filters run Torque, Flux, Velocity, Position", () => {
     "Velocity filter cutoff (Hz)",
     "Position filter cutoff (Hz)",
   ]);
-});
-
-test("Run is disabled and lists every failing reason", () => {
-  const onRun = vi.fn();
-  render(
-    <RunControls
-      label="Run"
-      blocked={["axis x is not homed", "the trace interface of the stepper's board is not open"]}
-      busy={false}
-      onRun={onRun}
-    />,
-  );
-  const button = screen.getByRole("button", { name: "Run" });
-  expect(button).toBeDisabled();
-  fireEvent.click(button);
-  expect(onRun).not.toHaveBeenCalled();
-  const reasons = within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem");
-  expect(reasons.map((r) => r.textContent)).toEqual([
-    "axis x is not homed",
-    "the trace interface of the stepper's board is not open",
-  ]);
-});
-
-test("Run is enabled with no reasons and runs once per press", () => {
-  const onRun = vi.fn();
-  render(<RunControls label="Run" blocked={[]} busy={false} onRun={onRun} />);
-  fireEvent.click(screen.getByRole("button", { name: "Run" }));
-  expect(onRun).toHaveBeenCalledTimes(1);
-  expect(screen.queryByRole("list")).toBeNull();
 });
 
 test("the number inputs and the stepper buttons are the shared shadcn controls", () => {

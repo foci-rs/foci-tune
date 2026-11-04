@@ -24,6 +24,7 @@ import { ParametersBlock } from "@/components/ParametersBlock";
 import { EnsemblePlot } from "@/components/EnsemblePlot";
 import { FiltersCard, gainProblems, GainsCard, ladderAxisLabel } from "@/components/GainsBlock";
 import { EdgeHintLine } from "@/components/EdgeHint";
+import { SessionCard } from "@/components/SessionCard";
 import { TestCard } from "@/components/TestCard";
 import { LadderCard, PatternCard, RunBar, type PatternNote } from "@/components/WorkbenchCards";
 import { GuidedTune } from "@/components/GuidedTune";
@@ -570,18 +571,9 @@ function Workbench({ printer }: { printer: PrinterView }) {
         blocked={uniqueBlocked}
         busy={busy}
         onRun={submit}
-        canRevert={active !== null && !busyEngine}
-        onRevert={revert}
         running={current !== null}
         onAbort={abort}
         message={message}
-        sessionNote={
-          active !== null
-            ? `Session ${active.id}. Changing the setup starts a new session.`
-            : changedSetup
-              ? "The setup differs from the last session; the next run starts a new session."
-              : "The first run starts a new session."
-        }
       />
 
       {(current !== null || queue.length > 0) && (
@@ -619,7 +611,17 @@ function Workbench({ printer }: { printer: PrinterView }) {
       )}
 
       {sessionError !== null && <p className="text-sm text-red-400">Session: {sessionError}</p>}
-      {view !== null && view.session !== null && <SessionResults view={view} />}
+      {view !== null && view.session !== null && (
+        <>
+          <SessionCard
+            view={view}
+            canRestore={active !== null && !busyEngine}
+            onRestore={revert}
+            newSessionNext={changedSetup}
+          />
+          <SessionResults view={view} />
+        </>
+      )}
     </div>
   );
 }

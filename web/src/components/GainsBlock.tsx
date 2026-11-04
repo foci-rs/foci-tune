@@ -13,7 +13,7 @@ import {
   InputGroupText,
 } from "@/components/ui/input-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button, Card, NumberField } from "./ui";
+import { Card, NumberField } from "./ui";
 
 export const GAIN_STEPS = { velocity_p: 50, position_p: 10, corner_hz: 5, filter_hz: 50 } as const;
 
@@ -460,38 +460,6 @@ export function LadderFields({
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-/** The Run button, disabled with every reason listed while any reason holds. */
-export function RunControls({
-  label,
-  blocked,
-  busy,
-  onRun,
-}: {
-  label: string;
-  blocked: string[];
-  busy: boolean;
-  onRun: () => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <Button
-        disabled={blocked.length > 0 || busy}
-        onClick={onRun}
-        className="border-emerald-600 bg-emerald-700 text-white hover:bg-emerald-600"
-      >
-        {busy ? "Submitting" : label}
-      </Button>
-      {blocked.length > 0 && (
-        <ul aria-label="Why Run is disabled" className="list-disc pl-5 text-sm text-amber-400">
-          {blocked.map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }
