@@ -60,7 +60,7 @@ test("the raw velocity I sits in a tooltip on the Hz input, not beside it", asyn
   render(gainsCard());
   const row = screen.getByRole("row", { name: /Velocity/ });
   expect(row).not.toHaveTextContent("raw 412");
-  fireEvent.focus(within(row).getByRole("spinbutton", { name: "Velocity I corner (Hz)" }));
+  fireEvent.focus(within(row).getByRole("spinbutton", { name: "Velocity I (Hz)" }));
   expect(await screen.findByRole("tooltip")).toHaveTextContent("Raw value 412, as written to the config");
 });
 
@@ -75,6 +75,13 @@ test("Position I looks like the other gains but is locked, with no tooltip", () 
   expect(within(row).getByRole("button", { name: "Decrease Position I" })).toBeDisabled();
   fireEvent.focus(input);
   expect(screen.queryByRole("tooltip")).toBeNull();
+});
+
+test("the P and I column headings explain themselves on focus", async () => {
+  render(gainsCard());
+  const table = screen.getByRole("table", { name: "Gains" });
+  fireEvent.focus(within(within(table).getByRole("columnheader", { name: "P" })).getByText("P"));
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("Reacts to the current error");
 });
 
 test("the Gains card loads only the live gains, from an icon button without a tooltip", () => {
@@ -120,7 +127,12 @@ test("filters run Torque, Flux, Velocity, Position", () => {
     within(card)
       .getAllByRole("spinbutton")
       .map((i) => i.getAttribute("aria-label")),
-  ).toEqual(["Torque filter (Hz)", "Flux filter (Hz)", "Velocity filter (Hz)", "Position filter (Hz)"]);
+  ).toEqual([
+    "Torque filter cutoff (Hz)",
+    "Flux filter cutoff (Hz)",
+    "Velocity filter cutoff (Hz)",
+    "Position filter cutoff (Hz)",
+  ]);
 });
 
 test("Run is disabled and lists every failing reason", () => {
@@ -137,7 +149,7 @@ test("Run is disabled and lists every failing reason", () => {
   expect(button).toBeDisabled();
   fireEvent.click(button);
   expect(onRun).not.toHaveBeenCalled();
-  const reasons = within(screen.getByRole("list", { name: "Why the run cannot start" })).getAllByRole("listitem");
+  const reasons = within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem");
   expect(reasons.map((r) => r.textContent)).toEqual([
     "axis x is not homed",
     "the trace interface of the stepper's board is not open",
@@ -161,7 +173,7 @@ test("the number inputs and the stepper buttons are the shared shadcn controls",
   for (const input of screen.getAllByRole("spinbutton")) {
     expect(input).toHaveAttribute("data-slot", "input");
   }
-  const plus = screen.getByRole("button", { name: "Increase Torque filter by 50 Hz" });
+  const plus = screen.getByRole("button", { name: "Increase Torque filter cutoff by 50 Hz" });
   expect(plus).toHaveAttribute("data-slot", "button");
   expect(plus).toHaveAttribute("data-variant", "outline");
 });

@@ -28,17 +28,17 @@ export function ParametersBlock({
     return (
       <div className="flex flex-wrap gap-3">
         <label className="flex flex-col text-xs text-muted-foreground">
-          Speeds (mm/s)
+          Test speeds (mm/s)
           <Input
             type="text"
-            aria-label="Speeds (mm/s)"
+            aria-label="Test speeds (mm/s)"
             value={speedsText}
             disabled={disabled}
             onChange={(e) => onSpeedsText(e.target.value)}
             className="w-48 font-mono text-foreground"
           />
         </label>
-        {field("Strokes per speed", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}
+        {field("Passes per speed", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}
       </div>
     );
   }
@@ -47,12 +47,12 @@ export function ParametersBlock({
     return (
       <div className="flex flex-wrap gap-3">
         {field("Speed (mm/s)", p.speed_mm_s, (v) => ({ ...setup, parameters: { ...p, speed_mm_s: v } }))}
-        {field("High gain", p.high_gain, (v) => ({ ...setup, parameters: { ...p, high_gain: v } }), 0.05)}
-        {field("Segments between toggles", p.segments_between_toggles, (v) => ({
+        {field("Boost factor", p.high_gain, (v) => ({ ...setup, parameters: { ...p, high_gain: v } }), 0.05)}
+        {field("Moves between gain changes", p.segments_between_toggles, (v) => ({
           ...setup,
           parameters: { ...p, segments_between_toggles: v },
         }))}
-        {field("Strokes", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}
+        {field("Passes", p.strokes, (v) => ({ ...setup, parameters: { ...p, strokes: v } }))}
       </div>
     );
   }
@@ -60,8 +60,8 @@ export function ParametersBlock({
     const p = setup.parameters;
     return (
       <div className="flex flex-wrap gap-3">
-        {field("Rests", p.rests, (v) => ({ ...setup, parameters: { ...p, rests: v } }))}
-        {field("Dwell (s)", p.dwell_s, (v) => ({ ...setup, parameters: { ...p, dwell_s: v } }), 0.5)}
+        {field("Rest periods", p.rests, (v) => ({ ...setup, parameters: { ...p, rests: v } }))}
+        {field("Rest length (s)", p.dwell_s, (v) => ({ ...setup, parameters: { ...p, dwell_s: v } }), 0.5)}
       </div>
     );
   }

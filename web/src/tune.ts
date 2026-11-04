@@ -644,7 +644,7 @@ function edgeSuggestion(m: EdgeModel, input: ProbeEdgeInput): string {
     const travel = segmentTravelMm(input.pattern, input.kinematics) as number;
     const segments = Math.ceil((PROBE_FULL_YIELD_SPACING_S * m.spacing.speedMmS) / travel - ESTIMATE_TOLERANCE);
     const ms = (m.spacing.spacingS * 1000).toFixed(0);
-    return `Gain changes ${ms} ms apart rarely give clean step responses. Raise Segments between toggles to ${segments} or more.`;
+    return `Gain changes ${ms} ms apart rarely give clean step responses. Raise Moves between gain changes to ${segments} or more.`;
   }
   const passS = (PROBE_STEADY_EDGES * m.spacing.spacingS) / (input.strokes * m.yieldFraction) + PROBE_DEAD_S;
   const lengthMm = Math.ceil((passS * m.spacing.speedMmS * m.ratio) / 10) * 10;

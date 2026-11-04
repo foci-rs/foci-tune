@@ -42,18 +42,19 @@ export function PatternCard({
   onMode: (mode: PatternMode) => void;
 }) {
   return (
-    <Card label="Pattern">
+    <Card label="Path">
       <div className="space-y-3">
         {limits !== null && pattern !== null && (
           <BedMap
             limits={limits}
             pattern={pattern}
             proposal={proposal}
+            proposalTitle="Default path"
             disabled={disabled || mode === "default"}
             onChange={onPattern}
           >
             <Select value={mode} disabled={disabled} onValueChange={(v) => onMode(v as PatternMode)}>
-              <SelectTrigger aria-label="Pattern" className="w-full">
+              <SelectTrigger aria-label="Path" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -67,7 +68,7 @@ export function PatternCard({
         )}
         {error !== null && (
           <p role="alert" className="text-sm text-amber-400">
-            Pattern refused: {error}
+            Path refused: {error}
           </p>
         )}
         {notes.map((n) => (
@@ -76,7 +77,7 @@ export function PatternCard({
           </p>
         ))}
         {refusal !== null && (
-          <p className="text-xs text-amber-400">No default pattern: {refusal}. The pattern is yours to choose.</p>
+          <p className="text-xs text-amber-400">No default path: {refusal}. The path is yours to choose.</p>
         )}
       </div>
     </Card>
@@ -101,8 +102,8 @@ export function LadderCard({
 }) {
   return (
     <Card
-      label="Ladder"
-      action={<Switch aria-label="Ladder" checked={on} disabled={disabled} onCheckedChange={onToggle} />}
+      label="Gain sweep"
+      action={<Switch aria-label="Gain sweep" checked={on} disabled={disabled} onCheckedChange={onToggle} />}
     >
       {on ? (
         <LadderFields ladder={ladder} probe={probe} disabled={disabled} onLadder={onLadder} />
@@ -142,9 +143,9 @@ export function RunBar({
       <div className="flex flex-wrap items-start gap-3">
         <RunControls label={runLabel} blocked={blocked} busy={busy} onRun={onRun} />
         <Button disabled={!canRevert} onClick={onRevert}>
-          Revert
+          Restore starting values
         </Button>
-        {running && <Button onClick={onAbort}>Abort after this run</Button>}
+        {running && <Button onClick={onAbort}>Cancel queued runs</Button>}
       </div>
       {message !== null && (
         <p

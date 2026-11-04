@@ -11,15 +11,15 @@ import { Button, Card, NumberField } from "./ui";
 export const GAIN_STEPS = { velocity_p: 50, position_p: 10, corner_hz: 5, filter_hz: 50 } as const;
 
 const FILTERS: { key: keyof Filters; label: string }[] = [
-  { key: "torque_hz", label: "Torque filter" },
-  { key: "flux_hz", label: "Flux filter" },
-  { key: "velocity_hz", label: "Velocity filter" },
-  { key: "position_hz", label: "Position filter" },
+  { key: "torque_hz", label: "Torque filter cutoff" },
+  { key: "flux_hz", label: "Flux filter cutoff" },
+  { key: "velocity_hz", label: "Velocity filter cutoff" },
+  { key: "position_hz", label: "Position filter cutoff" },
 ];
 
 export const LADDER_AXES: { axis: LadderAxis; label: string; unit: string }[] = [
   { axis: "velocity_p", label: "Velocity P", unit: "raw" },
-  { axis: "velocity_i_corner_hz", label: "Velocity I corner", unit: "Hz" },
+  { axis: "velocity_i_corner_hz", label: "Velocity I", unit: "Hz" },
   { axis: "position_p", label: "Position P", unit: "raw" },
 ];
 
@@ -126,12 +126,12 @@ function LadderValues({
   return (
     <div className="min-w-0 rounded-md border border-emerald-700/60 p-2">
       <p className="text-[0.65rem] uppercase tracking-wider text-emerald-300">
-        {axis?.label} ladder ({axis?.unit})
+        {axis?.label} sweep ({axis?.unit})
       </p>
       <div className="flex flex-wrap items-center gap-1">
         <Input
           type="text"
-          aria-label={`${axis?.label} ladder values`}
+          aria-label={`${axis?.label} sweep values`}
           value={ladder.text}
           disabled={disabled}
           onChange={(e) => onLadder({ ...ladder, text: e.target.value })}
@@ -147,6 +147,21 @@ function LadderValues({
         </Button>
       </div>
     </div>
+  );
+}
+
+function HeadingHint({ hint, last = false, children }: { hint: string; last?: boolean; children: string }) {
+  return (
+    <th className={last ? "py-1 text-left font-normal" : "py-1 pr-4 text-left font-normal"}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0}>{children}</span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="start">
+          {hint}
+        </TooltipContent>
+      </Tooltip>
+    </th>
   );
 }
 
@@ -223,8 +238,10 @@ export function GainsCard({
         <thead className="border-b text-[0.65rem] uppercase tracking-wider text-muted-foreground">
           <tr>
             <th className="py-1 pr-4 text-left font-normal">Gains</th>
-            <th className="py-1 pr-4 text-left font-normal">P</th>
-            <th className="py-1 text-left font-normal">I</th>
+            <HeadingHint hint="Reacts to the current error.">P</HeadingHint>
+            <HeadingHint hint="Corrects slow drift." last>
+              I
+            </HeadingHint>
           </tr>
         </thead>
         <tbody>
@@ -255,7 +272,7 @@ export function GainsCard({
                 <p className="text-amber-400">Velocity I cannot be shown as a corner: the PWM frequency is unknown.</p>
               ) : (
                 <Stepper
-                  label="Velocity I corner"
+                  label="Velocity I"
                   value={Math.round(corner * 100) / 100}
                   step={GAIN_STEPS.corner_hz}
                   unit="Hz"
@@ -357,13 +374,13 @@ export function LadderFields({
   return (
     <div className="flex flex-wrap items-end gap-3">
       <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-        Axis
+        Gain to sweep
         <Select
           value={ladder.axis}
           disabled={disabled}
           onValueChange={(axis) => onLadder({ ...ladder, axis: axis as LadderAxis, text: "" })}
         >
-          <SelectTrigger aria-label="Ladder axis" className="text-foreground">
+          <SelectTrigger aria-label="Gain to sweep" className="text-foreground">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -376,9 +393,9 @@ export function LadderFields({
         </Select>
       </div>
       <label className="flex flex-col text-xs text-muted-foreground">
-        Repeats
+        Runs per value
         <NumberField
-          label="Repeats"
+          label="Runs per value"
           value={ladder.repeats}
           disabled={disabled}
           onValue={(v) => onLadder({ ...ladder, repeats: v })}
@@ -386,9 +403,9 @@ export function LadderFields({
         />
       </label>
       <label className="flex flex-col text-xs text-muted-foreground">
-        Zeta floor
+        Stop below damping
         <NumberField
-          label="Zeta floor"
+          label="Stop below damping"
           value={ladder.floor}
           step={0.01}
           disabled={disabled}
@@ -397,9 +414,9 @@ export function LadderFields({
         />
       </label>
       <label className="flex flex-col text-xs text-muted-foreground">
-        Marginal below
+        Mark as marginal below
         <NumberField
-          label="Marginal below"
+          label="Mark as marginal below"
           value={ladder.marginal}
           step={0.01}
           disabled={disabled}
@@ -409,7 +426,7 @@ export function LadderFields({
       </label>
       {!probe && (
         <p className="text-xs text-muted-foreground">
-          The stop rule applies to probe ladders only; this ladder runs to completion.
+          The stop rule applies to probe sweeps only; this sweep runs to completion.
         </p>
       )}
     </div>
@@ -438,7 +455,7 @@ export function RunControls({
         {busy ? "Submitting" : label}
       </Button>
       {blocked.length > 0 && (
-        <ul aria-label="Why the run cannot start" className="list-disc pl-5 text-sm text-amber-400">
+        <ul aria-label="Why Run is disabled" className="list-disc pl-5 text-sm text-amber-400">
           {blocked.map((reason) => (
             <li key={reason}>{reason}</li>
           ))}

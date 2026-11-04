@@ -558,7 +558,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
         onLadder={setLadder}
       />
       <RunBar
-        runLabel={ladderOn ? "Run ladder" : "Run"}
+        runLabel={ladderOn ? "Run sweep" : "Run"}
         blocked={uniqueBlocked}
         busy={busy}
         onRun={submit}
@@ -577,7 +577,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
       />
 
       {(current !== null || queue.length > 0) && (
-        <Card label="Engine">
+        <Card label="Run queue">
           <div className="flex flex-wrap items-center gap-4 text-sm">
             {current !== null && (
               <span>

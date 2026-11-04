@@ -39,7 +39,7 @@ export function TestCard({
 }) {
   const chosen = RUN_TYPES.find((t) => t.type === type);
   return (
-    <Card label="Test">
+    <Card label="Test setup">
       <div className="space-y-3">
         <Row label="Stepper">
           <Select value={stepperName} disabled={disabled} onValueChange={onStepper}>
@@ -56,9 +56,9 @@ export function TestCard({
             </SelectContent>
           </Select>
         </Row>
-        <Row label="Test type">
+        <Row label="Test">
           <Select value={type} disabled={disabled} onValueChange={(v) => onType(v as RunType)}>
-            <SelectTrigger aria-label="Test type" className="w-full">
+            <SelectTrigger aria-label="Test" className="w-full">
               <SelectValue>{chosen?.label}</SelectValue>
             </SelectTrigger>
             <SelectContent>

@@ -4,6 +4,20 @@ import { BedMap } from "./BedMap";
 
 const limits = { x: [0, 300], y: [0, 300] } as never;
 
+test("the proposal line carries the title the page gives it", () => {
+  render(
+    <BedMap
+      limits={limits}
+      pattern={{ start: [50, 60], end: [250, 70] }}
+      proposal={{ start: [60, 60], end: [240, 60] }}
+      proposalTitle="Default path"
+      onChange={() => {}}
+    />,
+  );
+  expect(screen.getByText("Default path")).toBeInTheDocument();
+  expect(screen.queryByText("Proposed pattern")).toBeNull();
+});
+
 test("the legend paragraph is gone; the margin box explains itself on hover", () => {
   render(<BedMap limits={limits} pattern={{ start: [50, 60], end: [250, 70] }} proposal={null} onChange={() => {}} />);
   expect(screen.queryByText(/Start is green/)).toBeNull();

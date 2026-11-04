@@ -26,9 +26,9 @@ function card(over: Partial<Parameters<typeof TestCard>[0]> = {}) {
 
 test("the stepper and the test type are dropdowns, one per line, above the type's settings", () => {
   render(card());
-  const region = screen.getByRole("region", { name: "Test" });
+  const region = screen.getByRole("region", { name: "Test setup" });
   expect(within(region).getByRole("combobox", { name: "Stepper" })).toHaveTextContent("stepper_x");
-  expect(within(region).getByRole("combobox", { name: "Test type" })).toHaveTextContent("Probe");
+  expect(within(region).getByRole("combobox", { name: "Test" })).toHaveTextContent("Probe");
   expect(region).toHaveTextContent("type settings");
 });
 
@@ -39,7 +39,7 @@ test("choosing another stepper or type reports it", () => {
   fireEvent.click(screen.getByRole("combobox", { name: "Stepper" }));
   fireEvent.click(screen.getByRole("option", { name: /stepper_y/ }));
   expect(onStepper).toHaveBeenCalledWith("stepper_y");
-  fireEvent.click(screen.getByRole("combobox", { name: "Test type" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Test" }));
   fireEvent.click(screen.getByRole("option", { name: /Tracking/ }));
   expect(onType).toHaveBeenCalledWith("tracking");
 });
@@ -49,6 +49,6 @@ test("unusable steppers are marked and each test type is described", () => {
   fireEvent.click(screen.getByRole("combobox", { name: "Stepper" }));
   expect(screen.getByRole("option", { name: /stepper_y.*unusable/ })).toBeInTheDocument();
   fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
-  fireEvent.click(screen.getByRole("combobox", { name: "Test type" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Test" }));
   expect(screen.getByRole("option", { name: /Standstill/ })).toHaveTextContent(/torque/i);
 });

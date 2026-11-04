@@ -34,8 +34,8 @@ test("the pattern card reports refusals and notes next to the field", () => {
       notes: [{ tone: "warning", text: "toggle spacing too short" }],
     }),
   );
-  const card = screen.getByRole("region", { name: "Pattern" });
-  expect(within(card).getByRole("alert")).toHaveTextContent("pattern leaves the bed");
+  const card = screen.getByRole("region", { name: "Path" });
+  expect(within(card).getByRole("alert")).toHaveTextContent("Path refused: pattern leaves the bed");
   expect(within(card).getByRole("note")).toHaveTextContent("toggle spacing too short");
   expect(within(card).queryByRole("button", { name: "Use the proposed pattern" })).toBeNull();
 });
@@ -43,7 +43,7 @@ test("the pattern card reports refusals and notes next to the field", () => {
 test("the dropdown sits between the map and the coordinates", () => {
   render(patternCard());
   const map = screen.getByRole("img");
-  const select = screen.getByRole("combobox", { name: "Pattern" });
+  const select = screen.getByRole("combobox", { name: "Path" });
   const start = screen.getByRole("group", { name: "Start" });
   expect(map.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(select.compareDocumentPosition(start) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -51,30 +51,30 @@ test("the dropdown sits between the map and the coordinates", () => {
 
 test("Default locks the coordinates and Custom unlocks them", () => {
   const { rerender } = render(patternCard({ mode: "default" }));
-  expect(screen.getByRole("combobox", { name: "Pattern" })).toHaveTextContent("Default");
+  expect(screen.getByRole("combobox", { name: "Path" })).toHaveTextContent("Default");
   for (const input of screen.getAllByRole("spinbutton")) expect(input).toBeDisabled();
   rerender(patternCard({ mode: "custom" }));
-  expect(screen.getByRole("combobox", { name: "Pattern" })).toHaveTextContent("Custom");
+  expect(screen.getByRole("combobox", { name: "Path" })).toHaveTextContent("Custom");
   for (const input of screen.getAllByRole("spinbutton")) expect(input).toBeEnabled();
 });
 
 test("choosing Custom or Default reports the mode", () => {
   const onMode = vi.fn();
   const { rerender } = render(patternCard({ mode: "default", onMode }));
-  fireEvent.click(screen.getByRole("combobox", { name: "Pattern" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Path" }));
   fireEvent.click(screen.getByRole("option", { name: "Custom" }));
   expect(onMode).toHaveBeenCalledWith("custom");
   rerender(patternCard({ mode: "custom", onMode }));
-  fireEvent.click(screen.getByRole("combobox", { name: "Pattern" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Path" }));
   fireEvent.click(screen.getByRole("option", { name: "Default" }));
   expect(onMode).toHaveBeenCalledWith("default");
 });
 
 test("a refused proposal explains itself and leaves only Custom", () => {
   render(patternCard({ mode: "custom", proposal: null, refusal: "bed limits need stepper_y" }));
-  const card = screen.getByRole("region", { name: "Pattern" });
-  expect(card).toHaveTextContent("No default pattern: bed limits need stepper_y");
-  fireEvent.click(screen.getByRole("combobox", { name: "Pattern" }));
+  const card = screen.getByRole("region", { name: "Path" });
+  expect(card).toHaveTextContent("No default path: bed limits need stepper_y");
+  fireEvent.click(screen.getByRole("combobox", { name: "Path" }));
   expect(screen.getByRole("option", { name: "Default" })).toHaveAttribute("aria-disabled", "true");
 });
 
@@ -85,13 +85,13 @@ test("the ladder card is one line while off and shows its setup when on", () => 
   const { rerender } = render(
     <LadderCard on={false} ladder={ladder} probe disabled={false} onToggle={onToggle} onLadder={() => {}} />,
   );
-  const sw = screen.getByRole("switch", { name: "Ladder" });
+  const sw = screen.getByRole("switch", { name: "Gain sweep" });
   expect(sw).toHaveAttribute("aria-checked", "false");
-  expect(screen.queryByText("Repeats")).toBeNull();
+  expect(screen.queryByText("Runs per value")).toBeNull();
   fireEvent.click(sw);
   expect(onToggle).toHaveBeenCalledWith(true);
   rerender(<LadderCard on ladder={ladder} probe disabled={false} onToggle={onToggle} onLadder={() => {}} />);
-  expect(screen.getByText("Repeats")).toBeInTheDocument();
+  expect(screen.getByText("Runs per value")).toBeInTheDocument();
 });
 
 function bar(over: Partial<Parameters<typeof RunBar>[0]> = {}) {
@@ -119,7 +119,7 @@ test("the run bar lists every blocker and keeps Run disabled", () => {
   expect(run).toBeDisabled();
   fireEvent.click(run);
   expect(onRun).not.toHaveBeenCalled();
-  const reasons = within(screen.getByRole("list", { name: "Why the run cannot start" })).getAllByRole("listitem");
+  const reasons = within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem");
   expect(reasons.map((r) => r.textContent)).toEqual(["axis y is not homed", "velocity P 99999 is outside 0..=65535"]);
 });
 
@@ -127,11 +127,11 @@ test("Revert follows the session, Abort appears only while a run is going, and t
   const onRevert = vi.fn();
   const onAbort = vi.fn();
   const { rerender } = render(bar());
-  expect(screen.getByRole("button", { name: "Revert" })).toBeDisabled();
-  expect(screen.queryByRole("button", { name: "Abort after this run" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Restore starting values" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Cancel queued runs" })).toBeNull();
   rerender(bar({ canRevert: true, running: true, onRevert, onAbort, message: { tone: "ok", text: "Run queued" } }));
-  fireEvent.click(screen.getByRole("button", { name: "Revert" }));
-  fireEvent.click(screen.getByRole("button", { name: "Abort after this run" }));
+  fireEvent.click(screen.getByRole("button", { name: "Restore starting values" }));
+  fireEvent.click(screen.getByRole("button", { name: "Cancel queued runs" }));
   expect(onRevert).toHaveBeenCalledTimes(1);
   expect(onAbort).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("status")).toHaveTextContent("Run queued");

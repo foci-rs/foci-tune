@@ -68,6 +68,7 @@ export function BedMap({
   limits,
   pattern,
   proposal,
+  proposalTitle = "Proposed pattern",
   disabled = false,
   onChange,
   children,
@@ -75,6 +76,8 @@ export function BedMap({
   limits: Limits;
   pattern: Pattern;
   proposal: Pattern | null;
+  /** Hover title of the proposal line. */
+  proposalTitle?: string;
   disabled?: boolean;
   onChange: (pattern: Pattern) => void;
   /** Shown between the map and the coordinate rows. */
@@ -168,7 +171,7 @@ export function BedMap({
             strokeWidth={r / 3}
             strokeDasharray={`${r} ${r / 2}`}
           >
-            <title>Proposed pattern</title>
+            <title>{proposalTitle}</title>
           </line>
         )}
         <line x1={ps[0]} y1={ps[1]} x2={pe[0]} y2={pe[1]} className="stroke-emerald-400" strokeWidth={r / 2} />

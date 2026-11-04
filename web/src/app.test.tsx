@@ -391,12 +391,12 @@ test("the manual tune page lays out Test, Pattern, Gains, Filters and Ladder abo
   } as PrinterView;
   respond(view);
   render(<RouterProvider router={createTestRouter("/tune/manual")} />);
-  for (const name of ["Test", "Pattern", "Gains", "Filters", "Ladder"]) {
+  for (const name of ["Test setup", "Path", "Gains", "Filters", "Gain sweep"]) {
     expect(await screen.findByRole("region", { name })).toBeInTheDocument();
   }
   expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
   expect(screen.getByRole("spinbutton", { name: "Position I (raw)" })).toHaveAttribute("readonly");
   expect(
-    within(screen.getByRole("list", { name: "Why the run cannot start" })).getAllByRole("listitem").length,
+    within(screen.getByRole("list", { name: "Why Run is disabled" })).getAllByRole("listitem").length,
   ).toBeGreaterThan(0);
 });

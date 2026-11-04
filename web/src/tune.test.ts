@@ -730,7 +730,7 @@ describe("probe edge hint", () => {
   test("toggles in the low-yield spacing band ask for more segments", () => {
     const h = hint(600, 6, 200)!;
     expect(h.text).toContain("about 0 step responses");
-    expect(h.text).toContain("Raise Segments between toggles to 9 or more");
+    expect(h.text).toContain("Raise Moves between gain changes to 9 or more");
   });
 
   test("no hint when the spacing rule already blocks the run", () => {
