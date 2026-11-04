@@ -58,10 +58,10 @@ test("a remembered path that moves the other motor is flagged, held back and can
   savePattern(browserStorage(), "stepper_x", { start: [50, 50], end: [250, 100] });
   render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
   expect(screen.getByText(/stepper_y would move/)).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Create tune" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Fix the path" }));
   expect(screen.queryByRole("button", { name: "Fix the path" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Create tune" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
 });
 
 test("the path starts on the default and offers a custom one", () => {

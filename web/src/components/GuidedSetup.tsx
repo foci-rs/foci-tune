@@ -8,6 +8,8 @@ import {
   type Tune,
   type TuneSetup,
 } from "@/api";
+import { ArrowRightIcon } from "lucide-react";
+import { Button as UiButton } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { defaultProbeSpeed, gatesBody, type GatesForm } from "@/guided";
@@ -30,7 +32,7 @@ import {
   type Setup,
 } from "@/tune";
 import { ParametersBlock } from "./ParametersBlock";
-import { Button, Card, NumberField } from "./ui";
+import { Card, NumberField } from "./ui";
 import { ActionBar, PatternCard, type PatternNote } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
@@ -313,9 +315,10 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
       />
       <div className="lg:col-span-2">
         <ActionBar blocked={[...new Set(blocked)]} message={error === null ? null : { tone: "error", text: error }}>
-          <Button disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={create}>
-            Create tune
-          </Button>
+          <UiButton disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={create}>
+            Next
+            <ArrowRightIcon />
+          </UiButton>
         </ActionBar>
       </div>
     </div>
