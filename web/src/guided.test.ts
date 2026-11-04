@@ -525,7 +525,7 @@ describe("a paused step", () => {
       pause: [2, "StandstillBaselineUnassessable"],
     };
     const rows = rungView(t, 0);
-    expect(rows[1].verdict).toContain("Continued anyway: the damping could not be measured");
+    expect(rows[1].verdict).toContain("Continued: damping not measured");
     expect(rows[2].verdict).toBe("Paused: noise not measured");
     expect(rows[3].verdict).toBe("Paused");
   });

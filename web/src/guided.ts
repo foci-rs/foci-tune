@@ -266,7 +266,7 @@ export function rungView(tune: Tune, step: number): RungView[] {
 
     let text: string;
     if (rung.skipped !== null) text = `Skipped: ${rung.skipped}`;
-    else if (rung.waived !== null) text = `Continued anyway: ${pauseText(rung.waived.reason)}`;
+    else if (rung.waived !== null) text = `Continued: ${shortPause(rung.waived.reason)}`;
     else if (verdict?.inadmissible != null) text = `Rejected: ${INADMISSIBLE_TEXT[verdict.inadmissible]}`;
     else if (verdict?.unscored != null) text = `Not scored: ${UNSCORED_TEXT[verdict.unscored]}`;
     else if (verdict?.marginal) text = "Low damping";
