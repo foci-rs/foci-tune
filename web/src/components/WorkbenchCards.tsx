@@ -176,7 +176,10 @@ function BarStatus({
         </p>
       )}
       {message !== null && (
-        <p role="status" className={message.tone === "ok" ? "text-emerald-400" : "text-red-400"}>
+        <p
+          role={message.tone === "ok" ? "status" : "alert"}
+          className={message.tone === "ok" ? "text-emerald-400" : "text-red-400"}
+        >
           {message.text}
         </p>
       )}

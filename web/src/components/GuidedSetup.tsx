@@ -49,6 +49,7 @@ export function GuidedSetup({
   printer,
   tune,
   readOnly = false,
+  offline = false,
   onCreated,
   onSaved,
   actions,
@@ -56,6 +57,8 @@ export function GuidedSetup({
   printer: PrinterView;
   tune?: Tune;
   readOnly?: boolean;
+  /** Set while foci-tune cannot be reached, so nothing is sent. */
+  offline?: boolean;
   onCreated?: (tune: Tune) => void;
   onSaved?: (tune: Tune) => void;
   /** Shown in the bar before Next, for a tune that already exists. */
@@ -202,6 +205,7 @@ export function GuidedSetup({
       : null;
 
   const blocked: string[] = [];
+  if (offline) blocked.push("Reconnecting to foci-tune.");
   if (stepper?.unusable) blocked.push(stepper.unusable);
   const precondition = printer.preconditions.find((p) => p.stepper === stepperName);
   if (precondition !== undefined && !precondition.ok) blocked.push(...precondition.failing);

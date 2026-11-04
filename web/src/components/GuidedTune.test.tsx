@@ -11,9 +11,11 @@ vi.mock("./GuidedSetup", () => ({
     </div>
   ),
 }));
+let feedConnected: boolean | undefined;
 let feedListener: ((m: { type: string; reason?: string }) => void) | null = null;
 vi.mock("@/feed", () => ({
   useFeed: () => ({
+    connected: feedConnected,
     listen: (fn: typeof feedListener) => {
       feedListener = fn;
       return () => undefined;
@@ -143,6 +145,7 @@ afterEach(() => {
   listed = null;
   postRefused = null;
   feedListener = null;
+  feedConnected = undefined;
   vi.unstubAllGlobals();
 });
 
@@ -513,4 +516,38 @@ test("abandoning a tune that is already over explains it instead of repeating th
   fireEvent.click(abandon);
   expect(await screen.findByText(/already abandoned, so there is nothing to abandon/i)).toBeInTheDocument();
   expect(screen.queryByText("the tune is already over")).not.toBeInTheDocument();
+});
+
+test("while foci-tune is unreachable the actions are disabled and the bar says why", async () => {
+  current = detail("Announced");
+  feedConnected = false;
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByRole("button", { name: "Start the step" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Abandon tune" })).toBeDisabled();
+  expect(screen.getAllByText("Reconnecting to foci-tune.").length).toBeGreaterThan(0);
+});
+
+test("a tune that fails to load says why and can be retried", async () => {
+  current = detail("Announced");
+  const fetchMock = vi.mocked(fetch);
+  const real = fetchMock.getMockImplementation()!;
+  let fail = true;
+  fetchMock.mockImplementation(async (path, init) => {
+    if (fail && String(path) === "/api/tunes") throw new TypeError("Failed to fetch");
+    return real(path, init);
+  });
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByText(/Can't reach foci-tune/)).toBeInTheDocument();
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("button", { name: "Start the step" })).toBeInTheDocument();
+});
+
+test("a failed action is announced as an alert", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  const abandon = await screen.findByRole("button", { name: "Abandon tune" });
+  postRefused = "klipper is not ready";
+  fireEvent.click(abandon);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Klipper isn't ready");
 });

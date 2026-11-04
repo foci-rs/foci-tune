@@ -62,7 +62,8 @@ const isOver = (s: TuneSummary) => s.state === "Done" || s.state === "Abandoned"
 
 /** The guided tune: one tune at a time, step by step, with the operator confirming every motion. */
 export function GuidedTune({ printer, initialTune }: { printer: PrinterView; initialTune?: TuneId }) {
-  const { listen } = useFeed();
+  const { listen, connected } = useFeed();
+  const offline = connected === false;
   const [summaries, setSummaries] = useState<TuneSummary[] | null>(null);
   const [selected, setSelected] = useState<TuneId | "new" | null>(initialTune ?? null);
   const [listError, setListError] = useState<string | null>(null);
@@ -86,7 +87,11 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
   );
 
   if (summaries === null) {
-    return <p className="text-sm text-muted-foreground">{listError ?? "Loading tunes"}</p>;
+    return listError === null ? (
+      <p className="text-sm text-muted-foreground">Loading tunes</p>
+    ) : (
+      <LoadFailure message={listError} onRetry={load} />
+    );
   }
   const open = summaries.filter((s) => !isOver(s));
   const current = selected ?? open[0]?.id ?? "new";
@@ -97,26 +102,35 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
       {current === "new" ? (
         <NewTune
           printer={printer}
+          offline={offline}
           onCreated={(tune) => {
             load();
             setSelected(tune.id);
           }}
         />
       ) : (
-        <TuneView key={current} id={current} printer={printer} />
+        <TuneView key={current} id={current} printer={printer} offline={offline} />
       )}
     </div>
   );
 }
 
 /** The setup form under the steps header; later steps wait for the tune, and the form keeps its values. */
-function NewTune({ printer, onCreated }: { printer: PrinterView; onCreated: (tune: Tune) => void }) {
+function NewTune({
+  printer,
+  offline,
+  onCreated,
+}: {
+  printer: PrinterView;
+  offline: boolean;
+  onCreated: (tune: Tune) => void;
+}) {
   const [step, setStep] = useState<GuidedStepId>("setup");
   return (
     <div className="space-y-4">
       <Steps steps={GUIDED_STEPS} current={step} onSelect={(next) => setStep(next as GuidedStepId)} />
       <div hidden={step !== "setup"}>
-        <GuidedSetup printer={printer} onCreated={onCreated} />
+        <GuidedSetup printer={printer} offline={offline} onCreated={onCreated} />
       </div>
       {step !== "setup" && <p className="text-sm text-muted-foreground">Create the tune first.</p>}
     </div>
@@ -175,7 +189,7 @@ function useEarlierTunes(id: TuneId, enabled: boolean): Tune[] {
   return earlier;
 }
 
-function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
+function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; offline: boolean }) {
   const { detail, error, refresh } = useTune(id);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -204,7 +218,14 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
       });
   };
 
-  if (detail === null) return <p className="text-sm text-muted-foreground">{error ?? "Loading the tune"}</p>;
+  if (detail === null) {
+    return error === null ? (
+      <p className="text-sm text-muted-foreground">Loading the tune</p>
+    ) : (
+      <LoadFailure message={error} onRetry={refresh} />
+    );
+  }
+  const frozen = busy || offline;
   const actions = availableActions(detail, detail.lock);
   const last = currentStep(detail);
   const shown = picked ?? followed ?? "setup";
@@ -216,7 +237,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
   const prepareBlocked = preparing ? prepareProblem(prepare) : null;
   const setupEditable = actions.prepare && detail.steps.length === 0;
   const abandon = actions.abandon ? (
-    <Button disabled={busy} onClick={() => run("abandon", () => postTuneAbandon(id))}>
+    <Button disabled={frozen} onClick={() => run("abandon", () => postTuneAbandon(id))}>
       Abandon tune
     </Button>
   ) : null;
@@ -236,7 +257,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
       {actions.restore && (
         <LockBanner
           detail={detail}
-          busy={busy}
+          busy={frozen}
           canRestore={actions.restore}
           onRestore={() => run("restore", () => postTuneRestore(id))}
         />
@@ -247,6 +268,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
           printer={printer}
           tune={detail}
           readOnly={!setupEditable}
+          offline={offline}
           onSaved={() => {
             refresh();
             setPicked(null);
@@ -263,7 +285,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
           lastAxis={lastAxis}
           prepareAxis={actions.prepare ? next : null}
           actions={actions}
-          busy={busy}
+          busy={frozen}
           plan={plan}
           earlier={earlier}
           engine={printer.engine}
@@ -287,12 +309,12 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
 
       {!(shown === "setup" && setupEditable) && (
         <ActionBar
-          blocked={prepareBlocked === null ? [] : [prepareBlocked]}
+          blocked={offline ? ["Reconnecting to foci-tune."] : prepareBlocked === null ? [] : [prepareBlocked]}
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
           {preparing && (
             <Button
-              disabled={busy || prepareBlocked !== null}
+              disabled={frozen || prepareBlocked !== null}
               onClick={() =>
                 run("prepare", () =>
                   postTuneStep(id, {
@@ -309,7 +331,7 @@ function TuneView({ id, printer }: { id: TuneId; printer: PrinterView }) {
           )}
           {starting && (
             <Button
-              disabled={busy}
+              disabled={frozen}
               onClick={() =>
                 run(
                   "start",
@@ -391,6 +413,15 @@ function AxisStep({
       {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} />}
       {preparing && <PrepareFormCard axis={axis} busy={busy} form={prepare} onForm={onPrepare} />}
     </>
+  );
+}
+
+function LoadFailure({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div role="alert" className="space-y-2 text-sm">
+      <p className="text-red-400">{message}</p>
+      <Button onClick={onRetry}>Try again</Button>
+    </div>
   );
 }
 

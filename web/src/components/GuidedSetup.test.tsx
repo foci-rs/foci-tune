@@ -171,3 +171,9 @@ test("saving the setup of a tune that is already over explains it", async () => 
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   expect(await screen.findByText(/already abandoned, so its setup can't change any more/i)).toBeInTheDocument();
 });
+
+test("while foci-tune is unreachable Next is disabled and the bar says why", () => {
+  render(<GuidedSetup printer={printer} offline onCreated={() => undefined} />);
+  expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+  expect(screen.getAllByText("Reconnecting to foci-tune.").length).toBeGreaterThan(0);
+});
