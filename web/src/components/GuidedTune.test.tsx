@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView, Tune, TuneDetail, TuneState } from "@/api";
 import { GuidedTune } from "./GuidedTune";
 
+vi.mock("./GuidedSetup", () => ({ GuidedSetup: () => <p>setup form</p> }));
 vi.mock("@/feed", () => ({ useFeed: () => ({ listen: () => () => undefined }) }));
 
 const gains = { velocity_p: 1000, velocity_i: 50, position_p: 800, position_i: 0 };
@@ -411,4 +412,19 @@ test("the prepare form speaks of steps, not rungs", async () => {
   expect(screen.getByRole("spinbutton", { name: "Lowest step" })).toBeInTheDocument();
   expect(screen.getByRole("spinbutton", { name: "Highest step" })).toBeInTheDocument();
   expect(screen.queryByText(/rung/i)).toBeNull();
+});
+
+test("a new tune shows the steps with Setup open, and the later ones wait for the tune", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Accept the recommendation" });
+  fireEvent.click(screen.getByRole("button", { name: /New tune/ }));
+  const steps = within(screen.getByRole("navigation", { name: "Steps" }));
+  expect(steps.getByRole("button", { name: /Setup/ })).toHaveAttribute("aria-current", "step");
+  expect(screen.getByText("setup form")).toBeInTheDocument();
+  fireEvent.click(steps.getByRole("button", { name: /Position P/ }));
+  expect(screen.getByText(/create the tune first/i)).toBeInTheDocument();
+  expect(screen.getByText("setup form")).not.toBeVisible();
+  fireEvent.click(steps.getByRole("button", { name: /Setup/ }));
+  expect(screen.getByText("setup form")).toBeVisible();
 });

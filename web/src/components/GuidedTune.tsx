@@ -115,7 +115,7 @@ export function GuidedTune({ printer }: { printer: PrinterView }) {
       </nav>
       {listError !== null && <p className="text-sm text-red-400">{listError}</p>}
       {current === "new" ? (
-        <GuidedSetup
+        <NewTune
           printer={printer}
           onCreated={(tune) => {
             load();
@@ -125,6 +125,20 @@ export function GuidedTune({ printer }: { printer: PrinterView }) {
       ) : (
         <TuneView key={current} id={current} engine={printer.engine} />
       )}
+    </div>
+  );
+}
+
+/** The setup form under the steps header; later steps wait for the tune, and the form keeps its values. */
+function NewTune({ printer, onCreated }: { printer: PrinterView; onCreated: (tune: Tune) => void }) {
+  const [step, setStep] = useState<GuidedStepId>("setup");
+  return (
+    <div className="space-y-4">
+      <Steps steps={GUIDED_STEPS} current={step} onSelect={(next) => setStep(next as GuidedStepId)} />
+      <div hidden={step !== "setup"}>
+        <GuidedSetup printer={printer} onCreated={onCreated} />
+      </div>
+      {step !== "setup" && <p className="text-sm text-muted-foreground">Create the tune first.</p>}
     </div>
   );
 }
