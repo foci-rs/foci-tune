@@ -37,7 +37,10 @@ import {
   rungView,
   stateText,
   stepSummary,
+  DEFAULT_PREPARE,
+  prepareProblem,
   type GuidedStepId,
+  type PrepareForm,
   type RungView,
 } from "@/guided";
 import { cn } from "@/lib/utils";
@@ -185,6 +188,7 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
   const [plan, setPlan] = useState<TuneStepPlan | null>(null);
   const announced = detail?.state === "Announced";
   const earlier = useEarlierTunes(id, announced);
+  const [prepare, setPrepare] = useState<PrepareForm>(DEFAULT_PREPARE);
   const [picked, setPicked] = useState<GuidedStepId | null>(null);
   const followed = detail === null ? null : currentGuidedStep(detail);
   useEffect(() => setPicked(null), [followed]);
@@ -208,6 +212,9 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
   const axis = axisOfStep(shown);
   const lastAxis = last === null ? null : detail.steps[last].axis;
   const next = nextAxis(detail);
+  const preparing = actions.prepare && next !== null && axis === next;
+  const starting = announced && actions.start && axis !== null && lastAxis === axis;
+  const prepareBlocked = preparing ? prepareProblem(prepare) : null;
 
   return (
     <div className="space-y-4">
@@ -256,13 +263,8 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
           onChoose={(choice) => run(() => postTuneChoice(id, choice))}
           onExtend={(direction) => run(() => postTuneExtension(id, direction))}
           onDecide={(d) => run(() => postTuneDecision(id, d))}
-          onStart={() =>
-            run(
-              () => postTuneConfirm(id),
-              () => setPlan(null),
-            )
-          }
-          onPrepare={(body) => run(() => postTuneStep(id, body).then(setPlan))}
+          prepare={prepare}
+          onPrepare={setPrepare}
         />
       )}
 
@@ -275,7 +277,40 @@ function TuneView({ id, engine }: { id: TuneId; engine: EngineView }) {
           <p className="text-sm text-muted-foreground">There is no result yet. It appears when the tune is done.</p>
         ))}
 
-      <ActionBar blocked={[]} message={actionError === null ? null : { tone: "error", text: actionError }}>
+      <ActionBar
+        blocked={prepareBlocked === null ? [] : [prepareBlocked]}
+        message={actionError === null ? null : { tone: "error", text: actionError }}
+      >
+        {preparing && (
+          <Button
+            disabled={busy || prepareBlocked !== null}
+            onClick={() =>
+              run(() =>
+                postTuneStep(id, {
+                  seed: prepare.typed ? { typed: prepare.seed } : "live",
+                  repeats: prepare.repeats,
+                  lower_k: prepare.lower,
+                  upper_k: prepare.upper,
+                }).then(setPlan),
+              )
+            }
+          >
+            Prepare the step
+          </Button>
+        )}
+        {starting && (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              run(
+                () => postTuneConfirm(id),
+                () => setPlan(null),
+              )
+            }
+          >
+            Start the step
+          </Button>
+        )}
         {actions.abandon && (
           <Button disabled={busy} onClick={() => run(() => postTuneAbandon(id))}>
             Abandon tune
@@ -301,7 +336,7 @@ function AxisStep({
   onChoose,
   onExtend,
   onDecide,
-  onStart,
+  prepare,
   onPrepare,
 }: {
   tune: TuneDetail;
@@ -318,8 +353,8 @@ function AxisStep({
   onChoose: (choice: TuneChoiceBody) => void;
   onExtend: (direction: "below" | "above") => void;
   onDecide: (d: TuneDecision) => void;
-  onStart: () => void;
-  onPrepare: (body: { seed: "live" | { typed: number }; repeats: number; lower_k: number; upper_k: number }) => void;
+  prepare: PrepareForm;
+  onPrepare: (form: PrepareForm) => void;
 }) {
   const indices = tune.steps.flatMap((s, i) => (s.axis === axis ? [i] : []));
   const preparing = prepareAxis === axis;
@@ -346,8 +381,8 @@ function AxisStep({
           {actions.decide && i === last && <PausePanel tune={tune} step={i} busy={busy} onDecide={onDecide} />}
         </div>
       ))}
-      {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} busy={busy} onStart={onStart} />}
-      {preparing && <PrepareCard axis={axis} busy={busy} onPrepare={onPrepare} />}
+      {announcing && <AnnouncementPanel tune={tune} plan={plan} earlier={earlier} />}
+      {preparing && <PrepareFormCard axis={axis} busy={busy} form={prepare} onForm={onPrepare} />}
     </>
   );
 }
@@ -383,28 +418,18 @@ function LockBanner({
   );
 }
 
-function PrepareCard({
+function PrepareFormCard({
   axis,
   busy,
-  onPrepare,
+  form,
+  onForm,
 }: {
   axis: NonNullable<ReturnType<typeof nextAxis>>;
   busy: boolean;
-  onPrepare: (body: { seed: "live" | { typed: number }; repeats: number; lower_k: number; upper_k: number }) => void;
+  form: PrepareForm;
+  onForm: (form: PrepareForm) => void;
 }) {
-  const [typed, setTyped] = useState(false);
-  const [seed, setSeed] = useState(0);
-  const [repeats, setRepeats] = useState(3);
-  const [lower, setLower] = useState(-3);
-  const [upper, setUpper] = useState(3);
-  const problem =
-    repeats < 1 || !Number.isInteger(repeats)
-      ? "repeats must be a whole number of at least one"
-      : !Number.isInteger(lower) || !Number.isInteger(upper) || lower > upper
-        ? "the range must be whole exponents with the lower at most the upper"
-        : typed && !(seed > 0)
-          ? "the seed must be above zero"
-          : null;
+  const set = (patch: Partial<PrepareForm>) => onForm({ ...form, ...patch });
   return (
     <Card label={`Next step: ${axisLabel(axis)}`}>
       <div className="flex flex-wrap items-end gap-3">
@@ -412,71 +437,52 @@ function PrepareCard({
           <button
             type="button"
             role="radio"
-            aria-checked={!typed}
+            aria-checked={!form.typed}
             disabled={busy}
-            onClick={() => setTyped(false)}
-            className={pillClass(!typed)}
+            onClick={() => set({ typed: false })}
+            className={pillClass(!form.typed)}
           >
             Live value
           </button>
           <button
             type="button"
             role="radio"
-            aria-checked={typed}
+            aria-checked={form.typed}
             disabled={busy}
-            onClick={() => setTyped(true)}
-            className={pillClass(typed)}
+            onClick={() => set({ typed: true })}
+            className={pillClass(form.typed)}
           >
             Typed value
           </button>
         </div>
-        {typed && (
+        {form.typed && (
           <label className="flex flex-col text-xs text-muted-foreground">
             Seed
-            <NumberField label="Seed" value={seed} disabled={busy} onValue={setSeed} />
+            <NumberField label="Seed" value={form.seed} disabled={busy} onValue={(seed) => set({ seed })} />
           </label>
         )}
         <label className="flex flex-col text-xs text-muted-foreground">
           Repeats
-          <NumberField label="Repeats" value={repeats} disabled={busy} onValue={setRepeats} />
+          <NumberField label="Repeats" value={form.repeats} disabled={busy} onValue={(repeats) => set({ repeats })} />
         </label>
         <label className="flex flex-col text-xs text-muted-foreground">
-          Lowest rung k
-          <NumberField label="Lowest rung k" value={lower} disabled={busy} onValue={setLower} />
+          Lowest step
+          <NumberField label="Lowest step" value={form.lower} disabled={busy} onValue={(lower) => set({ lower })} />
         </label>
         <label className="flex flex-col text-xs text-muted-foreground">
-          Highest rung k
-          <NumberField label="Highest rung k" value={upper} disabled={busy} onValue={setUpper} />
+          Highest step
+          <NumberField label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
         </label>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Rungs are the seed times 2^(k/3). Preparing a step announces it; nothing moves until you start it.
+        Each step changes the gain by about 26% from the seed, so -3 is half the seed and 3 is double it. Preparing a
+        step announces it; nothing moves until you start it.
       </p>
-      {problem !== null && <p className="mt-1 text-xs text-amber-400">{problem}</p>}
-      <Button
-        className="mt-3"
-        disabled={busy || problem !== null}
-        onClick={() => onPrepare({ seed: typed ? { typed: seed } : "live", repeats, lower_k: lower, upper_k: upper })}
-      >
-        Prepare the step
-      </Button>
     </Card>
   );
 }
 
-function AnnouncementPanel({
-  tune,
-  plan,
-  earlier,
-  busy,
-  onStart,
-}: {
-  tune: Tune;
-  plan: TuneStepPlan | null;
-  earlier: Tune[];
-  busy: boolean;
-  onStart: () => void;
-}) {
+function AnnouncementPanel({ tune, plan, earlier }: { tune: Tune; plan: TuneStepPlan | null; earlier: Tune[] }) {
   const a = announcementOf(tune);
   if (a === null) return null;
   const duration = durationText(expectedDurationSeconds([tune, ...earlier], a.runCount));
@@ -496,9 +502,6 @@ function AnnouncementPanel({
       </dl>
       <p className="mt-3 text-sm font-medium">The machine will move once you start this step.</p>
       {plan !== null && <p className="mt-1 text-xs text-muted-foreground">{plan.announcement}</p>}
-      <Button className="mt-3" disabled={busy} onClick={onStart}>
-        Start the step
-      </Button>
     </Card>
   );
 }

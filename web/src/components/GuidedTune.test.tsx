@@ -384,3 +384,31 @@ test("a run of another session is not shown on this tune's step", async () => {
   await screen.findByRole("table");
   expect(screen.queryByRole("progressbar", { name: "Run progress" })).not.toBeInTheDocument();
 });
+
+test("the bar prepares the step, and says why it cannot while the form is wrong", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  const prepare = await screen.findByRole("button", { name: "Prepare the step" });
+  expect(prepare.closest(".sticky")).not.toBeNull();
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Repeats" }), { target: { value: "0" } });
+  expect(prepare).toBeDisabled();
+  expect(
+    within(prepare.closest(".sticky") as HTMLElement).getAllByText(/repeat at least once/i).length,
+  ).toBeGreaterThan(0);
+});
+
+test("an announced step is started from the bar", async () => {
+  current = detail("Announced");
+  render(<GuidedTune printer={printer} />);
+  const start = await screen.findByRole("button", { name: "Start the step" });
+  expect(start.closest(".sticky")).not.toBeNull();
+});
+
+test("the prepare form speaks of steps, not rungs", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Prepare the step" });
+  expect(screen.getByRole("spinbutton", { name: "Lowest step" })).toBeInTheDocument();
+  expect(screen.getByRole("spinbutton", { name: "Highest step" })).toBeInTheDocument();
+  expect(screen.queryByText(/rung/i)).toBeNull();
+});

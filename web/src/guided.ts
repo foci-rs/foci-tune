@@ -481,3 +481,24 @@ export function currentGuidedStep(tune: Tune): GuidedStepId {
   }
   return last === undefined ? "setup" : AXIS_STEP[last.axis];
 }
+
+export interface PrepareForm {
+  typed: boolean;
+  seed: number;
+  repeats: number;
+  lower: number;
+  upper: number;
+}
+
+export const DEFAULT_PREPARE: PrepareForm = { typed: false, seed: 0, repeats: 3, lower: -3, upper: 3 };
+
+/** Why the step cannot be prepared from this form, as a sentence; null when it can. */
+export function prepareProblem(form: PrepareForm): string | null {
+  if (form.repeats < 1 || !Number.isInteger(form.repeats))
+    return "Each gain must repeat at least once, in whole numbers.";
+  if (!Number.isInteger(form.lower) || !Number.isInteger(form.upper) || form.lower > form.upper) {
+    return "The lowest and highest step must be whole numbers, lowest first.";
+  }
+  if (form.typed && !(form.seed > 0)) return "The seed must be above zero.";
+  return null;
+}
