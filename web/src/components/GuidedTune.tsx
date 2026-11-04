@@ -59,6 +59,7 @@ import { GuidedSetup } from "./GuidedSetup";
 import { ChooseGain } from "./ChooseGain";
 import { NextStepCard } from "./NextStepCard";
 import { PausePanel } from "./PausePanel";
+import { ResultPlaceholder } from "./ResultPlaceholder";
 import { Steps } from "./Steps";
 import { SweepResultsTable } from "./SweepResultsTable";
 import { TuneRunCard } from "./TuneRunCard";
@@ -286,7 +287,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
             <pre className="overflow-x-auto font-mono text-xs">{detail.config_block}</pre>
           </Card>
         ) : (
-          <p className="text-sm text-muted-foreground">There is no result yet. It appears when the tune is done.</p>
+          <ResultPlaceholder chosen={detail.steps.filter((s) => s.chosen !== null).length} />
         ))}
 
       {!(shown === "setup" && setupEditable) && (

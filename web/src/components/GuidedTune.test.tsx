@@ -502,7 +502,12 @@ test("the result step explains that there is no result before the tune is done",
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("button", { name: "More ways to choose" });
   fireEvent.click(screen.getByRole("button", { name: /Result/ }));
-  expect(screen.getByText(/no result yet/i)).toBeInTheDocument();
+  expect(
+    screen.getByText("Choose a gain for each of the three steps, and the result appears here."),
+  ).toBeInTheDocument();
+  expect(screen.getByText("0 of 3 gains chosen.")).toBeInTheDocument();
+  expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThan(0);
+  expect(screen.queryByText(/no result yet/i)).toBeNull();
 });
 
 test("abandoning is offered from the bar", async () => {
@@ -627,7 +632,9 @@ test("a finished tune opened by link shows its steps and result", async () => {
   current = detail("Done");
   listed = [{ id: "t1", state: "Done" }];
   render(<GuidedTune printer={printer} initialTune="t1" />);
-  expect(await screen.findByText(/no result yet/i)).toBeInTheDocument();
+  expect(
+    await screen.findByText("Choose a gain for each of the three steps, and the result appears here."),
+  ).toBeInTheDocument();
 });
 
 test("before any step the Setup step is the editable form, with Abandon beside Next", async () => {
@@ -896,4 +903,14 @@ test("the third step is called Velocity I in the header and on its card", async 
   expect(steps.getByRole("button", { name: /Velocity I$/ })).toBeInTheDocument();
   expect(steps.queryByText(/corner/i)).toBeNull();
   expect(await screen.findByRole("region", { name: "Velocity I sweep" })).toBeInTheDocument();
+});
+
+test("the waiting result counts the gains chosen so far", async () => {
+  current = detail("Ready");
+  current.steps[0].chosen = 1000;
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(
+    within(await screen.findByRole("navigation", { name: "Steps" })).getByRole("button", { name: /Result/ }),
+  );
+  expect(screen.getByText("1 of 3 gains chosen.")).toBeInTheDocument();
 });
