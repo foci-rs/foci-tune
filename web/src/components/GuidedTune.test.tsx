@@ -15,13 +15,18 @@ vi.mock("./GuidedSetup", () => ({
   ),
 }));
 let feedConnected: boolean | undefined;
-let feedListener: ((m: { type: string; reason?: string }) => void) | null = null;
+type FeedMessage = { type: string; reason?: string };
+const feedListeners = new Set<(m: FeedMessage) => void>();
+let feedListener: ((m: FeedMessage) => void) | null = null;
 vi.mock("@/feed", () => ({
   useFeed: () => ({
     connected: feedConnected,
-    listen: (fn: typeof feedListener) => {
-      feedListener = fn;
-      return () => undefined;
+    listen: (fn: (m: FeedMessage) => void) => {
+      feedListeners.add(fn);
+      feedListener = (m) => feedListeners.forEach((l) => l(m));
+      return () => {
+        feedListeners.delete(fn);
+      };
     },
   }),
 }));
@@ -933,4 +938,34 @@ test("the waiting checklist is one line, its items separated by midpoints", asyn
   const items = within(list).getAllByRole("listitem");
   expect(items[0].className).toContain("after:content-['·']");
   expect(items[2].className).toContain("last:after:content-none");
+});
+
+test("a tune that finishes stays on screen, at its Result step, instead of falling back to a new tune", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "More ways to choose" });
+  current = detail("Done");
+  listed = [{ id: "t1", state: "Done" }];
+  feedListener?.({ type: "tune", tune: { id: "t1" } } as never);
+  expect(await screen.findByRole("list", { name: "Gains chosen" })).toBeInTheDocument();
+  expect(screen.queryByText("setup form new")).toBeNull();
+  const steps = within(screen.getByRole("navigation", { name: "Steps" }));
+  expect(steps.getByRole("button", { name: /Result/ })).toHaveAttribute("aria-current", "step");
+});
+
+test("a finished tune's bar offers New tune, which opens the setup", async () => {
+  current = detail("Done");
+  listed = [{ id: "t1", state: "Done" }];
+  render(<GuidedTune printer={printer} initialTune="t1" />);
+  const next = await screen.findByRole("button", { name: "New tune" });
+  expect(within(next.closest(".sticky") as HTMLElement).queryByRole("button", { name: "Abandon tune" })).toBeNull();
+  fireEvent.click(next);
+  expect(await screen.findByText("setup form new")).toBeInTheDocument();
+});
+
+test("a tune in progress has no New tune button", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "More ways to choose" });
+  expect(screen.queryByRole("button", { name: "New tune" })).toBeNull();
 });

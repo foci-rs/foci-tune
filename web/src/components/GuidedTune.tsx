@@ -17,7 +17,7 @@ import {
   type TuneId,
   type TuneSummary,
 } from "@/api";
-import { ArrowRightIcon, PlayIcon } from "lucide-react";
+import { ArrowRightIcon, PlayIcon, PlusIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
@@ -95,6 +95,11 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
     [listen, load],
   );
 
+  const firstOpen = summaries?.find((s) => !isOver(s))?.id ?? null;
+  useEffect(() => {
+    if (selected === null && firstOpen !== null) setSelected(firstOpen);
+  }, [selected, firstOpen]);
+
   if (summaries === null) {
     return listError === null ? (
       <p className="text-sm text-muted-foreground">Loading tunes</p>
@@ -102,8 +107,7 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
       <LoadFailure message={listError} onRetry={load} />
     );
   }
-  const open = summaries.filter((s) => !isOver(s));
-  const current = selected ?? open[0]?.id ?? "new";
+  const current = selected ?? firstOpen ?? "new";
 
   return (
     <div className="space-y-4">
@@ -118,7 +122,7 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
           }}
         />
       ) : (
-        <TuneView key={current} id={current} printer={printer} offline={offline} />
+        <TuneView key={current} id={current} printer={printer} offline={offline} onNew={() => setSelected("new")} />
       )}
     </div>
   );
@@ -174,7 +178,17 @@ function useTune(id: TuneId) {
   return { detail, error, refresh };
 }
 
-function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; offline: boolean }) {
+function TuneView({
+  id,
+  printer,
+  offline,
+  onNew,
+}: {
+  id: TuneId;
+  printer: PrinterView;
+  offline: boolean;
+  onNew: () => void;
+}) {
   const { detail, error, refresh } = useTune(id);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -297,6 +311,12 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
           {abandon}
+          {(detail.state === "Done" || detail.state === "Abandoned") && (
+            <UiButton onClick={onNew}>
+              <PlusIcon />
+              New tune
+            </UiButton>
+          )}
           {choosing && last !== null && (
             <>
               {offer !== null && (
