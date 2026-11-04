@@ -17,9 +17,9 @@ const run = (label: string, fit = true): OverlayRun<ProbePlot> => ({
 });
 
 test.each([
-  ["velocity", "Speed response (1 = full step)"],
-  ["torque", "Torque response (relative to the step)"],
-  ["position_error", "Position error (relative to the step)"],
+  ["velocity", "Speed response"],
+  ["torque", "Torque response"],
+  ["position_error", "Position error"],
 ] as const)("the %s tab's vertical axis says what it shows", (signal, label) => {
   const options = ensembleOptions([run("Repeat 1")], signal);
   expect(options.axes?.[1].label).toBe(label);
@@ -41,4 +41,10 @@ test("the legend lists names only, without the cursor's live values or the time 
 test("a repeat with no fitted curve has just its mean", () => {
   const [, ...series] = ensembleOptions([run("Repeat 1", false)], "velocity").series ?? [];
   expect(series.map((s) => s.label)).toEqual(["Repeat 1"]);
+});
+
+test("the vertical labels are short enough to fit beside a small chart", () => {
+  for (const signal of ["velocity", "torque", "position_error"] as const) {
+    expect(String(ensembleOptions([run("Repeat 1")], signal).axes?.[1].label).length).toBeLessThanOrEqual(16);
+  }
 });

@@ -17,9 +17,9 @@ const SIGNALS: { key: Signal; label: string }[] = [
 const FIT_DASH = [6, 4];
 
 const Y_LABEL: Record<Signal, string> = {
-  velocity: "Speed response (1 = full step)",
-  torque: "Torque response (relative to the step)",
-  position_error: "Position error (relative to the step)",
+  velocity: "Speed response",
+  torque: "Torque response",
+  position_error: "Position error",
 };
 
 /** The chart's options: one legend entry per repeat, the fitted curve drawn dashed but not listed. */
@@ -76,7 +76,8 @@ export function EnsemblePlot({ runs }: { runs: OverlayRun<ProbePlot>[] }) {
       <PlotPanel label={`Step-response ensembles, ${signal.replace("_", " ")}`} options={options} data={data} />
       {runs.length > missing.length && (
         <p className="text-xs text-muted-foreground">
-          Solid lines are the measured average, dashed lines the fitted curve.
+          Solid lines are the measured average, dashed lines the fitted curve. Responses are relative to the size of the
+          step.
         </p>
       )}
       {missing.length > 0 && (

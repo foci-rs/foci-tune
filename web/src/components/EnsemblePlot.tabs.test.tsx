@@ -37,5 +37,9 @@ test("choosing a tab switches the graph", () => {
 
 test("the solid and dashed lines are explained once under the graph", () => {
   render(<EnsemblePlot runs={runs} />);
-  expect(screen.getByText("Solid lines are the measured average, dashed lines the fitted curve.")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "Solid lines are the measured average, dashed lines the fitted curve. Responses are relative to the size of the step.",
+    ),
+  ).toBeInTheDocument();
 });
