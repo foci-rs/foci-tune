@@ -1084,10 +1084,13 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             || record.steps.last().is_none_or(|st| st.starts != 0)
         {
             return Err(TuneError::OutOfOrder(
-                if record.steps.is_empty() {
-                    "There is no prepared step to adjust."
-                } else {
-                    "This step has already started, so it can't be adjusted."
+                match record.state {
+                    TuneState::Abandoned => {
+                        "This tune was abandoned, so there is no step to adjust."
+                    }
+                    TuneState::Done => "This tune is finished, so there is no step to adjust.",
+                    _ if record.steps.is_empty() => "There is no prepared step to adjust.",
+                    _ => "This step has already started, so it can't be adjusted.",
                 }
                 .to_owned(),
             ));

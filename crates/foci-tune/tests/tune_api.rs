@@ -828,3 +828,22 @@ async fn a_step_that_has_started_cannot_be_discarded() {
     );
     wait_state(&app, &id, "AwaitingChoice").await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn discarding_a_step_of_an_abandoned_tune_says_the_tune_was_abandoned() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 0)).await;
+    post_empty(&app, &format!("/api/tunes/{id}/abandon")).await;
+
+    let reply = post_empty(&app, &format!("/api/tunes/{id}/steps/cancel")).await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(reply.error().contains("was abandoned"), "{}", reply.error());
+    assert!(
+        !reply.error().contains("already started"),
+        "{}",
+        reply.error()
+    );
+}
