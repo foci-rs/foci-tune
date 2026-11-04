@@ -16,10 +16,12 @@ pub const DEFAULT_UPPER_K: i32 = 3;
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum SeedRefused {
     /// A zero seed would scale to zero at every rung.
-    #[error("a zero seed cannot be scaled into rungs")]
+    #[error("The seed can't be zero. Use a value above zero, or the live value.")]
     Zero,
     /// The seed is nonzero but its raw value rounds to zero.
-    #[error("the seed rounds to a raw value of zero")]
+    #[error(
+        "The seed is too small: it rounds to zero when written to the stepper. Use a larger value."
+    )]
     RoundsToZero,
     /// The seed converts outside the writable range.
     #[error(transparent)]

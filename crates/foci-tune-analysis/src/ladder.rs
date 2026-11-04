@@ -34,7 +34,9 @@ pub struct LadderValue {
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum LadderError {
     /// The raw value falls outside `0..=PID_GAIN_MAX_RAW`.
-    #[error("{shown} converts to raw {raw}, outside 0..={PID_GAIN_MAX_RAW}")]
+    #[error(
+        "{shown} is outside what the stepper accepts (it converts to {raw}; the limit is {PID_GAIN_MAX_RAW})"
+    )]
     OutOfRange {
         /// Value as entered.
         shown: f64,
