@@ -8,21 +8,20 @@ import {
   type Run,
   type Series,
   type Tune,
-  type TuneDecision,
 } from "@/api";
 import { failureMessage } from "@/failure";
-import { stepSummary } from "@/guided";
+import { fitReasonText, stepSummary } from "@/guided";
 import { declaredMetrics } from "@/tune";
 import { EnsemblePlot } from "./EnsemblePlot";
 import { PALETTE } from "./PlotPanel";
 import type { OverlayRun } from "./TracePanels";
-import { Button, Card } from "./ui";
+import { Card } from "./ui";
 
 const DIM_COLORS = ["#64748b", "#78716c", "#6b7280", "#71717a"];
 
 const fixed = (n: number | null | undefined, digits = 3) => (n == null ? "-" : n.toFixed(digits));
 
-const fitText = (f: FitOutcome) => (f.status === "fit" ? f.zeta.toFixed(3) : f.reason);
+const fitText = (f: FitOutcome) => (f.status === "fit" ? f.zeta.toFixed(3) : fitReasonText(f.reason));
 
 interface RepeatRef {
   rung: number;
@@ -41,18 +40,8 @@ function runProblem(run: Run | undefined): string | null {
   return `${run.state.replace("_", " ")}: ${run.reason}`;
 }
 
-/** The paused rung's evidence and the operator's three decisions. */
-export function PausePanel({
-  tune,
-  step,
-  busy,
-  onDecide,
-}: {
-  tune: Tune;
-  step: number;
-  busy: boolean;
-  onDecide: (d: TuneDecision) => void;
-}) {
+/** The paused rung's evidence; the decisions are in the page's bar. */
+export function PausePanel({ tune, step }: { tune: Tune; step: number }) {
   const s = tune.steps[step];
   const summary = stepSummary(tune, step);
   const pause = s.paused !== null ? ([s.paused.rung, s.paused.reason] as const) : (s.assessment?.pause ?? null);
@@ -139,17 +128,6 @@ export function PausePanel({
   return (
     <Card label="Paused" className="border-amber-500/60">
       <p className="text-sm font-medium text-amber-300">{summary.pause}</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button disabled={busy} onClick={() => onDecide("continue")}>
-          Continue past this rung
-        </Button>
-        <Button disabled={busy} onClick={() => onDecide("rerun")}>
-          Re-run this rung
-        </Button>
-        <Button disabled={busy} onClick={() => onDecide("stop")}>
-          Stop the ladder
-        </Button>
-      </div>
       {error !== null && (
         <p role="alert" className="mt-2 text-sm text-red-400">
           Could not load the evidence: {error}
@@ -158,15 +136,15 @@ export function PausePanel({
 
       <div className="mt-4 overflow-x-auto">
         <table aria-label="Probe repeats" className="w-full text-left text-sm">
-          <thead className="text-xs uppercase tracking-wider text-muted-foreground">
+          <thead className="text-xs text-muted-foreground">
             <tr>
-              <th className="pr-3">Repeat</th>
-              <th className="pr-3">Rung</th>
-              <th className="pr-3">Velocity fit</th>
-              <th className="pr-3">Admissible starts</th>
-              <th className="pr-3">Edges</th>
-              <th className="pr-3">Std error at peak</th>
-              <th className="pr-3">Torque zeta</th>
+              <th className="pr-3 align-top font-medium">Repeat</th>
+              <th className="pr-3 align-top font-medium">Rung</th>
+              <th className="pr-3 align-top font-medium">Velocity fit</th>
+              <th className="pr-3 align-top font-medium">Admissible starts</th>
+              <th className="pr-3 align-top font-medium">Edges</th>
+              <th className="pr-3 align-top font-medium">Std error at peak</th>
+              <th className="pr-3 align-top font-medium">Torque zeta</th>
             </tr>
           </thead>
           <tbody className="font-mono">
@@ -196,15 +174,15 @@ export function PausePanel({
       {medians !== undefined && (
         <div className="mt-4 overflow-x-auto">
           <table aria-label="Rung medians" className="w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wider text-muted-foreground">
+            <thead className="text-xs text-muted-foreground">
               <tr>
-                <th className="pr-3">Rung</th>
+                <th className="pr-3 align-top font-medium">Rung</th>
                 {speeds.map((v) => (
                   <th key={v} className="pr-3">
-                    p99 {v}
+                    Error at {v} mm/s (μm)
                   </th>
                 ))}
-                <th className="pr-3">Worst torque sd</th>
+                <th className="pr-3 align-top font-medium">Worst torque sd</th>
               </tr>
             </thead>
             <tbody className="font-mono">

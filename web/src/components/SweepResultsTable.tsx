@@ -37,24 +37,24 @@ export function SweepResultsTable({
       <table aria-label={`${label} results`} className="w-full text-left text-sm">
         <thead className="text-xs text-muted-foreground">
           <tr>
-            <th className="pr-4 font-medium">#</th>
-            <th className="pr-4 font-medium">Gain</th>
-            <th className="pr-4 font-medium">Status</th>
-            <th className="pr-4 font-medium">
+            <th className="pr-4 align-top font-medium">#</th>
+            <th className="pr-4 align-top font-medium">Gain</th>
+            <th className="pr-4 align-top font-medium">Status</th>
+            <th className="pr-4 align-top font-medium">
               <Explained tip="The worst tracking error across your test speeds. Lower is better.">Score (μm)</Explained>
             </th>
-            <th className="pr-4 font-medium">
+            <th className="pr-4 align-top font-medium">
               <Explained tip="How much worse this gain is than the best one, with how much repeated runs of it varied.">
                 Behind best
               </Explained>
             </th>
-            <th className="pr-4 font-medium">
+            <th className="pr-4 align-top font-medium">
               <Explained tip="How steadily the stepper settles after a sudden change. Higher is steadier; a gain below the damping stop limit is rejected.">
                 Damping
               </Explained>
             </th>
             {speeds.map((s) => (
-              <th key={s} className="pr-4 font-medium">
+              <th key={s} className="pr-4 align-top font-medium">
                 <Explained
                   tip={`99% of the time the stepper stayed within this many μm of where it should be at ${s} mm/s.`}
                 >

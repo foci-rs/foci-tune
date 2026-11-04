@@ -391,7 +391,7 @@ test("a paused tune shows the pause panel and no choice controls", async () => {
   current = detail("Paused");
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
   render(<GuidedTune printer={printer} />);
-  await screen.findByRole("button", { name: "Stop the ladder" });
+  await screen.findByRole("button", { name: "Stop" });
   expect(screen.queryByRole("button", { name: "Accept the recommendation" })).not.toBeInTheDocument();
 });
 
@@ -399,7 +399,7 @@ test("a pause decision is posted through the tune's decision route", async () =>
   current = detail("Paused");
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
   render(<GuidedTune printer={printer} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Stop the ladder" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
   expect(bodies[0]).toEqual({ decision: "stop" });
 });
@@ -756,4 +756,31 @@ test("the standstill run of a step reads Measuring while it is in its motion sta
   render(<GuidedTune printer={standstillRunning} />);
   expect(await screen.findByText("Measuring")).toBeInTheDocument();
   expect(screen.queryByText("Moving")).toBeNull();
+});
+
+test("the pause decisions are in the bar, after Abandon, with Continue last", async () => {
+  current = detail("Paused");
+  current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  const stop = await screen.findByRole("button", { name: "Stop" });
+  const bar = stop.closest(".sticky") as HTMLElement;
+  expect(
+    within(bar)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual(["Abandon tune", "Stop", "Rerun", "Continue"]);
+  const card = screen.getByRole("region", { name: "Paused" });
+  expect(within(card).queryAllByRole("button")).toHaveLength(0);
+});
+
+test.each([
+  ["Rerun", "rerun"],
+  ["Continue", "continue"],
+])("%s posts its decision", async (label, decision) => {
+  current = detail("Paused");
+  current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(await screen.findByRole("button", { name: label }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
+  expect(bodies[0]).toEqual({ decision });
 });

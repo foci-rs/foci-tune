@@ -14,7 +14,6 @@ import {
   type PrinterView,
   type Tune,
   type TuneChoiceBody,
-  type TuneDecision,
   type TuneDetail,
   type TuneId,
   type TuneSummary,
@@ -211,6 +210,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const lastAxis = last === null ? null : detail.steps[last].axis;
   const next = nextAxis(detail);
   const preparing = actions.prepare && next !== null && axis === next;
+  const deciding = actions.decide && axis !== null && lastAxis === axis;
   const starting = announced && actions.start && axis !== null && lastAxis === axis;
   const liveControl = liveControlFor(printer, detail.setup.stepper);
   const prepared = preparing && next !== null ? prepareState(next, prepare, liveControl) : null;
@@ -274,7 +274,6 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           announced={announced}
           onChoose={(choice) => run("choose", () => postTuneChoice(id, choice))}
           onExtend={(direction) => run("extend", () => postTuneExtension(id, direction))}
-          onDecide={(d) => run("decide", () => postTuneDecision(id, d))}
           prepare={prepare}
           prepared={prepared}
           runs={runs}
@@ -298,6 +297,27 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
           message={actionError === null ? null : { tone: "error", text: actionError }}
         >
           {abandon}
+          {deciding && (
+            <>
+              <UiButton
+                variant="outline"
+                disabled={frozen}
+                onClick={() => run("decide", () => postTuneDecision(id, "stop"))}
+              >
+                Stop
+              </UiButton>
+              <UiButton
+                variant="outline"
+                disabled={frozen}
+                onClick={() => run("decide", () => postTuneDecision(id, "rerun"))}
+              >
+                Rerun
+              </UiButton>
+              <UiButton disabled={frozen} onClick={() => run("decide", () => postTuneDecision(id, "continue"))}>
+                Continue
+              </UiButton>
+            </>
+          )}
           {shown === "setup" && !setupEditable && followed !== "setup" && (
             <UiButton onClick={() => setPicked(null)}>
               Next
@@ -375,7 +395,6 @@ function AxisStep({
   announced,
   onChoose,
   onExtend,
-  onDecide,
   prepare,
   prepared,
   runs,
@@ -393,7 +412,6 @@ function AxisStep({
   announced: boolean;
   onChoose: (choice: TuneChoiceBody) => void;
   onExtend: (direction: "below" | "above") => void;
-  onDecide: (d: TuneDecision) => void;
   prepare: PrepareForm;
   prepared: PrepareState | null;
   runs: number | undefined;
@@ -437,7 +455,7 @@ function AxisStep({
               onExtend={onExtend}
             />
           )}
-          {actions.decide && i === last && <PausePanel tune={tune} step={i} busy={busy} onDecide={onDecide} />}
+          {actions.decide && i === last && <PausePanel tune={tune} step={i} />}
         </div>
       ))}
       {announcing && last !== null && <AnnouncedStep tune={tune} step={tune.steps[last]} live={live} />}

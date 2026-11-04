@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, expect, test, vi } from "vitest";
 import type { FitOutcome, Pause, ProbeRecord, RepeatResult, Run, Series, Tune } from "@/api";
 import { PausePanel } from "./PausePanel";
@@ -133,17 +133,8 @@ beforeEach(() => {
   });
 });
 
-test("offers the three decisions and posts the chosen one", async () => {
-  const onDecide = vi.fn();
-  render(<PausePanel tune={pausedTune()} step={0} busy={false} onDecide={onDecide} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Re-run this rung" }));
-  expect(onDecide).toHaveBeenCalledWith("rerun");
-  expect(screen.getByRole("button", { name: "Continue past this rung" })).toBeEnabled();
-  expect(screen.getByRole("button", { name: "Stop the ladder" })).toBeEnabled();
-});
-
 test("lists each repeat's fit outcome, edge count and start count beside the previous rung", async () => {
-  render(<PausePanel tune={pausedTune()} step={0} busy={false} onDecide={() => undefined} />);
+  render(<PausePanel tune={pausedTune()} step={0} />);
   expect(await screen.findByText("fitted damping ratio 1.70 is outside (0, 1)")).toBeInTheDocument();
   expect(screen.getByText("41")).toBeInTheDocument();
   expect(screen.getByText("24")).toBeInTheDocument();
@@ -151,7 +142,7 @@ test("lists each repeat's fit outcome, edge count and start count beside the pre
 });
 
 test("plots the paused rung's repeats and dims the previous rung's", async () => {
-  render(<PausePanel tune={pausedTune()} step={0} busy={false} onDecide={() => undefined} />);
+  render(<PausePanel tune={pausedTune()} step={0} />);
   const items = await screen.findAllByRole("listitem");
   expect(items).toHaveLength(2);
   expect(items[0]).toHaveTextContent("Repeat 1");
@@ -159,9 +150,7 @@ test("plots the paused rung's repeats and dims the previous rung's", async () =>
 });
 
 test("a standstill pause counts every emitted rest and shows a placeholder for a missing sd", async () => {
-  render(
-    <PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />,
-  );
+  render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} />);
   expect(await screen.findByText(/3 of 3 rests qualified/)).toBeInTheDocument();
   expect(screen.getByText(/worst torque sd 7\.500/)).toBeInTheDocument();
   expect(screen.getByText("2.500")).toBeInTheDocument();
@@ -177,9 +166,7 @@ test("a run that did not finish well gives its reason beside the repeat", async 
       ? ({ ...(await base(id)), state: "not_comparable", reason: "channel 0 did not move" } as Run)
       : base(id),
   );
-  render(
-    <PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} busy={false} onDecide={() => undefined} />,
-  );
+  render(<PausePanel tune={pausedTune("StandstillBaselineUnassessable")} step={0} />);
   expect(await screen.findByText(/channel 0 did not move/)).toBeInTheDocument();
 });
 
@@ -197,7 +184,7 @@ test("shows this and the previous rung's median p99 per speed and worst torque s
       { zeta: 0.2, p99_by_speed: [3.125, 4.75], worst_torque_sd: 6.5 },
     ],
   };
-  render(<PausePanel tune={tune} step={0} busy={false} onDecide={() => undefined} />);
+  render(<PausePanel tune={tune} step={0} />);
   const table = await screen.findByRole("table", { name: "Rung medians" });
   const [, thisRung, previousRung] = within(table).getAllByRole("row");
   const cells = (row: HTMLElement) =>
@@ -208,15 +195,8 @@ test("shows this and the previous rung's median p99 per speed and worst torque s
   expect(cells(previousRung)).toEqual(["1", "5.500", "6.250", "9.125"]);
 });
 
-test("disables the buttons while a request is in flight", () => {
-  render(<PausePanel tune={pausedTune()} step={0} busy={true} onDecide={() => undefined} />);
-  for (const name of ["Continue past this rung", "Re-run this rung", "Stop the ladder"]) {
-    expect(screen.getByRole("button", { name })).toBeDisabled();
-  }
-});
-
 test("a failed fetch is reported on one line", async () => {
   getRun.mockRejectedValue(new Error("boom"));
-  render(<PausePanel tune={pausedTune()} step={0} busy={false} onDecide={() => undefined} />);
+  render(<PausePanel tune={pausedTune()} step={0} />);
   expect(await screen.findByText(/boom/)).toBeInTheDocument();
 });
