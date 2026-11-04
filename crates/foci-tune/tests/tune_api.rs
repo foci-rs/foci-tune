@@ -847,3 +847,19 @@ async fn discarding_a_step_of_an_abandoned_tune_says_the_tune_was_abandoned() {
         reply.error()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn applying_the_gains_of_a_tune_that_is_not_finished_is_refused_with_a_sentence() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+
+    let reply = post_empty(&app, &format!("/api/tunes/{id}/apply")).await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(
+        reply.error().contains("all three steps"),
+        "{}",
+        reply.error()
+    );
+}

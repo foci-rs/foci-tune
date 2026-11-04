@@ -1304,6 +1304,70 @@ async fn final_step_produces_the_config_block_with_three_accepted_values() {
     assert!(matches!(after, Err(TuneError::OutOfOrder(_))));
 }
 
+async fn finished_tune(rig: &Rig, sched: &TuneScheduler<MoonrakerClient>) -> TuneId {
+    rig.a.sim(|s| {
+        s.lag_by_velocity_p.insert(1060, 40);
+    });
+    let id = first_step_done(rig, sched).await;
+    sched.choose(&id, Choice::Rung(0)).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(rig, &id, TuneState::AwaitingChoice).await;
+    sched.choose(&id, Choice::Value(60.0)).await.unwrap();
+    sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(rig, &id, TuneState::AwaitingChoice).await;
+    sched.choose(&id, Choice::Recommended).await.unwrap();
+    id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn applying_a_finished_tune_writes_all_three_chosen_gains_over_whatever_the_stepper_has() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = finished_tune(&rig, &sched).await;
+    let tune = rig.store.read_tune(&id).unwrap();
+    let chosen: Vec<i32> = tune.steps.iter().map(|s| s.chosen.unwrap()).collect();
+    rig.engine.apply_gains("stepper_x", BASE.0).await.unwrap();
+    let before = rig.scripts().len();
+
+    sched.apply_result(&id).await.unwrap();
+
+    let scripts = rig.scripts();
+    let line = scripts[before..]
+        .iter()
+        .rfind(|s| s.starts_with("FOCI_SET_GAINS"))
+        .expect("the gains were written");
+    assert_eq!(
+        (float(line, "VELOCITY_P") * 256.0).round() as i32,
+        chosen[0]
+    );
+    assert_eq!(
+        (float(line, "VELOCITY_I") * 4096.0).round() as i32,
+        chosen[1]
+    );
+    assert_eq!(
+        (float(line, "POSITION_P") * 256.0).round() as i32,
+        chosen[2]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_gains_of_a_tune_that_is_not_finished_cannot_be_applied() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    let writes = rig.scripts().len();
+
+    let err = sched.apply_result(&id).await.unwrap_err();
+
+    assert!(
+        matches!(&err, TuneError::OutOfOrder(text) if text.contains("all three steps")),
+        "{err:?}"
+    );
+    assert_eq!(rig.scripts().len(), writes, "nothing was written");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_extension_clears_the_assessment_while_its_rung_runs() {
     let rig = rig().await;

@@ -1069,6 +1069,46 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         Ok(())
     }
 
+    /// Writes the chosen gains of a finished tune to its stepper, on top of the gains the stepper
+    /// has now, so a restart or a change since the last choice does not leave one of them out.
+    ///
+    /// # Errors
+    /// [`TuneError::OutOfOrder`] unless the tune is done, [`TuneError::Precondition`] for a
+    /// locked stepper, [`TuneError::NoControlState`] when the live gains cannot be read, and
+    /// [`TuneError::Engine`] when the write is refused or unconfirmed.
+    pub async fn apply_result(&self, tune: &TuneId) -> Result<(), TuneError> {
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let record = s.read(tune)?;
+        match record.state {
+            TuneState::Done => {}
+            TuneState::Abandoned => {
+                return Err(TuneError::OutOfOrder(
+                    "This tune was abandoned, so it has no gains to apply.".to_owned(),
+                ));
+            }
+            _ => {
+                return Err(TuneError::OutOfOrder(
+                    "The gains can only be applied once all three steps have a chosen gain."
+                        .to_owned(),
+                ));
+            }
+        }
+        let stepper = record.setup.stepper.clone();
+        s.refuse_locked(&stepper)?;
+        let control = s.read_control_state(&stepper).await?;
+        let mut gains = snapshot_of(&control).0;
+        for step in &record.steps {
+            if let Some(raw) = step.chosen {
+                gains = with_axis(gains, step.axis, raw);
+            }
+        }
+        s.engine
+            .apply_gains(&stepper, gains)
+            .await
+            .map_err(TuneError::Engine)
+    }
+
     /// Discards the announced step before anything has run, so its settings can be changed and
     /// the step prepared again. The tune goes back to ready and the step's empty sessions are
     /// removed.
