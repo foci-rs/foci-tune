@@ -47,6 +47,7 @@ import {
   acceptGain,
   extensionOffer,
   measuredGains,
+  nextGuidedStep,
   prepareState,
   type GuidedAction,
   type GuidedStepId,
@@ -213,6 +214,7 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
   const lastAxis = last === null ? null : detail.steps[last].axis;
   const next = nextAxis(detail);
   const preparing = actions.prepare && next !== null && axis === next;
+  const onward = followed === null ? null : nextGuidedStep(shown, followed);
   const choosing = actions.choose && axis !== null && lastAxis === axis && last !== null;
   const offer = choosing && actions.extension && last !== null ? extensionOffer(detail, last) : null;
   const recommended = choosing && last !== null ? recommendedGain(detail, last) : null;
@@ -344,8 +346,8 @@ function TuneView({ id, printer, offline }: { id: TuneId; printer: PrinterView; 
               </UiButton>
             </>
           )}
-          {shown === "setup" && !setupEditable && followed !== "setup" && (
-            <UiButton onClick={() => setPicked(null)}>
+          {onward !== null && (
+            <UiButton onClick={() => setPicked(onward === followed ? null : onward)}>
               Next
               <ArrowRightIcon />
             </UiButton>

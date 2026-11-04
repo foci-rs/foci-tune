@@ -14,6 +14,7 @@ import {
   prepareState,
   stepPercent,
   skipText,
+  nextGuidedStep,
   acceptGain,
   measuredGains,
   manualProblem,
@@ -1179,5 +1180,18 @@ describe("extensionOffer", () => {
     expect(offer.direction).toBe("above");
     expect(offer.gain).toBe("2119");
     expect(offer.text).toMatch(/high end.*a higher gain may be better/);
+  });
+});
+
+describe("nextGuidedStep", () => {
+  test("a step the tune has already passed goes on to the one after it", () => {
+    expect(nextGuidedStep("setup", "velocity-i")).toBe("velocity-p");
+    expect(nextGuidedStep("velocity-p", "velocity-i")).toBe("velocity-i");
+    expect(nextGuidedStep("velocity-i", "result")).toBe("position-p");
+  });
+  test("the step the tune is at, and any step beyond it, has no next", () => {
+    expect(nextGuidedStep("velocity-i", "velocity-i")).toBeNull();
+    expect(nextGuidedStep("position-p", "velocity-i")).toBeNull();
+    expect(nextGuidedStep("result", "result")).toBeNull();
   });
 });

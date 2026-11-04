@@ -859,3 +859,28 @@ test("the tune's event log is not printed above the page: decisions already show
   await screen.findByRole("table", { name: /results/ });
   expect(screen.queryByText(/operator continued/)).toBeNull();
 });
+
+test("going back to a finished axis step leaves a Next that goes on to the following step", async () => {
+  current = detail("Ready");
+  current.steps[0].chosen = 1000;
+  current.steps[0].chosen_shown = 1000;
+  render(<GuidedTune printer={printer} />);
+  const steps = within(await screen.findByRole("navigation", { name: "Steps" }));
+  fireEvent.click(steps.getByRole("button", { name: /Velocity P/ }));
+  const next = screen.getByRole("button", { name: "Next" });
+  expect(
+    within(next.closest(".sticky") as HTMLElement)
+      .getAllByRole("button")
+      .map((b) => b.textContent),
+  ).toEqual(["Abandon tune", "Next"]);
+  fireEvent.click(next);
+  expect(await screen.findByRole("button", { name: "Run" })).toBeInTheDocument();
+  expect(steps.getByRole("button", { name: /Velocity I corner/ })).toHaveAttribute("aria-current", "step");
+});
+
+test("the step the tune is at has no Next of its own", async () => {
+  current = detail("Ready", null, false);
+  render(<GuidedTune printer={printer} />);
+  await screen.findByRole("button", { name: "Run" });
+  expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+});

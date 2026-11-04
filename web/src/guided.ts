@@ -456,6 +456,13 @@ export const GUIDED_STEPS: { id: GuidedStepId; label: string }[] = [
   { id: "result", label: "Result" },
 ];
 
+/** The step after `shown` in the header, when the tune is already past `shown`; null at the tune's own step. */
+export function nextGuidedStep(shown: GuidedStepId, followed: GuidedStepId): GuidedStepId | null {
+  const at = GUIDED_STEPS.findIndex((s) => s.id === shown);
+  const to = GUIDED_STEPS.findIndex((s) => s.id === followed);
+  return at >= 0 && at < to ? GUIDED_STEPS[at + 1].id : null;
+}
+
 const AXIS_STEP: Record<TuneAxis, GuidedStepId> = {
   VelocityP: "velocity-p",
   VelocityICornerHz: "velocity-i",
