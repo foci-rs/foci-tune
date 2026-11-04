@@ -532,8 +532,6 @@ function Workbench({ printer }: { printer: PrinterView }) {
     current === null || view === null || current.session !== view.id ? null : runPosition(view.runs, current.run);
   const currentRecord = current === null ? null : (view?.runs.find((r) => r.id === current.run)?.run ?? null);
 
-  const changedSetup = link !== null && active === null;
-
   const hasRun = busyEngine || (view !== null && view.session !== null);
   return (
     <div className="space-y-4">
@@ -644,7 +642,6 @@ function Workbench({ printer }: { printer: PrinterView }) {
                 view={view}
                 canRestore={active !== null && !busyEngine}
                 onRestore={revert}
-                newSessionNext={changedSetup}
                 notes={sweepNotesFor(view, printer)}
               />
               <SessionResults view={view} />

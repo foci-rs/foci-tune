@@ -1,7 +1,6 @@
 import { RotateCcwIcon } from "lucide-react";
 import type { SessionView } from "@/api";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { runTypeOfKind } from "@/tune";
 import { Card } from "./ui";
 
@@ -15,13 +14,11 @@ export function SessionCard({
   view,
   canRestore,
   onRestore,
-  newSessionNext,
   notes,
 }: {
   view: SessionView;
   canRestore: boolean;
   onRestore: () => void;
-  newSessionNext: boolean;
   /** What happened to the session's runs, such as a rejected run or a sweep that stopped. */
   notes: string[];
 }) {
@@ -34,18 +31,6 @@ export function SessionCard({
       label={`Session ${session.name}`}
       action={
         <div className="flex items-center gap-2">
-          {newSessionNext && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0} className="rounded-full border px-2 py-0.5 text-xs text-muted-foreground">
-                  New session on next run
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" align="end" className="max-w-xs">
-                Changing the setup starts a new session, so the next run's results do not join this one.
-              </TooltipContent>
-            </Tooltip>
-          )}
           <Button variant="outline" size="sm" disabled={!canRestore} onClick={onRestore}>
             <RotateCcwIcon />
             Restore starting values

@@ -24,7 +24,7 @@ const view = {
 const show = (over: Partial<Parameters<typeof SessionCard>[0]> = {}) =>
   render(
     <TooltipProvider>
-      <SessionCard view={view} canRestore onRestore={() => {}} newSessionNext={false} notes={[]} {...over} />
+      <SessionCard view={view} canRestore onRestore={() => {}} notes={[]} {...over} />
     </TooltipProvider>,
   );
 
@@ -46,20 +46,10 @@ test("Restore starting values lives on the session card and follows canRestore",
   expect(onRestore).toHaveBeenCalledTimes(1);
   rerender(
     <TooltipProvider>
-      <SessionCard view={view} canRestore={false} onRestore={onRestore} newSessionNext={false} notes={[]} />
+      <SessionCard view={view} canRestore={false} onRestore={onRestore} notes={[]} />
     </TooltipProvider>,
   );
   expect(screen.getByRole("button", { name: "Restore starting values" })).toBeDisabled();
-});
-
-test("a changed setup is flagged as a new session on the next run", async () => {
-  show({ newSessionNext: true });
-  const badge = screen.getByText("New session on next run");
-  fireEvent.focus(badge);
-  expect(await screen.findByRole("tooltip")).toHaveTextContent("Changing the setup starts a new session");
-  expect(
-    within(screen.getByRole("region", { name: "Session 20261102-aaa" })).getByText("New session on next run"),
-  ).toBeInTheDocument();
 });
 
 test("no session means no card", () => {
