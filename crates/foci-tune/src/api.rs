@@ -1452,7 +1452,6 @@ fn check_gates(gates: &Gates) -> ApiResult<()> {
     Ok(())
 }
 
-/// Reads and validates a tune setup from a request body, as sent for a new tune or a replacement.
 async fn parse_tune_setup<M: MoonrakerApi + 'static>(
     api: &App<M>,
     body: Result<Json<Value>, JsonRejection>,
