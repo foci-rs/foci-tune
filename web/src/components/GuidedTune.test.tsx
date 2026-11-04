@@ -1027,6 +1027,9 @@ test("the config block sits in its own card with a Copy button and no instructio
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   await resultStep();
   const card = screen.getByRole("region", { name: "Printer config" });
+  const copyButton = within(card).getByRole("button", { name: "Copy" });
+  expect(copyButton.textContent).toBe("");
+  expect(copyButton.querySelector("svg")).not.toBeNull();
   expect(within(card).queryByText(/after a restart/)).toBeNull();
   expect(within(card).queryByText(/using these gains now/)).toBeNull();
   expect(card).toHaveTextContent("pid_velocity_p: 1000");

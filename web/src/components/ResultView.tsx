@@ -1,10 +1,11 @@
-import { CheckCircle2Icon } from "lucide-react";
+import { CheckCircle2Icon, CheckIcon, CopyIcon } from "lucide-react";
+import { Button as UiButton } from "@/components/ui/button";
 import { useState } from "react";
 import type { TuneDetail } from "@/api";
 import { gainChecklist, resultRows, type LiveControl } from "@/guided";
 import { Explained } from "./Explained";
 import { GainChecklist } from "./ResultPlaceholder";
-import { Button, Card } from "./ui";
+import { Card } from "./ui";
 
 /** The finished tune: what it changed, and the config block to keep the new gains. */
 export function ResultView({ tune, block, live }: { tune: TuneDetail; block: string; live: LiveControl | null }) {
@@ -49,7 +50,14 @@ export function ResultView({ tune, block, live }: { tune: TuneDetail; block: str
           </table>
         </div>
       </Card>
-      <Card label="Printer config" action={<Button onClick={copy}>{copied ? "Copied" : "Copy"}</Button>}>
+      <Card
+        label="Printer config"
+        action={
+          <UiButton variant="outline" size="icon" aria-label={copied ? "Copied" : "Copy"} onClick={copy}>
+            {copied ? <CheckIcon /> : <CopyIcon />}
+          </UiButton>
+        }
+      >
         <pre className="overflow-x-auto font-mono text-xs">{block}</pre>
       </Card>
     </>
