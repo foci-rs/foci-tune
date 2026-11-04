@@ -47,14 +47,13 @@ import {
   type GuidedStepId,
   type PrepareForm,
   type PrepareState,
-  type RungView,
 } from "@/guided";
-import { cn } from "@/lib/utils";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
 import { NextStepCard } from "./NextStepCard";
 import { PausePanel } from "./PausePanel";
 import { Steps } from "./Steps";
+import { SweepResultsTable } from "./SweepResultsTable";
 import { TuneRunCard } from "./TuneRunCard";
 import { ActionBar } from "./WorkbenchCards";
 import { Button, Card, Field, NumberField } from "./ui";
@@ -495,69 +494,6 @@ function AnnouncementPanel({ tune, plan, earlier }: { tune: Tune; plan: TuneStep
 
 const fmt = (n: number | null, digits = 3) => (n === null ? "-" : n.toFixed(digits));
 
-function RungTable({ rows, speeds, axis }: { rows: RungView[]; speeds: number[]; axis: string }) {
-  return (
-    <div className="overflow-x-auto">
-      <table aria-label={`${axis} rungs`} className="w-full text-left text-sm">
-        <thead className="text-xs uppercase tracking-wider text-muted-foreground">
-          <tr>
-            <th className="pr-3">Rung</th>
-            <th className="pr-3">Gain</th>
-            <th className="pr-3">Raw</th>
-            <th className="pr-3">Verdict</th>
-            <th className="pr-3">Score (p99 μm)</th>
-            <th className="pr-3">Behind by</th>
-            <th className="pr-3">Zeta</th>
-            {speeds.map((s) => (
-              <th key={s} className="pr-3">
-                p99 {s}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody className="font-mono">
-          {rows.map((r) => (
-            <tr
-              key={r.index}
-              className={cn(
-                r.recommended !== null && "text-emerald-300",
-                r.skipped !== null && "text-muted-foreground",
-              )}
-            >
-              <td className="pr-3">{r.index + 1}</td>
-              <td className="pr-3">{r.shown.toFixed(2)}</td>
-              <td className="pr-3">{r.raw}</td>
-              <td className="pr-3 font-sans">
-                {r.verdict}
-                {r.recommended !== null && <span className="ml-2 text-xs">({r.recommended})</span>}
-              </td>
-              <td className="pr-3">
-                {fmt(r.score)}
-                {r.decidingSpeed !== null && <span className="ml-1 text-xs"> @ {speeds[r.decidingSpeed]} mm/s</span>}
-              </td>
-              <td className="pr-3">
-                {r.best
-                  ? "best"
-                  : r.gap === null
-                    ? ""
-                    : r.tolerance === null
-                      ? `${fmt(r.gap, 1)} μm`
-                      : `${fmt(r.gap, 1)} μm ± ${fmt(r.tolerance, 1)} μm`}
-              </td>
-              <td className="pr-3">{fmt(r.zeta)}</td>
-              {speeds.map((s, i) => (
-                <td key={s} className="pr-3">
-                  {fmt(r.p99BySpeed[i] ?? null)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function StepCard({
   tune,
   index,
@@ -607,7 +543,7 @@ function StepCard({
       </dl>
       {summary.failed !== null && <p className="mb-2 text-sm text-amber-400">Stopped: {summary.failed}</p>}
       {summary.halt !== null && <p className="mb-2 text-sm text-amber-400">{summary.halt}</p>}
-      <RungTable rows={rows} speeds={tune.setup.speeds_mm_s} axis={label} />
+      <SweepResultsTable axis={step.axis} label={label} rows={rows} speeds={tune.setup.speeds_mm_s} />
       {driftCheckRunning(tune, index) && (
         <p className="mt-1 text-xs text-muted-foreground">
           Drift check running: the seed rung is repeated once more, so the machine is still moving.
