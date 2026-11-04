@@ -857,6 +857,39 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         Ok(tune.id)
     }
 
+    /// Replaces the setup of a tune that has no step yet. The tune keeps its id, snapshot and
+    /// creation time; the stepper cannot change.
+    ///
+    /// # Errors
+    /// [`TuneError::InvalidRequest`] for a setup without one to three speeds or for another
+    /// stepper, [`TuneError::OutOfOrder`] unless the tune is ready with no step prepared,
+    /// [`TuneError::Precondition`] for a locked stepper, [`TuneError::NotFound`], and store
+    /// errors.
+    pub async fn update_setup(&self, tune: &TuneId, setup: TuneSetup) -> Result<(), TuneError> {
+        if setup.speeds_mm_s.is_empty() || setup.speeds_mm_s.len() > MAX_SPEEDS {
+            return Err(TuneError::InvalidRequest(format!(
+                "a tune needs one to {MAX_SPEEDS} tracking speeds"
+            )));
+        }
+        let s = &self.shared;
+        let _held = s.hold_tune(tune).await?;
+        let mut record = s.read(tune)?;
+        if record.state != TuneState::Ready || !record.steps.is_empty() {
+            return Err(TuneError::OutOfOrder(
+                "the setup can only change before the first step is prepared".to_owned(),
+            ));
+        }
+        if setup.stepper != record.setup.stepper {
+            return Err(TuneError::InvalidRequest(
+                "the stepper of a tune cannot change".to_owned(),
+            ));
+        }
+        s.refuse_locked(&setup.stepper)?;
+        record.setup = setup;
+        s.save(&record)?;
+        Ok(())
+    }
+
     /// Plans the tune's next step (velocity P, then velocity I, then position P) from a fresh
     /// read of the stepper's control state, creates its sessions and announces it. Nothing
     /// runs until [`TuneScheduler::confirm_step`].

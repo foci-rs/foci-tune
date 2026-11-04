@@ -90,6 +90,10 @@ async fn post(app: &Router, uri: &str, body: Value) -> Reply {
     send(app, Method::POST, uri, Some(body)).await
 }
 
+async fn put(app: &Router, uri: &str, body: Value) -> Reply {
+    send(app, Method::PUT, uri, Some(body)).await
+}
+
 async fn post_empty(app: &Router, uri: &str) -> Reply {
     send(app, Method::POST, uri, None).await
 }
@@ -451,4 +455,83 @@ async fn a_paused_tune_accepts_stop_and_awaits_a_choice() {
     assert_eq!(stopped.status, StatusCode::OK, "{}", stopped.error());
     let detail = wait_state(&app, &id, "AwaitingChoice").await;
     assert_eq!(detail["steps"][0]["paused"], Value::Null);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tune_without_steps_can_have_its_setup_replaced() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let before = get(&app, &format!("/api/tunes/{id}")).await.json();
+    let mut body = setup_body(&[100.0, 200.0, 400.0]);
+    body["include_marginal"] = json!(true);
+
+    let reply = put(&app, &format!("/api/tunes/{id}/setup"), body).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+    let after = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(after["setup"]["speeds_mm_s"], json!([100.0, 200.0, 400.0]));
+    assert_eq!(after["setup"]["include_marginal"], true);
+    assert_eq!(after["id"], before["id"]);
+    assert_eq!(after["snapshot"], before["snapshot"]);
+    assert_eq!(after["created_unix_s"], before["created_unix_s"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_setup_is_frozen_once_a_step_is_prepared() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let plan = post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 0)).await;
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.error());
+
+    let reply = put(
+        &app,
+        &format!("/api/tunes/{id}/setup"),
+        setup_body(&[100.0]),
+    )
+    .await;
+
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert!(!reply.error().is_empty());
+    let after = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(after["setup"]["speeds_mm_s"], json!([50.0]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stepper_of_a_tune_cannot_change() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let mut body = setup_body(&[50.0]);
+    body["stepper"] = json!("stepper_y");
+
+    let reply = put(&app, &format!("/api/tunes/{id}/setup"), body).await;
+
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{}", reply.error());
+    let after = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(after["setup"]["stepper"], "stepper_x");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replacement_setup_is_validated_like_a_new_one() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let mut closely_spaced = setup_body(&[50.0]);
+    closely_spaced["probe"]["segments_between_toggles"] = json!(1);
+    let mut bad_gate = setup_body(&[50.0]);
+    bad_gate["gates"]["marginal"] = json!(0.05);
+
+    for (body, field) in [
+        (setup_body(&[]), "speeds_mm_s"),
+        (closely_spaced, "probe.segments_between_toggles"),
+        (bad_gate, "gates.marginal"),
+    ] {
+        let reply = put(&app, &format!("/api/tunes/{id}/setup"), body).await;
+        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{field}");
+        assert_eq!(reply.json()["field"], field);
+    }
+    let after = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(after["setup"]["speeds_mm_s"], json!([50.0]));
 }

@@ -15,7 +15,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use bytes::Bytes;
 use foci_tune_analysis::ladder::PID_GAIN_MAX_RAW;
@@ -968,6 +968,7 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         .route("/api/home", post(home::<M>))
         .route("/api/tunes", get(list_tunes::<M>).post(create_tune::<M>))
         .route("/api/tunes/{id}", get(read_tune::<M>))
+        .route("/api/tunes/{id}/setup", put(update_tune_setup::<M>))
         .route("/api/tunes/{id}/steps", post(prepare_tune_step::<M>))
         .route(
             "/api/tunes/{id}/steps/confirm",
@@ -1449,10 +1450,11 @@ fn check_gates(gates: &Gates) -> ApiResult<()> {
     Ok(())
 }
 
-async fn create_tune<M: MoonrakerApi + 'static>(
-    State(api): State<App<M>>,
+/// Reads and validates a tune setup from a request body, as sent for a new tune or a replacement.
+async fn parse_tune_setup<M: MoonrakerApi + 'static>(
+    api: &App<M>,
     body: Result<Json<Value>, JsonRejection>,
-) -> ApiResult<Json<Tune>> {
+) -> ApiResult<TuneSetup> {
     let body = json_body(body)?;
     let speeds = body
         .get("speeds_mm_s")
@@ -1473,7 +1475,26 @@ async fn create_tune<M: MoonrakerApi + 'static>(
     let setup: TuneSetup = from_body(body)?;
     check_gates(&setup.gates)?;
     api.check_tune_setup(&setup).await?;
+    Ok(setup)
+}
+
+async fn create_tune<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Tune>> {
+    let setup = parse_tune_setup(&api, body).await?;
     let id = api.tunes.create(setup).await?;
+    Ok(Json(read_tune_record(&api, &id).await?))
+}
+
+async fn update_tune_setup<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> ApiResult<Json<Tune>> {
+    let id = tune_id(&id)?;
+    let setup = parse_tune_setup(&api, body).await?;
+    api.tunes.update_setup(&id, setup).await?;
     Ok(Json(read_tune_record(&api, &id).await?))
 }
 
