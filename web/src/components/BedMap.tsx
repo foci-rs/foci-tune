@@ -76,11 +76,9 @@ export function BedMap({
   limits: Limits;
   pattern: Pattern;
   proposal: Pattern | null;
-  /** Hover title of the proposal line. */
   proposalTitle?: string;
   disabled?: boolean;
   onChange: (pattern: Pattern) => void;
-  /** Shown between the map and the coordinate rows. */
   children?: ReactNode;
 }) {
   const svg = useRef<SVGSVGElement>(null);

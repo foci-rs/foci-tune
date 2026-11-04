@@ -7,7 +7,6 @@ import { Explained } from "./Explained";
 import { GainChecklist } from "./ResultPlaceholder";
 import { Card } from "./ui";
 
-/** The finished tune: what it changed, and the config block to keep the new gains. */
 export function ResultView({ tune, block, live }: { tune: TuneDetail; block: string; live: LiveControl | null }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {

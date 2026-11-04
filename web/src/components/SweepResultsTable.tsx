@@ -5,7 +5,6 @@ import { Explained } from "./Explained";
 
 const fmt = (n: number | null, digits = 3) => (n === null ? "-" : n.toFixed(digits));
 
-/** One row per gain of a sweep: its status, its score and the numbers the score comes from. */
 export function SweepResultsTable({
   axis,
   label,

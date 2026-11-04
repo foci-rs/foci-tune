@@ -41,10 +41,7 @@ import { ActionBar, PatternCard } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
 
-/**
- * The setup of a tune: a form that creates one, the same form on a tune that has no step yet (saving
- * replaces its setup), or the recorded setup read-only. Nothing moves until a step is confirmed.
- */
+/** Saving on a tune that has no step yet replaces its setup. Nothing moves until a step is confirmed. */
 export function GuidedSetup({
   printer,
   tune,
@@ -61,7 +58,6 @@ export function GuidedSetup({
   offline?: boolean;
   onCreated?: (tune: Tune) => void;
   onSaved?: (tune: Tune) => void;
-  /** Shown in the bar before Next, for a tune that already exists. */
   actions?: ReactNode;
 }) {
   const recorded = tune?.setup;

@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-/** Text with a short explanation on hover or focus, marked by a dotted underline. */
 export function Explained({ tip, children }: { tip: string; children: ReactNode }) {
   return (
     <Tooltip>

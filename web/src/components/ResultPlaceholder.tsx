@@ -1,7 +1,6 @@
 import { CheckCircle2Icon, CircleIcon } from "lucide-react";
 import { Card } from "./ui";
 
-/** One line of the three axes, each ticked once it has a chosen gain, separated by midpoints. */
 export function GainChecklist({ items }: { items: { label: string; done: boolean }[] }) {
   return (
     <ul aria-label="Gains chosen" className="flex flex-row flex-wrap items-center text-sm">
@@ -24,7 +23,6 @@ export function GainChecklist({ items }: { items: { label: string; done: boolean
   );
 }
 
-/** What the Result step shows until every axis has a chosen gain: which are chosen. */
 export function ResultPlaceholder({ items }: { items: { label: string; done: boolean }[] }) {
   return (
     <Card label="Result">

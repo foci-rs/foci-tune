@@ -21,7 +21,6 @@ const NOTE_CLASS: Record<PatternNote["tone"], string> = {
   warning: "rounded border border-red-500/60 px-2 py-1 text-xs text-red-300",
 };
 
-/** The stroke pattern on the bed: the proposed one, locked, or a custom one to edit. */
 export function PatternCard({
   limits,
   pattern,
@@ -100,7 +99,6 @@ export function PatternCard({
   );
 }
 
-/** The ladder sweep: one line while off, its setup while on. */
 export function LadderCard({
   on,
   ladder,
@@ -145,7 +143,6 @@ const sentence = (reason: string): string => {
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 };
 
-/** The left side of a bar: the first reason the action is disabled, a count of the rest, a status. */
 function BarStatus({
   blocked,
   message,
@@ -194,7 +191,6 @@ function BarStatus({
   );
 }
 
-/** A sticky bar with the status on the left and the step's actions on the right. */
 export function ActionBar({
   blocked,
   message,
@@ -214,7 +210,6 @@ export function ActionBar({
   );
 }
 
-/** Run and Cancel, with the first reason Run is disabled, a count of the rest and the status. */
 export function RunBar({
   runLabel,
   blocked,

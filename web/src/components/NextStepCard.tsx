@@ -55,7 +55,6 @@ const change = (step: number, divisions: number) => {
   return percent > 0 ? `+${percent}%` : `${percent}%`;
 };
 
-/** The ladder's steps from low to high: the step, the gain it gives and how far that is from the seed. */
 function LadderTable({ preview, corner, divisions }: { preview: LadderPreview; corner: boolean; divisions: number }) {
   const columns = [
     ...preview.gains.map((g) => ({
@@ -116,7 +115,6 @@ function LadderTable({ preview, corner, divisions }: { preview: LadderPreview; c
   );
 }
 
-/** The seed, the range of steps and the repeats of the next ladder, with the gains they give. */
 export function NextStepCard({
   axis,
   busy,
@@ -132,7 +130,6 @@ export function NextStepCard({
   state: PrepareState;
   /** The stepper's live value on this axis, to go back to; null when it reports none. */
   live: number | null;
-  /** How many runs the step makes; shown under the ladder. */
   runs?: number;
   onForm: (form: PrepareForm) => void;
 }) {

@@ -17,7 +17,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-/** Everything about one run in plain words, opened from its row; a finished run can be accepted here. */
 export function RunDetails({
   entry,
   type,

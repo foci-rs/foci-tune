@@ -13,7 +13,6 @@ export function TuneRunCard({
 }: {
   engine: EngineView;
   sessions: SessionId[];
-  /** The kind of run each of the sessions holds. */
   kinds?: Record<SessionId, RunType>;
   /** The whole step's runs, shown even between two runs while the step is running. */
   sweep?: { done: number; total: number };

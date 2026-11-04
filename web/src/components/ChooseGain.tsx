@@ -21,10 +21,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { manualProblem } from "@/guided";
 import { NumberField } from "./ui";
 
-/**
- * Chooses the gain to keep: the main button accepts the recommended one, the menu picks a measured
- * gain or opens a dialog to type one.
- */
 export function ChooseGain({
   axis,
   accept,
@@ -39,7 +35,6 @@ export function ChooseGain({
   axis: TuneAxis;
   /** The recommended gain as shown on the button; null when there is no recommendation. */
   accept: string | null;
-  /** The number the dialog starts with. */
   initial: number | null;
   gains: { index: number; label: string }[];
   pwmHz: number;

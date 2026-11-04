@@ -41,7 +41,6 @@ function runProblem(run: Run | undefined): string | null {
   return `${run.state.replace("_", " ")}: ${run.reason}`;
 }
 
-/** The paused rung's evidence; the decisions are in the page's bar. */
 export function PausePanel({ tune, step }: { tune: Tune; step: number }) {
   const s = tune.steps[step];
   const summary = stepSummary(tune, step);

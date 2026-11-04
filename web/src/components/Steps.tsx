@@ -6,10 +6,6 @@ export interface Step {
   label: string;
 }
 
-/**
- * A row of numbered steps, as many as it is given. Steps before the current one are done, the
- * current one is marked, the rest are upcoming; every step can be selected.
- */
 export function Steps({
   steps,
   current,

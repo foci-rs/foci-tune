@@ -131,7 +131,6 @@ export function GuidedTune({ printer, initialTune }: { printer: PrinterView; ini
   );
 }
 
-/** The setup form under the steps header; later steps wait for the tune, and the form keeps its values. */
 function NewTune({
   printer,
   offline,
@@ -529,7 +528,6 @@ function AxisStep({
   );
 }
 
-/** A prepared step as it will run: its settings locked, and what running it does. */
 function AnnouncedStep({
   tune,
   step,

@@ -19,7 +19,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** Which stepper to test and with which kind of test, above that test's own settings. */
 export function TestCard({
   steppers,
   stepperName,

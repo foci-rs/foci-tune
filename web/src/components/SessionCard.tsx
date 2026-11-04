@@ -6,10 +6,6 @@ import { Card } from "./ui";
 
 const TYPE_LABEL = { tracking: "Tracking", probe: "Probe", standstill: "Standstill" } as const;
 
-/**
- * The session a run belongs to: its setup, the gains it started with, and the way back to them.
- * Shown full width above that session's results.
- */
 export function SessionCard({
   view,
   canRestore,
@@ -19,7 +15,6 @@ export function SessionCard({
   view: SessionView;
   canRestore: boolean;
   onRestore: () => void;
-  /** What happened to the session's runs, such as a rejected run or a sweep that stopped. */
   notes: string[];
 }) {
   const session = view.session;

@@ -19,7 +19,6 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-/** The run in flight, how far along it is, and the runs waiting behind it. */
 export function RunQueueCard({
   current,
   kind,
@@ -34,10 +33,8 @@ export function RunQueueCard({
   showQueue = true,
 }: {
   current: CurrentRunView | null;
-  /** What kind of run it is, which decides what its motion stage is called. */
   kind?: RunType;
   otherSession: boolean;
-  /** Which run of a multi-run session this is. */
   position: { run: number; of: number } | null;
   /** When each stage of the run started, and the motion's predicted length. */
   steps: StepTime[];
@@ -45,7 +42,6 @@ export function RunQueueCard({
   nowMs: number;
   pending: QueuedRun[];
   queued: number;
-  /** The runs of the whole sweep: how many are finished and how many there will be. */
   sweep?: { done: number; total: number };
   showQueue?: boolean;
 }) {

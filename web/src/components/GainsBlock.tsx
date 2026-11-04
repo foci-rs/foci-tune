@@ -71,9 +71,7 @@ function Stepper({
   unit: string;
   disabled: boolean;
   onValue: (v: number) => void;
-  /** Explanation shown on hover or focus. */
   hint?: string;
-  /** Shown like the others but not editable here. */
   locked?: boolean;
 }) {
   const off = disabled || locked;
@@ -133,7 +131,6 @@ function HeadingHint({ hint, last = false, children }: { hint: string; last?: bo
   );
 }
 
-/** A refresh icon that loads the board's current values into a card. */
 function LoadLiveButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
   return (
     <UiButton variant="outline" size="icon-sm" aria-label={label} disabled={disabled} onClick={onClick}>
@@ -154,12 +151,7 @@ function ReadOnlyRow({ label, p, i }: { label: string; p: number | undefined; i:
   );
 }
 
-/**
- * The gains written before every run. Torque and flux are the board's live values and cannot
- * be set from here; velocity P, velocity I as its corner with raw beside it and position P are
- * editable, and position I is read-only. With the ladder on, the ladder axis' field becomes the
- * value list.
- */
+/** Torque and flux are the board's live values and cannot be set here; position I is read-only. */
 export function GainsCard({
   gains,
   positionI,
@@ -272,7 +264,6 @@ export function GainsCard({
   );
 }
 
-/** The filters written before every run. */
 export function FiltersCard({
   filters,
   disabled,
@@ -336,7 +327,6 @@ function FieldError({ id, message }: { id: string; message: string | null }) {
   );
 }
 
-/** The sweep's gain and values, runs per value and stop-rule thresholds. */
 export function LadderFields({
   ladder,
   defaultsFor,
@@ -346,7 +336,6 @@ export function LadderFields({
   onLadder,
 }: {
   ladder: LadderInput;
-  /** The suggested values for a gain. */
   defaultsFor: (axis: LadderAxis) => number[];
   errors: LadderFieldErrors;
   probe: boolean;

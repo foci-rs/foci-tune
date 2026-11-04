@@ -27,10 +27,8 @@ const ALL_KEYS: (keyof GainRow)[] = [
   "position_hz",
 ];
 
-/** Always a column, so the table is never bare: the two gains a user tunes by hand. */
 const ALWAYS_SHOWN: (keyof GainRow)[] = ["velocity_p", "position_p"];
 
-/** The axis a sweep varies, as the gain it sets. */
 const SWEPT_KEY: Record<string, keyof GainRow> = {
   velocity_p: "velocity_p",
   velocity_i_corner_hz: "velocity_i",
@@ -61,7 +59,6 @@ export function time(unixMs: number): string {
   return new Date(unixMs).toLocaleTimeString([], { hour12: false });
 }
 
-/** What names a run in the table and its panel: its sweep value, or when it finished. */
 export function runName(entry: RunEntry, ladderAxis: string | null): string {
   const value = entry.run?.request.ladder_value ?? null;
   if (ladderAxis !== null && value !== null) return `${value}${ladderAxis === "velocity_i_corner_hz" ? " Hz" : ""}`;
@@ -110,10 +107,6 @@ function OutcomeCell({ entry, reason }: { entry: RunEntry; reason: string | null
   );
 }
 
-/**
- * One short row per finished run, in the order it is given. What never changes between runs
- * sits in two lines above the table; the full detail of a run opens from its Details button.
- */
 export function ResultsTable({
   entries,
   type,
@@ -133,7 +126,6 @@ export function ResultsTable({
   colors: ReadonlyMap<string, number>;
   tested: string;
   others: string[];
-  /** The damping below which a probe is marginal, and the stop limit, for the bar. */
   limits: { floor: number; marginal: number };
   onToggle: (id: string, on: boolean) => void;
   onOpen: (id: string) => void;

@@ -22,7 +22,6 @@ const Y_LABEL: Record<Signal, string> = {
   position_error: "Position error",
 };
 
-/** The chart's options: one legend entry per repeat, the fitted curve drawn dashed but not listed. */
 export function ensembleOptions(runs: OverlayRun<ProbePlot>[], signal: Signal): PlotOptions {
   return {
     scales: { x: { time: false } },
