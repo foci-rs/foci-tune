@@ -97,10 +97,6 @@ export function NextStepCard({
         <StepSelect label="Lowest step" value={form.lower} disabled={busy} onValue={(lower) => set({ lower })} />
         <StepSelect label="Highest step" value={form.upper} disabled={busy} onValue={(upper) => set({ upper })} />
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        Each step changes the gain by about 26% from the seed, so -3 is half the seed and 3 is double it. Next prepares
-        the step; nothing moves until you start it.
-      </p>
       {state.preview !== null && (
         <div className="mt-3 space-y-1">
           <ul aria-label="Ladder" className="flex flex-wrap gap-2">
