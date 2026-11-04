@@ -16,6 +16,7 @@ import {
   skipText,
   nextGuidedStep,
   gainChecklist,
+  resultRows,
   acceptGain,
   measuredGains,
   manualProblem,
@@ -1210,5 +1211,41 @@ describe("gainChecklist", () => {
   });
   test("a tune with no step has nothing done", () => {
     expect(gainChecklist(tune("Ready", [])).map((i) => i.done)).toEqual([false, false, false]);
+  });
+});
+
+describe("resultRows", () => {
+  const finishedTune = (chosen: [number, number, number]) => {
+    const t = tune("Done", [
+      step({ axis: "VelocityP", chosen: chosen[0], chosen_shown: chosen[0] }),
+      step({
+        axis: "VelocityICornerHz",
+        chosen: chosen[1],
+        chosen_shown: (chosen[1] * 50000) / (2 * Math.PI * 65536),
+        pwm_hz: 50000,
+      }),
+      step({ axis: "PositionP", chosen: chosen[2], chosen_shown: chosen[2] }),
+    ]);
+    t.snapshot = [{ velocity_p: 841, velocity_i: 256, position_p: 141, position_i: 0 }, filters];
+    return t;
+  };
+  test("lists each axis with its gain before and after and how it changed", () => {
+    expect(resultRows(finishedTune([841, 406, 141]))).toEqual([
+      { label: "Velocity P", before: "841", after: "841", change: "unchanged" },
+      { label: "Velocity I", before: "31.1 Hz", after: "49.3 Hz", change: "+59%" },
+      { label: "Position P", before: "141", after: "141", change: "unchanged" },
+    ]);
+  });
+  test("a lower gain shows a negative change", () => {
+    const rows = resultRows(finishedTune([600, 256, 100]));
+    expect(rows[0].change).toBe("-29%");
+    expect(rows[2].change).toBe("-29%");
+    expect(rows[1].change).toBe("unchanged");
+  });
+  test("an axis without a chosen gain has no row values yet", () => {
+    const t = finishedTune([841, 406, 141]);
+    t.steps[2].chosen = null;
+    t.steps[2].chosen_shown = null;
+    expect(resultRows(t)[2]).toEqual({ label: "Position P", before: "141", after: "-", change: "" });
   });
 });

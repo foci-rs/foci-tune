@@ -829,3 +829,38 @@ export function gainChecklist(tune: Tune): { label: string; done: boolean }[] {
     done: tune.steps.some((s) => s.axis === axis && s.chosen !== null),
   }));
 }
+
+export interface ResultRow {
+  label: string;
+  before: string;
+  after: string;
+  change: string;
+}
+
+/** What the tune changed, per axis: the gain it started with, the one chosen and how far apart they are. */
+export function resultRows(tune: Tune): ResultRow[] {
+  const [gains] = tune.snapshot;
+  const startRaw: Record<TuneAxis, number> = {
+    VelocityP: gains.velocity_p,
+    VelocityICornerHz: gains.velocity_i,
+    PositionP: gains.position_p,
+  };
+  return AXIS_ORDER.map((axis) => {
+    const step = tune.steps.find((s) => s.axis === axis);
+    const corner = axis === "VelocityICornerHz";
+    const beforeHz = corner && step !== undefined ? cornerHz(startRaw[axis], step.pwm_hz) : null;
+    const before = corner ? (beforeHz === null ? "-" : `${beforeHz.toFixed(1)} Hz`) : String(startRaw[axis]);
+    const chosen = step?.chosen ?? null;
+    if (step === undefined || chosen === null || step.chosen_shown === null) {
+      return { label: axisTitle(axis), before, after: "-", change: "" };
+    }
+    const after = corner ? `${step.chosen_shown.toFixed(1)} Hz` : String(chosen);
+    let change = "changed";
+    if (chosen === startRaw[axis]) change = "unchanged";
+    else if (startRaw[axis] > 0) {
+      const percent = Math.round((chosen / startRaw[axis] - 1) * 100);
+      change = percent > 0 ? `+${percent}%` : `${percent}%`;
+    }
+    return { label: axisTitle(axis), before, after, change };
+  });
+}
