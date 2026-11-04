@@ -16,6 +16,7 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
   const rests = Math.max(0, ...runs.map((r) => r.value.length));
   const max = Math.max(0, ...runs.flatMap((r) => r.value.map((v) => v.torque_sd ?? 0)));
   if (rests === 0) return <p className="text-sm text-muted-foreground">No rests measured.</p>;
+  const restNumbers = Array.from({ length: rests }, (_, k) => k + 1);
   const group = runs.length * (BAR + GAP) + 12;
   const width = rests * group + 40;
   return (
@@ -31,19 +32,19 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
         <text x={0} y={10} fontSize={10} fill="currentColor">
           {formatNumber(max, 1)}
         </text>
-        {Array.from({ length: rests }, (_, k) => (
-          <g key={k} transform={`translate(${36 + k * group},0)`}>
+        {restNumbers.map((n) => (
+          <g key={n} transform={`translate(${36 + (n - 1) * group},0)`}>
             {runs.map((r, j) => {
-              const sd = r.value[k]?.torque_sd ?? null;
+              const sd = r.value[n - 1]?.torque_sd ?? null;
               const h = sd === null || max === 0 ? 0 : (sd / max) * (HEIGHT - 14);
               return (
                 <rect key={r.id} x={j * (BAR + GAP)} y={HEIGHT - h} width={BAR} height={h} rx={2} fill={r.color}>
-                  <title>{`${r.label}, rest ${k + 1}: torque sd ${formatNumber(sd, 1)}`}</title>
+                  <title>{`${r.label}, rest ${n}: torque sd ${formatNumber(sd, 1)}`}</title>
                 </rect>
               );
             })}
             <text x={0} y={HEIGHT + 14} fontSize={10} fill="currentColor">
-              {k + 1}
+              {n}
             </text>
           </g>
         ))}
@@ -54,9 +55,9 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
           <tr>
             <th className="pr-3 text-left font-medium">Run</th>
             <th className="pr-3 text-left font-medium">Metric</th>
-            {Array.from({ length: rests }, (_, k) => (
-              <th key={k} className="pr-3 text-right font-medium">
-                {k + 1}
+            {restNumbers.map((n) => (
+              <th key={n} className="pr-3 text-right font-medium">
+                {n}
               </th>
             ))}
           </tr>
@@ -78,9 +79,9 @@ export function RestBars({ runs }: { runs: OverlayRun<RestRecord[]>[] }) {
                 <th scope="row" className="pr-3 text-left font-normal text-muted-foreground">
                   {row.label}
                 </th>
-                {Array.from({ length: rests }, (_, k) => (
-                  <td key={k} className="pr-3 text-right">
-                    {formatNumber(r.value[k]?.[row.key] ?? null, 1)}
+                {restNumbers.map((n) => (
+                  <td key={n} className="pr-3 text-right">
+                    {formatNumber(r.value[n - 1]?.[row.key] ?? null, 1)}
                   </td>
                 ))}
               </tr>

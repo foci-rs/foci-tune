@@ -68,7 +68,7 @@ export function FeedProvider({ children }: { children: ReactNode }) {
         if (message.type === "run_state" && message.state === "preparing") {
           setKillStatus((s) => (s === "killed" ? "idle" : s));
         }
-        listeners.current.forEach((listener) => listener(message));
+        for (const listener of listeners.current) listener(message);
       },
     });
     live.current.attach(events);

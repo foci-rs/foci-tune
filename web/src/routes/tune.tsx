@@ -482,10 +482,9 @@ function Workbench({ printer }: { printer: PrinterView }) {
       goTo("run");
       refresh();
     };
-    const request =
-      ladderBuilt !== null && ladderBuilt.ok
-        ? postLadder(ladderBuilt.body).then((r) => done(r.session, r.runs))
-        : postRun(base).then((r) => done(r.session, [r.run]));
+    const request = ladderBuilt?.ok
+      ? postLadder(ladderBuilt.body).then((r) => done(r.session, r.runs))
+      : postRun(base).then((r) => done(r.session, [r.run]));
     request
       .catch((e: unknown) => {
         if (isUnknownSession(e)) forgetSession();
