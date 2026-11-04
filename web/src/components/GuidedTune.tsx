@@ -43,6 +43,9 @@ import {
   type PrepareForm,
   type RungView,
 } from "@/guided";
+import { PlusIcon } from "lucide-react";
+import { Button as UiButton } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { GuidedCurve } from "./GuidedCurve";
 import { GuidedSetup } from "./GuidedSetup";
@@ -65,10 +68,10 @@ const pillClass = (active: boolean) =>
 const isOver = (s: TuneSummary) => s.state === "Done" || s.state === "Abandoned";
 
 /** The guided tune: one tune at a time, step by step, with the operator confirming every motion. */
-export function GuidedTune({ printer }: { printer: PrinterView }) {
+export function GuidedTune({ printer, initialTune }: { printer: PrinterView; initialTune?: TuneId }) {
   const { listen } = useFeed();
   const [summaries, setSummaries] = useState<TuneSummary[] | null>(null);
-  const [selected, setSelected] = useState<TuneId | "new" | null>(null);
+  const [selected, setSelected] = useState<TuneId | "new" | null>(initialTune ?? null);
   const [listError, setListError] = useState<string | null>(null);
 
   const load = useCallback(() => {
@@ -94,25 +97,31 @@ export function GuidedTune({ printer }: { printer: PrinterView }) {
   }
   const open = summaries.filter((s) => !isOver(s));
   const current = selected ?? open[0]?.id ?? "new";
+  const listed = summaries.filter((s) => !isOver(s) || s.id === current);
 
   return (
     <div className="space-y-4">
-      <nav aria-label="Tunes" className="flex flex-wrap items-center gap-2">
-        {summaries.map((s) => (
-          <button key={s.id} type="button" onClick={() => setSelected(s.id)} className={pillClass(current === s.id)}>
-            {s.stepper}
-            <span className="font-mono text-xs text-muted-foreground">{stateText(s.state).split(":")[0]}</span>
-          </button>
-        ))}
-        <button type="button" onClick={() => setSelected("new")} className={pillClass(current === "new")}>
+      <div className="flex flex-wrap items-center gap-2">
+        {listed.length > 0 && (
+          <Select value={current === "new" ? "" : current} onValueChange={(v) => setSelected(v)}>
+            <SelectTrigger aria-label="Tune" className="w-72">
+              <SelectValue placeholder="Choose a tune" />
+            </SelectTrigger>
+            <SelectContent>
+              {listed.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.stepper}
+                  <span className="text-muted-foreground">{stateText(s.state).split(":")[0]}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <UiButton variant="outline" onClick={() => setSelected("new")}>
+          <PlusIcon />
           New tune
-          {open.length > 0 && (
-            <span aria-label={`${open.length} unfinished`} className="rounded-full bg-accent px-1.5 text-xs">
-              {open.length}
-            </span>
-          )}
-        </button>
-      </nav>
+        </UiButton>
+      </div>
       {listError !== null && <p className="text-sm text-red-400">{listError}</p>}
       {current === "new" ? (
         <NewTune

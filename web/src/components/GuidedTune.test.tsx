@@ -71,6 +71,7 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
 }
 
 let current: TuneDetail;
+let listed: { id: string; state: TuneState }[] | null = null;
 let posts: string[];
 let bodies: unknown[];
 
@@ -102,17 +103,27 @@ beforeEach(() => {
         );
       }
       if (path === "/api/tunes") {
+        const rows = listed ?? [{ id: "t1", state: current.state }];
         return new Response(
-          JSON.stringify([
-            { id: "t1", stepper: "stepper_x", state: current.state, created: 1, current_step: "VelocityP" },
-          ]),
+          JSON.stringify(
+            rows.map((r, i) => ({
+              id: r.id,
+              stepper: "stepper_x",
+              state: r.state,
+              created: 10 - i,
+              current_step: "VelocityP",
+            })),
+          ),
         );
       }
       return new Response(JSON.stringify(current));
     }),
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  listed = null;
+  vi.unstubAllGlobals();
+});
 
 const printer = {
   steppers: [],
@@ -418,7 +429,7 @@ test("a new tune shows the steps with Setup open, and the later ones wait for th
   current = detail("AwaitingChoice");
   render(<GuidedTune printer={printer} />);
   await screen.findByRole("button", { name: "Accept the recommendation" });
-  fireEvent.click(screen.getByRole("button", { name: /New tune/ }));
+  fireEvent.click(screen.getByRole("button", { name: "New tune" }));
   const steps = within(screen.getByRole("navigation", { name: "Steps" }));
   expect(steps.getByRole("button", { name: /Setup/ })).toHaveAttribute("aria-current", "step");
   expect(screen.getByText("setup form")).toBeInTheDocument();
@@ -427,4 +438,30 @@ test("a new tune shows the steps with Setup open, and the later ones wait for th
   expect(screen.getByText("setup form")).not.toBeVisible();
   fireEvent.click(steps.getByRole("button", { name: /Setup/ }));
   expect(screen.getByText("setup form")).toBeVisible();
+});
+
+test("finished and abandoned tunes are not listed: with only those, the page opens a new tune", async () => {
+  current = detail("Done");
+  listed = [
+    { id: "t1", state: "Done" },
+    { id: "t2", state: "Abandoned" },
+  ];
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByText("setup form")).toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Tune" })).not.toBeInTheDocument();
+});
+
+test("an open tune is picked from a select next to the New tune button", async () => {
+  current = detail("AwaitingChoice");
+  render(<GuidedTune printer={printer} />);
+  expect(await screen.findByRole("combobox", { name: "Tune" })).toHaveTextContent("stepper_x");
+  expect(screen.getByRole("button", { name: "New tune" })).toBeInTheDocument();
+});
+
+test("a finished tune opened by link shows its steps and result", async () => {
+  current = detail("Done");
+  listed = [{ id: "t1", state: "Done" }];
+  render(<GuidedTune printer={printer} initialTune="t1" />);
+  expect(await screen.findByText(/no result yet/i)).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "Tune" })).toHaveTextContent("stepper_x");
 });

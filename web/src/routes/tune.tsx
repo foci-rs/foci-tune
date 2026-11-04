@@ -107,6 +107,8 @@ export const ManualRoute = createRoute({
 export const GuidedRoute = createRoute({
   getParentRoute: () => Route,
   path: "guided",
+  validateSearch: (search: Record<string, unknown>): { tune?: string } =>
+    typeof search.tune === "string" && search.tune !== "" ? { tune: search.tune } : {},
   component: GuidedTunePage,
 });
 
@@ -220,7 +222,8 @@ function ManualTune() {
 
 function GuidedTunePage() {
   const { printer } = useFeed();
-  return printer === null ? null : <GuidedTune printer={printer} />;
+  const { tune } = GuidedRoute.useSearch();
+  return printer === null ? null : <GuidedTune key={tune ?? ""} printer={printer} initialTune={tune} />;
 }
 
 function Workbench({ printer }: { printer: PrinterView }) {
