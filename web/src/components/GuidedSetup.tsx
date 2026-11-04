@@ -8,6 +8,8 @@ import {
   type Tune,
   type TuneSetup,
 } from "@/api";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { defaultProbeSpeed, gatesBody, type GatesForm } from "@/guided";
 import {
   bedLimits,
@@ -16,23 +18,20 @@ import {
   fallbackPattern,
   loadPattern,
   parseNumberList,
+  patternIsolation,
+  patternMode,
   patternProblem,
   probeEdgeHint,
   suggestedProbeStrokes,
   probeToggleSpacing,
   savePattern,
   toggleSpacingProblem,
+  type PatternMode,
   type Setup,
 } from "@/tune";
-import { BedMap } from "./BedMap";
 import { ParametersBlock } from "./ParametersBlock";
 import { Button, Card, NumberField } from "./ui";
-
-const HINT_CLASS = {
-  ok: "text-xs text-muted-foreground",
-  caution: "rounded border border-amber-500/60 px-2 py-1 text-xs text-amber-300",
-  warning: "rounded border border-red-500/60 px-2 py-1 text-xs text-red-300",
-} as const;
+import { PatternCard, type PatternNote } from "./WorkbenchCards";
 
 const DEFAULT_GATES: GatesForm = { damping_floor: 0.02, marginal: 0.025, standstill_gate: false, standstill_factor: 2 };
 const DEFAULT_SPEEDS = [50, 195, 400];
@@ -62,13 +61,21 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [patternModes, setPatternModes] = useState<Record<string, PatternMode>>({});
+  const rememberedFor = (s: StepperView): Pattern | null => {
+    const typed = typedPattern[s.name];
+    if (typed !== undefined) return typed;
+    const remembered = loadPattern(storage, s.name);
+    return remembered !== null && limits !== null && patternProblem(remembered, limits) === null ? remembered : null;
+  };
+  const mode: PatternMode =
+    stepper === undefined
+      ? "custom"
+      : patternMode(patternModes[stepper.name], stepper.proposal.pattern, rememberedFor(stepper));
   const pattern: Pattern | null = (() => {
     if (stepper === undefined || limits === null) return null;
-    const typed = typedPattern[stepper.name];
-    if (typed !== undefined) return typed;
-    const remembered = loadPattern(storage, stepper.name);
-    if (remembered !== null && patternProblem(remembered, limits) === null) return remembered;
-    return stepper.proposal.pattern ?? fallbackPattern(limits);
+    if (mode === "default" && stepper.proposal.pattern !== null) return stepper.proposal.pattern;
+    return rememberedFor(stepper) ?? stepper.proposal.pattern ?? fallbackPattern(limits);
   })();
   const patternError = pattern !== null && limits !== null ? patternProblem(pattern, limits) : null;
   const setPattern = (p: Pattern) => {
@@ -76,6 +83,23 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
     setTypedPattern((prev) => ({ ...prev, [stepper.name]: p }));
     if (limits !== null && patternProblem(p, limits) === null) savePattern(storage, stepper.name, p);
   };
+  const chooseMode = (next: PatternMode) => {
+    if (stepper === undefined) return;
+    setPatternModes((prev) => ({ ...prev, [stepper.name]: next }));
+    if (next === "default" && stepper.proposal.pattern !== null) setPattern(stepper.proposal.pattern);
+    else if (pattern !== null) setPattern(pattern);
+  };
+  const isolation =
+    stepper === undefined || pattern === null
+      ? null
+      : patternIsolation({
+          pattern,
+          stepper,
+          others: printer.steppers
+            .filter((o) => o.serial === stepper.serial && o.name !== stepper.name)
+            .map((o) => o.name),
+          limits,
+        });
 
   const speeds = parseNumberList(speedsText, "the speed set");
   const maxVelocity = printer.moonraker.max_velocity;
@@ -142,17 +166,23 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
         })
       : null;
 
+  const patternNotes: PatternNote[] = [
+    ...(spacingProblem === null ? [] : [{ tone: "caution" as const, text: spacingProblem }]),
+    ...(derived?.warning != null && !probeSpeedTouched ? [{ tone: "caution" as const, text: derived.warning }] : []),
+    ...(edgeHint === null ? [] : [{ tone: edgeHint.tone, text: edgeHint.text }]),
+  ];
+
   const blocked: string[] = [];
   if (stepper?.unusable) blocked.push(stepper.unusable);
   const precondition = printer.preconditions.find((p) => p.stepper === stepperName);
   if (precondition !== undefined && !precondition.ok) blocked.push(...precondition.failing);
   if (limits === null) blocked.push("bed limits need stepper_x and stepper_y in the config");
-  if (patternError !== null) blocked.push(patternError);
   if (!speeds.ok) blocked.push(speeds.error);
   else if (speeds.values.length < 1 || speeds.values.length > 3)
     blocked.push("a tune needs one to three tracking speeds");
-  if (spacingProblem !== null) blocked.push(spacingProblem);
-  if (gates.damping_floor >= gates.marginal) blocked.push("the damping floor must be below the marginal threshold");
+  if (gates.damping_floor >= gates.marginal) blocked.push("the damping stop limit must be below the low-damping limit");
+
+  const heldByPattern = patternError !== null || spacingProblem !== null || isolation?.ok === false;
 
   const create = () => {
     if (stepper === undefined || pattern === null || !speeds.ok) return;
@@ -191,26 +221,32 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
       />
     </label>
   );
+  const toggle = (label: string, checked: boolean, onChange: (on: boolean) => void) => (
+    <label className="flex items-center gap-2 text-sm">
+      <Switch aria-label={label} checked={checked} disabled={busy} onCheckedChange={onChange} />
+      {label}
+    </label>
+  );
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card label="Tune setup">
         <div className="space-y-3">
-          <label className="flex flex-col text-xs text-muted-foreground">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
             Stepper
-            <select
-              value={stepperName}
-              disabled={busy}
-              onChange={(e) => setStepperName(e.target.value)}
-              className="w-fit rounded border bg-background px-1.5 py-1 text-sm text-foreground"
-            >
-              {printer.steppers.map((s) => (
-                <option key={s.name} value={s.name}>
-                  {s.name}
-                  {s.unusable !== null ? " (unusable)" : ""}
-                </option>
-              ))}
-            </select>
+            <Select value={stepperName} disabled={busy} onValueChange={setStepperName}>
+              <SelectTrigger aria-label="Stepper" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {printer.steppers.map((st) => (
+                  <SelectItem key={st.name} value={st.name}>
+                    {st.name}
+                    {st.unusable !== null ? " (unusable)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
           <p className="text-xs text-muted-foreground">Tracking</p>
           {trackingSetup !== null && (
@@ -239,15 +275,6 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               }}
             />
           )}
-          {derived?.warning != null && !probeSpeedTouched && (
-            <p className="text-xs text-amber-400">{derived.warning}</p>
-          )}
-          {spacingProblem !== null && <p className="text-xs text-amber-400">{spacingProblem}</p>}
-          {edgeHint !== null && (
-            <p role="note" className={HINT_CLASS[edgeHint.tone]}>
-              {edgeHint.text}
-            </p>
-          )}
           <p className="text-xs text-muted-foreground">Standstill</p>
           {standstillSetup !== null && (
             <ParametersBlock
@@ -259,84 +286,55 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
               onSetup={(s) => s.type === "standstill" && setStandstill(s.parameters)}
             />
           )}
-          <p className="text-xs text-muted-foreground">Gates</p>
+          <p className="text-xs text-muted-foreground">Limits</p>
           <div className="flex flex-wrap items-end gap-3">
-            {gateField("Damping floor", "damping_floor", 0.01)}
-            {gateField("Marginal below", "marginal", 0.01)}
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={gates.standstill_gate}
-                disabled={busy}
-                onChange={(e) => setGates((g) => ({ ...g, standstill_gate: e.target.checked }))}
-              />
-              Standstill gate
-            </label>
-            {gateField("Standstill factor", "standstill_factor", 0.5)}
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={includeMarginal}
-                disabled={busy}
-                onChange={(e) => setIncludeMarginal(e.target.checked)}
-              />
-              Include marginal rungs
-            </label>
+            {gateField("Damping stop limit", "damping_floor", 0.01)}
+            {gateField("Low damping below", "marginal", 0.01)}
+            {toggle("Check noise at standstill", gates.standstill_gate, (on) =>
+              setGates((g) => ({ ...g, standstill_gate: on })),
+            )}
+            {gateField("Noise limit (times the baseline)", "standstill_factor", 0.5)}
+            {toggle("Include low-damping gains", includeMarginal, setIncludeMarginal)}
           </div>
         </div>
       </Card>
-      <Card label="Pattern">
-        {stepper?.proposal.refusal != null && (
-          <p className="mb-2 text-xs text-amber-400">
-            No proposed pattern: {stepper.proposal.refusal}. The pattern is yours to choose.
-          </p>
-        )}
-        {limits !== null && pattern !== null && stepper !== undefined && (
-          <div>
-            <BedMap
-              limits={limits}
-              pattern={pattern}
-              proposal={stepper.proposal.pattern}
-              disabled={busy}
-              onChange={setPattern}
-            />
-            {patternError !== null && (
-              <p role="alert" className="mt-2 text-sm text-amber-400">
-                Pattern refused: {patternError}
+      <div className="space-y-4">
+        <PatternCard
+          limits={limits}
+          pattern={pattern}
+          proposal={stepper?.proposal.pattern ?? null}
+          mode={mode}
+          isolation={isolation === null || isolation.ok ? null : isolation}
+          refusal={stepper?.proposal.refusal ?? null}
+          error={patternError}
+          notes={patternNotes}
+          disabled={busy}
+          onPattern={setPattern}
+          onMode={chooseMode}
+        />
+        <Card label="Create">
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Creating the tune records this setup and the starting gains. Nothing moves until you start a step.
+            </p>
+            {blocked.length > 0 && (
+              <ul className="list-disc pl-5 text-xs text-amber-400">
+                {[...new Set(blocked)].map((b) => (
+                  <li key={b}>{b}</li>
+                ))}
+              </ul>
+            )}
+            <Button disabled={busy || blocked.length > 0 || heldByPattern || stepper === undefined} onClick={create}>
+              Create tune
+            </Button>
+            {error !== null && (
+              <p role="alert" className="text-sm text-red-400">
+                {error}
               </p>
             )}
-            {stepper.proposal.pattern !== null && (
-              <Button
-                className="mt-2 text-xs"
-                disabled={busy}
-                onClick={() => setPattern(stepper.proposal.pattern as Pattern)}
-              >
-                Use the proposed pattern
-              </Button>
-            )}
           </div>
-        )}
-        <div className="mt-4 space-y-2 border-t pt-4">
-          <p className="text-xs text-muted-foreground">
-            Creating the tune records this setup and the starting gains. Nothing moves until you start a step.
-          </p>
-          {blocked.length > 0 && (
-            <ul className="list-disc pl-5 text-xs text-amber-400">
-              {[...new Set(blocked)].map((b) => (
-                <li key={b}>{b}</li>
-              ))}
-            </ul>
-          )}
-          <Button disabled={busy || blocked.length > 0 || stepper === undefined} onClick={create}>
-            Create tune
-          </Button>
-          {error !== null && (
-            <p role="alert" className="text-sm text-red-400">
-              {error}
-            </p>
-          )}
-        </div>
-      </Card>
+        </Card>
+      </div>
     </div>
   );
 }

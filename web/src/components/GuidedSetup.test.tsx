@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { PrinterView, StepperView } from "@/api";
+import { browserStorage, savePattern } from "@/tune";
 import { GuidedSetup } from "./GuidedSetup";
 
 vi.mock("@/api", async (orig) => ({ ...(await orig<typeof import("@/api")>()), postTune: vi.fn() }));
@@ -38,9 +39,32 @@ const printer = {
   moonraker: { max_velocity: 500 },
 } as unknown as PrinterView;
 
-test("the standstill factor is editable only while the standstill gate is on", () => {
+beforeEach(() => {
+  const data = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => void data.set(k, v),
+  });
+});
+
+test("the noise limit is editable only while the standstill noise check is on", () => {
   render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
-  expect(screen.getByRole("spinbutton", { name: "Standstill factor" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("checkbox", { name: "Standstill gate" }));
-  expect(screen.getByRole("spinbutton", { name: "Standstill factor" })).toBeEnabled();
+  expect(screen.getByRole("spinbutton", { name: "Noise limit (times the baseline)" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("switch", { name: "Check noise at standstill" }));
+  expect(screen.getByRole("spinbutton", { name: "Noise limit (times the baseline)" })).toBeEnabled();
+});
+
+test("a remembered path that moves the other motor is flagged, held back and can be fixed", () => {
+  savePattern(browserStorage(), "stepper_x", { start: [50, 50], end: [250, 100] });
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  expect(screen.getByText(/stepper_y would move/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create tune" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Fix the path" }));
+  expect(screen.queryByRole("button", { name: "Fix the path" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Create tune" })).toBeEnabled();
+});
+
+test("the path starts on the default and offers a custom one", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  expect(screen.getByRole("combobox", { name: "Path" })).toHaveTextContent("Default");
 });
