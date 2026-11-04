@@ -292,7 +292,7 @@ export function GuidedSetup({ printer, onCreated }: { printer: PrinterView; onCr
           <div className="flex flex-wrap items-end gap-3">
             {gateField("Damping stop limit", "damping_floor", 0.01)}
             {gateField("Low damping below", "marginal", 0.01)}
-            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <div className="flex flex-col text-xs text-muted-foreground">
               Noise limit
               <InputGroup className="w-48">
                 <InputGroupAddon align="inline-start">
