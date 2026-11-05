@@ -50,9 +50,9 @@ enum Command {
     },
     /// Install the udev rule and systemd unit and start the service (Linux, root).
     Setup {
-        /// User the service runs as; added to the plugdev group.
-        #[arg(long, default_value = "pi", conflicts_with = "remove")]
-        user: String,
+        /// User the service runs as; added to the plugdev group. Defaults to `SUDO_USER`.
+        #[arg(long, conflicts_with = "remove")]
+        user: Option<String>,
         /// Print what would be done, including the file contents, and change nothing.
         #[arg(long)]
         dry_run: bool,
@@ -98,7 +98,7 @@ fn main() -> ExitCode {
             dry_run,
             remove,
             root,
-        }) => match run_setup(&user, dry_run, remove, root) {
+        }) => match run_setup(user.as_deref(), dry_run, remove, root) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -143,7 +143,7 @@ fn main() -> ExitCode {
 }
 
 fn run_setup(
-    user: &str,
+    user: Option<&str>,
     dry_run: bool,
     remove: bool,
     root: Option<PathBuf>,
@@ -166,6 +166,11 @@ fn run_setup(
         path: PathBuf::from("the running executable"),
         source,
     })?;
-    let plan = InstallPlan { user, exe: &exe };
+    let sudo_user = std::env::var("SUDO_USER").ok();
+    let user = setup::resolve_user(user, sudo_user.as_deref().filter(|u| !u.is_empty()))?;
+    let plan = InstallPlan {
+        user: &user,
+        exe: &exe,
+    };
     setup::install(&config, &plan, runner.as_mut(), &mut out)
 }

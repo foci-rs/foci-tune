@@ -141,7 +141,7 @@ fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
         .stdout(predicates::str::contains("dry run"));
     assert!(!unit.exists());
 
-    setup(&[])
+    setup(&["--user", "pi"])
         .assert()
         .success()
         .stdout(predicates::str::contains("not executed under --root"));
@@ -151,4 +151,19 @@ fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
             .contains("User=pi\n")
     );
     assert!(root.join("etc/udev/rules.d/99-foci-trace.rules").is_file());
+}
+
+#[test]
+fn setup_without_sudo_or_user_fails_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+
+    Command::cargo_bin("foci-tune")
+        .unwrap()
+        .env_remove("SUDO_USER")
+        .args(["setup", "--root"])
+        .arg(dir.path())
+        .assert()
+        .failure();
+
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }

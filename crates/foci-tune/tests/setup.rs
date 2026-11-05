@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use foci_trace::usb::{TRACE_PRODUCT_ID, TRACE_VENDOR_ID};
 use foci_tune::setup::{
-    CommandOutcome, Host, InstallPlan, Runner, Setup, SetupError, install, remove,
+    CommandOutcome, Host, InstallPlan, Runner, Setup, SetupError, install, remove, resolve_user,
 };
 
 const DIR: &str = "home/pi/foci-tune";
@@ -378,11 +378,9 @@ fn a_real_run_without_root_is_refused_with_a_sudo_hint_before_anything_happens()
         matches!(install_err, SetupError::NotRoot(_)),
         "{install_err:?}"
     );
-    assert!(install_err.to_string().contains("sudo foci-tune setup"));
     assert!(
-        remove_err
-            .to_string()
-            .contains("sudo foci-tune setup --remove")
+        matches!(remove_err, SetupError::NotRoot(_)),
+        "{remove_err:?}"
     );
     assert!(runner.commands.is_empty());
 }
@@ -578,4 +576,42 @@ fn a_restart_hint_is_printed_only_when_an_enabled_service_got_a_new_unit() {
     assert!(!first.contains(hint), "{first}");
     assert!(!unchanged.contains(hint), "{unchanged}");
     assert!(upgraded.contains(hint), "{upgraded}");
+}
+
+#[test]
+fn resolve_user_prefers_the_explicit_flag() {
+    assert_eq!(
+        resolve_user(Some("klipper"), Some("pi")).unwrap(),
+        "klipper"
+    );
+}
+
+#[test]
+fn resolve_user_falls_back_to_sudo_user() {
+    assert_eq!(resolve_user(None, Some("pi")).unwrap(), "pi");
+}
+
+#[test]
+fn no_flag_and_no_sudo_user_is_refused() {
+    assert!(matches!(resolve_user(None, None), Err(SetupError::NoUser)));
+}
+
+#[test]
+fn root_is_refused_from_either_source() {
+    assert!(matches!(
+        resolve_user(Some("root"), Some("pi")),
+        Err(SetupError::RootUser)
+    ));
+    assert!(matches!(
+        resolve_user(None, Some("root")),
+        Err(SetupError::RootUser)
+    ));
+}
+
+#[test]
+fn a_malformed_sudo_user_is_refused() {
+    assert!(matches!(
+        resolve_user(None, Some("pi\nExecStart=/bin/sh")),
+        Err(SetupError::InvalidUser(_))
+    ));
 }

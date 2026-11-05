@@ -130,6 +130,12 @@ pub enum SetupError {
     /// The service user name is not a plain account name.
     #[error("invalid user name {0:?}")]
     InvalidUser(String),
+    /// Neither `--user` nor `SUDO_USER` named the service user.
+    #[error("cannot tell which user the service should run as; run with sudo or pass --user")]
+    NoUser,
+    /// The service must not run as root.
+    #[error("the service must not run as root; run with sudo from the service user or pass --user")]
+    RootUser,
     /// The service user is not in the passwd database.
     #[error("user {0} does not exist")]
     UnknownUser(String),
@@ -265,7 +271,7 @@ pub fn install(
 ) -> Result<(), SetupError> {
     let user = plan.user;
     validate_user(user)?;
-    setup.check_host("sudo foci-tune setup")?;
+    setup.check_host("sudo ~/foci-tune/foci-tune setup")?;
     let launcher = launcher_path(plan.exe)?;
     let member = group_membership(setup, user)?;
 
@@ -333,7 +339,7 @@ pub fn remove(
     runner: &mut dyn Runner,
     out: &mut dyn Write,
 ) -> Result<(), SetupError> {
-    setup.check_host("sudo foci-tune setup --remove")?;
+    setup.check_host("sudo ~/foci-tune/foci-tune setup --remove")?;
     let steps = [
         Step::Run {
             argv: vec!["systemctl", "disable", "--now", files::SERVICE],
@@ -484,6 +490,20 @@ fn open_temp(tmp: &Path, mode: u32) -> io::Result<fs::File> {
         .mode(mode)
         .custom_flags(libc::O_NOFOLLOW)
         .open(tmp)
+}
+
+/// Picks the service user: `explicit` (`--user`) if given, else `sudo_user` (`SUDO_USER`).
+///
+/// # Errors
+/// [`SetupError::NoUser`] if neither is set, [`SetupError::RootUser`] if the chosen name is
+/// `root`, [`SetupError::InvalidUser`] if it is not a plain account name.
+pub fn resolve_user(explicit: Option<&str>, sudo_user: Option<&str>) -> Result<String, SetupError> {
+    let user = explicit.or(sudo_user).ok_or(SetupError::NoUser)?;
+    if user == "root" {
+        return Err(SetupError::RootUser);
+    }
+    validate_user(user)?;
+    Ok(user.to_owned())
 }
 
 /// Accepts only a plain account name (`[a-z_][a-z0-9_-]*$?`, at most 32 bytes), so the name
