@@ -434,8 +434,10 @@ pub struct SessionView {
     pub tune: Option<TuneRef>,
 }
 
+/// The guided tune and step a listed session was made for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TuneRef {
+    /// Id of the tune whose step made the session.
     pub id: TuneId,
     /// The step, counted from 1.
     pub step: usize,
