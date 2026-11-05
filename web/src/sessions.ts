@@ -74,3 +74,17 @@ export function paginate<T>(items: readonly T[], page: number, size: number = PA
     total: items.length,
   };
 }
+
+/** The page numbers a pager lists: the first, the last and the current page with its neighbours; a hidden run of two or more pages is a `"gap"`. */
+export function pageLinks(page: number, pages: number): (number | "gap")[] {
+  const wanted = new Set([1, pages, page - 1, page, page + 1]);
+  const shown = [...wanted].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out: (number | "gap")[] = [];
+  for (const [i, n] of shown.entries()) {
+    const before = i === 0 ? null : shown[i - 1];
+    if (before !== null && n - before === 2) out.push(n - 1);
+    else if (before !== null && n - before > 2) out.push("gap");
+    out.push(n);
+  }
+  return out;
+}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { RunEntry, RunKind, SessionView } from "./api";
 import { runTypeOfKind } from "./tune";
-import { formatStarted, paginate, sessionLabel, sessionRow, sortSessions } from "./sessions";
+import { formatStarted, pageLinks, paginate, sessionLabel, sessionRow, sortSessions } from "./sessions";
 
 const probeKind: RunKind = {
   Probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
@@ -116,5 +116,23 @@ describe("paginate", () => {
 
   test("an empty list is one empty page", () => {
     expect(paginate([], 3)).toEqual({ items: [], page: 1, pages: 1, from: 0, to: 0, total: 0 });
+  });
+});
+
+describe("pageLinks", () => {
+  test("a few pages are all listed", () => {
+    expect(pageLinks(1, 1)).toEqual([1]);
+    expect(pageLinks(3, 5)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test("a long list keeps the first and last page and the neighbours of the current one", () => {
+    expect(pageLinks(1, 20)).toEqual([1, 2, "gap", 20]);
+    expect(pageLinks(10, 20)).toEqual([1, "gap", 9, 10, 11, "gap", 20]);
+    expect(pageLinks(20, 20)).toEqual([1, "gap", 19, 20]);
+  });
+
+  test("a gap of one page lists that page instead of a gap", () => {
+    expect(pageLinks(4, 20)).toEqual([1, 2, 3, 4, 5, "gap", 20]);
+    expect(pageLinks(17, 20)).toEqual([1, "gap", 16, 17, 18, 19, 20]);
   });
 });
