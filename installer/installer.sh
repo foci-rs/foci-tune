@@ -143,6 +143,11 @@ foci_main() {
   fi
   rm -rf "$tmp"
 
+  if [ "$replaced" -eq 1 ]; then
+    log "The foci-tune binary was replaced. It takes effect after you run:" >&2
+    log "  sudo systemctl restart foci-tune" >&2
+  fi
+
   _foci_require_idle || return 1
 
   if ! sudo "$dir/foci-tune" setup; then
@@ -180,9 +185,5 @@ $block"
     return 1
   fi
 
-  if [ "$replaced" -eq 1 ]; then
-    log "The foci-tune binary was replaced. It takes effect after you run:" >&2
-    log "  sudo systemctl restart foci-tune" >&2
-  fi
   log "foci-tune is available at http://$(hostname):7130" >&2
 }

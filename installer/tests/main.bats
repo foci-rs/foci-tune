@@ -174,6 +174,19 @@ calls() { tr '\n' ' ' <"$TEST_ROOT/calls.log" | sed 's/ $//'; }
   [ "$(cat "$HOME/foci-tune/foci-tune-armv7")" = "binary-v2" ]
 }
 
+@test "a_replaced_binary_shows_the_restart_command_even_when_setup_then_fails" {
+  foci_main
+  printf 'binary-v2' >"$TEST_ROOT/fixture/foci-tune-armv7"
+  write_sums "$(digest_of "$TEST_ROOT/fixture/foci-tune-armv7")"
+  : >"$TEST_ROOT/calls.log"
+  touch "$TEST_ROOT/sudo_fail"
+  run foci_main
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"sudo systemctl restart foci-tune"* ]]
+  [ "$(printf '%s\n' "$output" | grep -c 'sudo systemctl restart foci-tune')" -eq 1 ]
+  ! grep -q '^restart:foci-tune' "$TEST_ROOT/calls.log"
+}
+
 @test "an_unchanged_rerun_does_not_print_the_restart_command" {
   foci_main
   run foci_main
