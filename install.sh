@@ -50,6 +50,8 @@ foci_bootstrap() {
         return 1
     fi
 
+    [ -n "$version" ] && export FOCI_RELEASE_API="$api_url"
+
     exec bash "$installer_path" "${args[@]}"
 }
 

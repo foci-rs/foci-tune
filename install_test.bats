@@ -5,6 +5,7 @@ setup() {
   # Stub curl and exec so the test never touches the network or replaces
   # the bats process.
   curl() {
+    echo "$*" >> "$TEST_DIR/curl.log"
     case "$*" in
       *api.github.com*releases/latest*)
         cat "$TEST_DIR/latest_release.json" ;;
@@ -27,7 +28,9 @@ setup() {
   # call exec too and must not land in exec.log.
   exec() {
     case "$1" in
-      bash) echo "exec:$*" >> "$TEST_DIR/exec.log" ;;
+      bash)
+        echo "exec:$*" >> "$TEST_DIR/exec.log"
+        echo "release_api:${FOCI_RELEASE_API-unset}" >> "$TEST_DIR/exec.log" ;;
       *) command exec "$@" ;;
     esac
   }
@@ -58,6 +61,19 @@ teardown() { rm -rf "$TEST_DIR"; }
   [ "$status" -eq 0 ]
   grep -q -- '--force' "$TEST_DIR/exec.log"
   ! grep -q -- '--version' "$TEST_DIR/exec.log"
+  grep -q 'api.github.com/repos/foci-rs/foci-tune/releases/tags/v0.2.0' "$TEST_DIR/curl.log"
+}
+
+@test "foci_bootstrap pins the installer's release API to the --version tag" {
+  run foci_bootstrap --version v0.2.0
+  [ "$status" -eq 0 ]
+  grep -q '^release_api:.*/releases/tags/v0.2.0$' "$TEST_DIR/exec.log"
+}
+
+@test "foci_bootstrap leaves the installer's release API unset without --version" {
+  run foci_bootstrap
+  [ "$status" -eq 0 ]
+  grep -q '^release_api:unset$' "$TEST_DIR/exec.log"
 }
 
 @test "foci_bootstrap aborts on a checksum mismatch" {
