@@ -519,14 +519,16 @@ fn update_asvc(path: &Path, add: bool) -> Result<Outcome, SetupError> {
         return Ok(Outcome::Unchanged);
     };
     let meta = fs::metadata(path).map_err(asvc_err)?;
-    let outcome = write_atomic(path, updated.as_bytes(), meta.mode() & 0o7777).map_err(|e| {
-        SetupError::Asvc {
-            path: path.to_path_buf(),
-            reason: e.to_string(),
-        }
-    })?;
-    std::os::unix::fs::chown(path, Some(meta.uid()), Some(meta.gid())).map_err(asvc_err)?;
-    Ok(outcome)
+    write_atomic_owned(
+        path,
+        updated.as_bytes(),
+        meta.mode() & 0o7777,
+        Some((meta.uid(), meta.gid())),
+    )
+    .map_err(|e| SetupError::Asvc {
+        path: path.to_path_buf(),
+        reason: e.to_string(),
+    })
 }
 
 fn run_command(
@@ -548,6 +550,17 @@ fn run_command(
 /// Writes `bytes` to `dest` with `mode` through a temporary file renamed over it, so a reader
 /// never sees a partial file; leaves an identical file untouched.
 fn write_atomic(dest: &Path, bytes: &[u8], mode: u32) -> Result<Outcome, SetupError> {
+    write_atomic_owned(dest, bytes, mode, None)
+}
+
+/// [`write_atomic`] that also gives the temp file `owner` (uid, gid) before the rename, so a
+/// failed ownership change never leaves the destination replaced.
+fn write_atomic_owned(
+    dest: &Path,
+    bytes: &[u8],
+    mode: u32,
+    owner: Option<(u32, u32)>,
+) -> Result<Outcome, SetupError> {
     if let (Ok(existing), Ok(meta)) = (fs::read(dest), fs::metadata(dest))
         && existing == bytes
         && meta.permissions().mode() & 0o7777 == mode
@@ -562,6 +575,9 @@ fn write_atomic(dest: &Path, bytes: &[u8], mode: u32) -> Result<Outcome, SetupEr
         let mut file = open_temp(&tmp, mode)?;
         file.write_all(bytes)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
+        if let Some((uid, gid)) = owner {
+            std::os::unix::fs::fchown(&file, Some(uid), Some(gid))?;
+        }
         file.sync_all()?;
         fs::rename(&tmp, dest)
     })();
@@ -687,5 +703,29 @@ mod tests {
 
         let mode = file.metadata().unwrap().permissions().mode() & 0o7777;
         assert_eq!(mode & !0o600, 0, "temp created with {mode:04o}");
+    }
+
+    #[test]
+    fn a_failed_ownership_change_leaves_the_destination_and_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("moonraker.asvc");
+        fs::write(&dest, "old\n").unwrap();
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o640)).unwrap();
+        let before = fs::metadata(&dest).unwrap();
+
+        let result = write_atomic_owned(&dest, b"new\n", 0o644, Some((0, 0)));
+
+        if fs::metadata(dir.path()).unwrap().uid() == 0 {
+            return;
+        }
+        assert!(result.is_err());
+        let after = fs::metadata(&dest).unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "old\n");
+        assert_eq!(
+            (after.ino(), after.mode(), after.uid()),
+            (before.ino(), before.mode(), before.uid())
+        );
+        let leftovers: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(leftovers.len(), 1);
     }
 }
