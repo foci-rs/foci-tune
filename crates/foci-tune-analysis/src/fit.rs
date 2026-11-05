@@ -8,7 +8,7 @@ use nalgebra::{DVector, Dyn, OMatrix, U6, Vector6};
 
 use crate::probe::{FIT_RANGE, PSD_BAND_HZ};
 
-const MAX_EVALUATIONS: usize = 20_000;
+const MAX_EVALUATIONS: usize = 2_000;
 const PARAMS: usize = 6;
 const SOLVER_TOLERANCE: f64 = 1e-8;
 const OSCILLATORY_PARAMS: usize = 4;
