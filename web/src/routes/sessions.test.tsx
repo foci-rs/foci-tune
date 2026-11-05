@@ -84,21 +84,24 @@ function manySessions(count: number) {
   );
 }
 
-test("a long list shows 25 sessions a page and pages with Next and Previous", async () => {
-  manySessions(30);
+test("a long list shows 25 sessions a page and pages with numbered links", async () => {
+  manySessions(60);
   render(<RouterProvider router={createTestRouter("/sessions")} />);
   const table = await screen.findByRole("table");
   expect(within(table).getAllByRole("row").slice(1)).toHaveLength(25);
-  expect(screen.getByText("1–25 of 30")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+  expect(screen.getByText("1–25 of 60")).toBeInTheDocument();
+  const pager = screen.getByRole("navigation", { name: "pagination" });
+  expect(within(pager).getByRole("link", { name: "1" })).toHaveAttribute("aria-current", "page");
+  expect(within(pager).queryByRole("link", { name: "Go to previous page" })).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+  fireEvent.click(within(pager).getByRole("link", { name: "3" }));
 
-  await screen.findByText("26–30 of 30");
-  expect(within(screen.getByRole("table")).getAllByRole("row").slice(1)).toHaveLength(5);
-  expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
-  await screen.findByText("1–25 of 30");
+  await screen.findByText("51–60 of 60");
+  expect(within(screen.getByRole("table")).getAllByRole("row").slice(1)).toHaveLength(10);
+  expect(within(pager).getByRole("link", { name: "3" })).toHaveAttribute("aria-current", "page");
+  expect(within(pager).queryByRole("link", { name: "Go to next page" })).toBeNull();
+  fireEvent.click(within(pager).getByRole("link", { name: "Go to previous page" }));
+  await screen.findByText("26–50 of 60");
 });
 
 test("the page is in the address, so opening page 2 shows its sessions and a bad page shows the nearest", async () => {
@@ -113,7 +116,7 @@ test("the page is in the address, so opening page 2 shows its sessions and a bad
 test("a list that fits on one page has no pager", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
   await screen.findByRole("table");
-  expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+  expect(screen.queryByRole("navigation", { name: "pagination" })).toBeNull();
 });
 
 test("an opened session shows its broken runs' reasons and no control that acts on the printer", async () => {

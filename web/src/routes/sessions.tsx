@@ -1,12 +1,19 @@
-import { createRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { createRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSessions, getTunes, type SessionView, type TuneSummary } from "@/api";
-import { Button } from "@/components/ui/button";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { stateText } from "@/guided";
-import { formatStarted, type Page, paginate, sessionRow, sortSessions } from "@/sessions";
+import { formatStarted, type Page, pageLinks, paginate, sessionRow, sortSessions } from "@/sessions";
 import { Route as rootRoute } from "./__root";
 
 export const Route = createRoute({
@@ -22,7 +29,6 @@ export const Route = createRoute({
 function SessionsPage() {
   const { listen } = useFeed();
   const { page: requested = 1 } = Route.useSearch();
-  const navigate = useNavigate();
   const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -70,12 +76,7 @@ function SessionsPage() {
         {sessions !== null && sessions.length === 0 && (
           <p className="text-sm text-muted-foreground">No sessions recorded yet.</p>
         )}
-        {sessions !== null && sessions.length > 0 && (
-          <SessionList
-            page={paginate(sessions, requested)}
-            onPage={(page) => navigate({ to: "/sessions", search: page > 1 ? { page } : {} })}
-          />
-        )}
+        {sessions !== null && sessions.length > 0 && <SessionList page={paginate(sessions, requested)} />}
       </Card>
       {tunes.length > 0 && (
         <Card label="Tunes">
@@ -100,33 +101,51 @@ function SessionsPage() {
   );
 }
 
-function SessionList({ page, onPage }: { page: Page<SessionView>; onPage: (page: number) => void }) {
+const pageSearch = (page: number) => (page > 1 ? { page } : {});
+
+function SessionList({ page }: { page: Page<SessionView> }) {
   return (
     <>
       <SessionTable sessions={page.items} />
       {page.pages > 1 && (
-        <div className="mt-3 flex items-center justify-end gap-2 text-sm text-muted-foreground">
+        <div className="mt-3 flex items-center justify-between gap-4 text-sm text-muted-foreground">
           <span>
             {page.from}–{page.to} of {page.total}
           </span>
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="Previous page"
-            disabled={page.page <= 1}
-            onClick={() => onPage(page.page - 1)}
-          >
-            <ChevronLeftIcon />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label="Next page"
-            disabled={page.page >= page.pages}
-            onClick={() => onPage(page.page + 1)}
-          >
-            <ChevronRightIcon />
-          </Button>
+          <Pagination className="mx-0 w-auto">
+            <PaginationContent>
+              {page.page > 1 && (
+                <PaginationItem>
+                  <PaginationPrevious asChild>
+                    <Link to="/sessions" search={pageSearch(page.page - 1)} />
+                  </PaginationPrevious>
+                </PaginationItem>
+              )}
+              {pageLinks(page.page, page.pages).map((n, i) =>
+                n === "gap" ? (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: the gaps have no identity of their own and never reorder.
+                  <PaginationItem key={`gap-${i}`}>
+                    <PaginationEllipsis />
+                  </PaginationItem>
+                ) : (
+                  <PaginationItem key={n}>
+                    <PaginationLink asChild isActive={n === page.page}>
+                      <Link to="/sessions" search={pageSearch(n)}>
+                        {n}
+                      </Link>
+                    </PaginationLink>
+                  </PaginationItem>
+                ),
+              )}
+              {page.page < page.pages && (
+                <PaginationItem>
+                  <PaginationNext asChild>
+                    <Link to="/sessions" search={pageSearch(page.page + 1)} />
+                  </PaginationNext>
+                </PaginationItem>
+              )}
+            </PaginationContent>
+          </Pagination>
         </div>
       )}
     </>
