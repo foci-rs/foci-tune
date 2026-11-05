@@ -49,6 +49,14 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: sudo apt-get update && sudo apt-get install -y bats shellcheck
+      - run: shellcheck installer/installer.sh scripts/package-release.sh install.sh
+      - run: bats installer/tests scripts/tests install_test.bats
+
   build:
     runs-on: ubuntu-latest
     strategy:
