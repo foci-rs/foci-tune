@@ -12,7 +12,7 @@ import { type Page, pageLinks } from "@/sessions";
 
 export type PageParam = "page" | "tunes";
 
-/** The range shown and numbered links to the other pages; renders nothing for a single page. Each link changes only `param`, so a page kept in the address by another list stays. */
+/** Renders nothing for a single page. Each link changes only `param`, so a page kept in the address by another list stays. */
 export function Pager({ page, param, label }: { page: Page<unknown>; param: PageParam; label: string }) {
   if (page.pages <= 1) return null;
   const to = (n: number) => (prev: { page?: number; tunes?: number }) => ({ ...prev, [param]: n > 1 ? n : undefined });

@@ -35,7 +35,6 @@ export interface SessionRow {
 
 const TEST_NAMES: Record<RunType, string> = { probe: "Probe", tracking: "Tracking", standstill: "Standstill" };
 
-/** What one line of the session list shows. */
 export function sessionRow(v: SessionView): SessionRow {
   const s = v.session;
   if (s === null) return { id: v.id, started: "unknown", stepper: "unknown", test: "Unreadable", runs: v.runs.length };
@@ -62,7 +61,7 @@ export interface Page<T> {
 /** One page of `items`, counted from 1. A page past either end becomes the nearest page. */
 export function paginate<T>(items: readonly T[], page: number, size: number = PAGE_SIZE): Page<T> {
   const pages = Math.max(1, Math.ceil(items.length / size));
-  const at = Number.isFinite(page) ? Math.min(pages, Math.max(1, Math.trunc(page))) : 1;
+  const at = Math.min(pages, Math.max(1, page));
   const start = (at - 1) * size;
   const shown = items.slice(start, start + size);
   return {

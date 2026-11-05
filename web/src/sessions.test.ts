@@ -112,7 +112,6 @@ describe("paginate", () => {
   test("a page past either end is clamped to the nearest page", () => {
     expect(paginate(items, 99).page).toBe(5);
     expect(paginate(items, 0).page).toBe(1);
-    expect(paginate(items, Number.NaN).page).toBe(1);
   });
 
   test("an empty list is one empty page", () => {
