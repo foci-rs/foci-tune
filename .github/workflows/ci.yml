@@ -65,5 +65,12 @@ jobs:
       - run: shellcheck installer/installer.sh scripts/package-release.sh install.sh
       - run: bats installer/tests scripts/tests install_test.bats
 
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   build:
     uses: ./.github/workflows/build.yml
