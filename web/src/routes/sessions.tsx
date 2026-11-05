@@ -48,12 +48,16 @@ function SessionsPage() {
   useEffect(refresh, [refresh]);
   const [tunes, setTunes] = useState<TuneSummary[]>([]);
   const tunesPage = paginate(tunes, tunesRequested);
+  const tuneGeneration = useRef(0);
   const loadTunes = useCallback(() => {
+    const mine = ++tuneGeneration.current;
     getTunes().then(
-      (list) =>
+      (list) => {
+        if (mine !== tuneGeneration.current) return;
         setTunes(
           list.filter((t) => t.state === "Done" || t.state === "Abandoned").sort((a, b) => b.created - a.created),
-        ),
+        );
+      },
       () => undefined,
     );
   }, []);

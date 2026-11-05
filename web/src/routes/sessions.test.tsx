@@ -5,11 +5,18 @@ import type { SessionView } from "../api";
 import { createTestRouter } from "../router";
 
 class StubSocket {
+  static last: StubSocket | null = null;
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: unknown }) => void) | null = null;
   onclose: (() => void) | null = null;
+  constructor() {
+    StubSocket.last = this;
+  }
   send() {}
   close() {}
+  deliver(obj: unknown) {
+    this.onmessage?.({ data: JSON.stringify(obj) });
+  }
 }
 
 const session = (id: string, over: Partial<SessionView> = {}): SessionView => ({
@@ -175,6 +182,34 @@ test("the Guided tab lists the tunes, not their sessions, and the tab is in the 
     "/tune/guided?tune=t-done",
   ]);
   expect(screen.queryByText("20261030-guided")).toBeNull();
+});
+
+test("a slow answer to an older tune request does not replace a newer one", async () => {
+  let release: (r: Response) => void = () => undefined;
+  const slow = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (path: string) => {
+      if (path === "/api/sessions") return new Response(JSON.stringify([]));
+      if (path === "/api/tunes") {
+        calls += 1;
+        return calls === 1 ? slow : new Response(JSON.stringify([tune("t-new", "Done", 9)]));
+      }
+      return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
+    }),
+  );
+  render(<RouterProvider router={createTestRouter("/sessions?tab=guided")} />);
+  await waitFor(() => expect(calls).toBe(1));
+
+  StubSocket.last?.deliver({ type: "tune", tune: {} });
+  await waitFor(() => expect(tuneLinks().map((l) => l.getAttribute("href"))).toEqual(["/tune/guided?tune=t-new"]));
+  release(new Response(JSON.stringify([tune("t-old", "Done", 1)])));
+  await new Promise((r) => setTimeout(r, 20));
+
+  expect(tuneLinks().map((l) => l.getAttribute("href"))).toEqual(["/tune/guided?tune=t-new"]);
 });
 
 test("the tables sit in a card without a title", async () => {
