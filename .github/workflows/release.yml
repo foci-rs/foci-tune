@@ -79,9 +79,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@a9a95522b26fe6403f7bb24031f21fb573d0f5ff # v4.9.1
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -89,4 +99,4 @@ jobs:
         run: |
           scripts/package-release.sh artifacts dist
           make installer
-          gh release create "$TAG" dist/* build/foci-tune-installer.sh build/foci-tune-installer.sh.sha256 --title "$TAG" --generate-notes
+          gh release create "$TAG" dist/* build/foci-tune-installer.sh build/foci-tune-installer.sh.sha256 --title "$TAG" --notes-file CHANGES.md
