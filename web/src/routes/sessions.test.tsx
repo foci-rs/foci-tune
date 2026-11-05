@@ -4,6 +4,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { SessionView } from "../api";
 import { createTestRouter } from "../router";
 
+vi.mock("uplot", () => ({
+  default: class {
+    setData() {}
+    setSize() {}
+    destroy() {}
+  },
+}));
+
 class StubSocket {
   static last: StubSocket | null = null;
   onopen: (() => void) | null = null;
