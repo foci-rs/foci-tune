@@ -101,18 +101,18 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+      - run: sudo apt-get update && sudo apt-get install -y qemu-user
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: armv7 under qemu
         run: |
           chmod +x artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune
-          qemu-arm-static artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune --check
+          qemu-arm artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune --check
       - name: aarch64 under qemu
         run: |
           chmod +x artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune
-          qemu-aarch64-static artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune --check
+          qemu-aarch64 artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune --check
       - name: x86_64 native
         run: |
           chmod +x artifacts/foci-tune-x86_64-unknown-linux-musl/foci-tune
