@@ -1,5 +1,10 @@
 //! Feedforward-step probe: edge location, ensemble response and per-signal fits.
 
+use std::sync::OnceLock;
+
+use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
+
 use crate::fit::{DampedFit, FitError, fit_damped};
 use crate::ladder::median;
 use crate::psd::{Psd, moving_mean_detrend, welch_peak_hz, welch_psd};
@@ -154,6 +159,25 @@ pub enum EdgeDampingError {
     },
 }
 
+/// Threads for the edge fits: every core but one, so the host's other work keeps a core, and
+/// at least one.
+fn worker_threads(available: usize) -> usize {
+    available.saturating_sub(1).max(1)
+}
+
+fn fit_pool() -> Option<&'static ThreadPool> {
+    static POOL: OnceLock<Option<ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let available = std::thread::available_parallelism().map_or(1, usize::from);
+        ThreadPoolBuilder::new()
+            .num_threads(worker_threads(available))
+            .thread_name(|i| format!("edge-fit-{i}"))
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
 /// Fits each edge response on its own and reports the median damping ratio.
 ///
 /// Averaging edges whose ring frequency differs decoheres the mean and inflates the fitted
@@ -165,10 +189,11 @@ pub enum EdgeDampingError {
 /// [`EdgeDampingError::Incoherent`] when the scaled MAD of the damped frequencies exceeds
 /// [`MAX_HZ_SPREAD`].
 pub fn edge_damping(responses: &[Vec<f64>], dt_s: f64) -> Result<EdgeDamping, EdgeDampingError> {
-    let fits: Vec<DampedFit> = responses
-        .iter()
-        .filter_map(|r| fit_damped(r, dt_s).ok())
-        .collect();
+    let fit_one = |r: &Vec<f64>| fit_damped(r, dt_s).ok();
+    let fits: Vec<DampedFit> = match fit_pool() {
+        Some(pool) => pool.install(|| responses.par_iter().filter_map(fit_one).collect()),
+        None => responses.iter().filter_map(fit_one).collect(),
+    };
     let (fitted, edges) = (fits.len(), responses.len());
     if fitted < MIN_FITTED_EDGES {
         return Err(EdgeDampingError::TooFewFits { fitted, edges });
@@ -264,5 +289,19 @@ pub fn probe_metrics(s: &ChannelSeries) -> ProbeMetrics {
         edges: e.velocity.edges,
         stderr_at_peak: e.velocity.stderr_at_peak,
         torque_psd_peak_hz: welch_peak_hz(&detrended_torque(s), PSD_FS_HZ, PSD_BAND_HZ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_threads;
+
+    #[test]
+    fn the_fit_pool_leaves_one_core_free_and_never_has_none() {
+        assert_eq!(worker_threads(8), 7);
+        assert_eq!(worker_threads(4), 3);
+        assert_eq!(worker_threads(2), 1);
+        assert_eq!(worker_threads(1), 1);
+        assert_eq!(worker_threads(0), 1);
     }
 }
