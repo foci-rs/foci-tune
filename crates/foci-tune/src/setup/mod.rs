@@ -1,4 +1,4 @@
-//! `setup`: installs the binary, the udev rule and the systemd unit on the Pi, or removes them.
+//! `setup`: installs the udev rule and the systemd unit on the Pi, or removes them.
 
 mod files;
 
@@ -9,7 +9,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BIN_PATH: &str = "usr/local/bin/foci-tune";
+const LAUNCHER_NAME: &str = "foci-tune";
 const RULE_PATH: &str = "etc/udev/rules.d/99-foci-trace.rules";
 const UNIT_PATH: &str = "etc/systemd/system/foci-tune.service";
 const DROP_IN_PATH: &str = "etc/systemd/system/foci-tune.service.d";
@@ -133,6 +133,20 @@ pub enum SetupError {
     /// The service user is not in the passwd database.
     #[error("user {0} does not exist")]
     UnknownUser(String),
+    /// The install directory path cannot be written into a systemd unit unescaped.
+    #[error("install directory {} is not usable: {reason}", path.display())]
+    BadInstallDir {
+        /// The rejected directory.
+        path: PathBuf,
+        /// Why it was rejected.
+        reason: &'static str,
+    },
+    /// The launcher symlink beside the running binary is absent or points elsewhere.
+    #[error(
+        "{} must be a symlink to the running binary; run setup through the installer",
+        .0.display()
+    )]
+    MissingLauncher(PathBuf),
     /// The group the udev rule grants access to does not exist.
     #[error(
         "group {0} does not exist; setup does not create groups, create it \
@@ -167,11 +181,16 @@ fn io_err(path: &Path) -> impl FnOnce(io::Error) -> SetupError + '_ {
     }
 }
 
+/// What [`install`] sets up.
+#[derive(Debug, Clone, Copy)]
+pub struct InstallPlan<'a> {
+    /// User the service runs as.
+    pub user: &'a str,
+    /// The running binary; the launcher symlink `foci-tune` in its directory must resolve to it.
+    pub exe: &'a Path,
+}
+
 enum Step {
-    Install {
-        source: PathBuf,
-        dest: PathBuf,
-    },
     Write {
         dest: PathBuf,
         contents: String,
@@ -205,12 +224,6 @@ impl Step {
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Step::Install { source, dest } => write!(
-                f,
-                "install {} -> {} (mode 0755)",
-                source.display(),
-                dest.display()
-            ),
             Step::Write { dest, mode, .. } => {
                 write!(f, "write {} (mode {mode:04o})", dest.display())
             }
@@ -237,37 +250,26 @@ enum Outcome {
     Skipped(String),
 }
 
-/// Installs the binary, udev rule and unit for `user`, then reloads udev and enables the service.
-///
-/// `exe` is the binary to install, normally the running executable.
+/// Installs the udev rule and a unit running the launcher symlink for `plan.user`, then reloads
+/// udev and enables the service. The binary itself is not copied.
 ///
 /// # Errors
 ///
-/// See [`SetupError`]. Host, user and group problems are reported before anything changes.
+/// See [`SetupError`]. Host, user, group and install-directory problems are reported before
+/// anything changes.
 pub fn install(
     setup: &Setup,
-    user: &str,
-    exe: &Path,
+    plan: &InstallPlan<'_>,
     runner: &mut dyn Runner,
     out: &mut dyn Write,
 ) -> Result<(), SetupError> {
+    let user = plan.user;
     validate_user(user)?;
     setup.check_host("sudo foci-tune setup")?;
+    let launcher = launcher_path(plan.exe)?;
     let member = group_membership(setup, user)?;
-    let bin = setup.path(BIN_PATH);
 
     let mut steps = Vec::new();
-    if same_file(exe, &bin) {
-        steps.push(Step::Skip {
-            what: format!("install {} (mode 0755)", bin.display()),
-            reason: "already running from there".into(),
-        });
-    } else {
-        steps.push(Step::Install {
-            source: exe.to_path_buf(),
-            dest: bin,
-        });
-    }
     steps.push(Step::Write {
         dest: setup.path(RULE_PATH),
         contents: files::udev_rule(),
@@ -275,7 +277,7 @@ pub fn install(
     });
     steps.push(Step::Write {
         dest: setup.path(UNIT_PATH),
-        contents: files::unit(user),
+        contents: files::unit(user, &launcher),
         mode: 0o644,
     });
     let usermod = vec![
@@ -301,11 +303,10 @@ pub fn install(
     let was_enabled = fs::symlink_metadata(setup.path(ENABLED_LINK_PATH)).is_ok();
     writeln!(out, "foci-tune setup for user {user}:")?;
     let changed = perform(setup, &steps, runner, out)?;
-    let replaced = changed.first() == Some(&true) || changed.get(2) == Some(&true);
-    if was_enabled && replaced {
+    if was_enabled && changed.get(1) == Some(&true) {
         writeln!(
             out,
-            "foci-tune was already enabled and keeps running the old binary or unit; run \
+            "foci-tune was already enabled and keeps running the old unit; run \
              `sudo systemctl restart foci-tune` when no tuning run is active."
         )?;
     }
@@ -343,9 +344,6 @@ pub fn remove(
         },
         Step::Remove {
             path: setup.path(RULE_PATH),
-        },
-        Step::Remove {
-            path: setup.path(BIN_PATH),
         },
         Step::run(&["systemctl", "daemon-reload"]),
         Step::run(&["udevadm", "control", "--reload"]),
@@ -406,10 +404,6 @@ fn perform(
 
 fn execute(step: &Step, runner: &mut dyn Runner) -> Result<Outcome, SetupError> {
     match step {
-        Step::Install { source, dest } => {
-            let bytes = fs::read(source).map_err(io_err(source))?;
-            write_atomic(dest, &bytes, 0o755)
-        }
         Step::Write {
             dest,
             contents,
@@ -509,8 +503,31 @@ fn validate_user(user: &str) -> Result<(), SetupError> {
     }
 }
 
-fn same_file(a: &Path, b: &Path) -> bool {
-    matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
+/// The `foci-tune` symlink beside `exe`, after checking it resolves to `exe` and that its
+/// directory is safe to write into a unit's `ExecStart=` line.
+fn launcher_path(exe: &Path) -> Result<PathBuf, SetupError> {
+    let dir = exe.parent().unwrap_or(Path::new("/"));
+    let dir_text = dir.to_string_lossy();
+    if dir_text
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '%' | '$' | '"' | '\\'))
+    {
+        return Err(SetupError::BadInstallDir {
+            path: dir.to_path_buf(),
+            reason: "it contains whitespace or a character systemd treats specially",
+        });
+    }
+    let launcher = dir.join(LAUNCHER_NAME);
+    let is_symlink = fs::symlink_metadata(&launcher).is_ok_and(|m| m.file_type().is_symlink());
+    let resolves_to_exe = matches!(
+        (fs::canonicalize(&launcher), fs::canonicalize(exe)),
+        (Ok(l), Ok(e)) if l == e
+    );
+    if is_symlink && resolves_to_exe {
+        Ok(launcher)
+    } else {
+        Err(SetupError::MissingLauncher(launcher))
+    }
 }
 
 /// Whether `user` is in the group, by `/etc/group` member list or primary group.

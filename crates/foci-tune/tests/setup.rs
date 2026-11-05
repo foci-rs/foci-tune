@@ -3,9 +3,13 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use foci_trace::usb::{TRACE_PRODUCT_ID, TRACE_VENDOR_ID};
-use foci_tune::setup::{CommandOutcome, Host, Runner, Setup, SetupError, install, remove};
+use foci_tune::setup::{
+    CommandOutcome, Host, InstallPlan, Runner, Setup, SetupError, install, remove,
+};
 
-const BIN: &str = "usr/local/bin/foci-tune";
+const DIR: &str = "home/pi/foci-tune";
+const ARCH_BIN: &str = "home/pi/foci-tune/foci-tune-aarch64";
+const LAUNCHER: &str = "home/pi/foci-tune/foci-tune";
 const RULE: &str = "etc/udev/rules.d/99-foci-trace.rules";
 const UNIT: &str = "etc/systemd/system/foci-tune.service";
 const LINUX_ROOT: Host = Host {
@@ -38,12 +42,7 @@ struct Fixture {
 impl Fixture {
     fn new(plugdev: Option<&str>) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        for d in [
-            "etc/udev/rules.d",
-            "etc/systemd/system",
-            "usr/local/bin",
-            "download",
-        ] {
+        for d in ["etc/udev/rules.d", "etc/systemd/system", DIR, "download"] {
             fs::create_dir_all(dir.path().join(d)).unwrap();
         }
         fs::write(
@@ -58,10 +57,9 @@ impl Fixture {
             group.push('\n');
         }
         fs::write(dir.path().join("etc/group"), group).unwrap();
-        let exe = dir
-            .path()
-            .join("download/foci-tune-aarch64-unknown-linux-musl");
+        let exe = dir.path().join(ARCH_BIN);
         fs::write(&exe, b"new binary").unwrap();
+        std::os::unix::fs::symlink("foci-tune-aarch64", dir.path().join(LAUNCHER)).unwrap();
         Self { dir, exe }
     }
 
@@ -83,7 +81,11 @@ impl Fixture {
 
     fn install(&self, user: &str, runner: &mut Recorder) -> Result<String, SetupError> {
         let mut out = Vec::new();
-        install(&self.setup(false), user, &self.exe, runner, &mut out)?;
+        let plan = InstallPlan {
+            user,
+            exe: &self.exe,
+        };
+        install(&self.setup(false), &plan, runner, &mut out)?;
         Ok(String::from_utf8(out).unwrap())
     }
 
@@ -113,20 +115,19 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn install_writes_the_binary_rule_and_unit_and_runs_the_commands_in_order() {
+fn install_writes_the_rule_and_unit_and_runs_the_commands_in_order() {
     let fx = Fixture::new(Some("plugdev:x:46:pi"));
     let mut runner = Recorder::default();
 
     fx.install("klipper", &mut runner).unwrap();
 
-    assert_eq!(fs::read(fx.path(BIN)).unwrap(), b"new binary");
-    assert_eq!(mode(&fx.path(BIN)), 0o755);
     let rule = fs::read_to_string(fx.path(RULE)).unwrap();
     assert!(rule.contains(&format!("ATTR{{idVendor}}==\"{TRACE_VENDOR_ID:04x}\"")));
     assert!(rule.contains(&format!("ATTR{{idProduct}}==\"{TRACE_PRODUCT_ID:04x}\"")));
     assert!(rule.contains("GROUP=\"plugdev\""));
     assert_eq!(mode(&fx.path(RULE)), 0o644);
     let unit = fs::read_to_string(fx.path(UNIT)).unwrap();
+    let launcher = fx.path(LAUNCHER).display().to_string();
     let service: Vec<&str> = unit
         .lines()
         .filter(|l| l.starts_with("User=") || l.starts_with("ExecStart"))
@@ -134,10 +135,11 @@ fn install_writes_the_binary_rule_and_unit_and_runs_the_commands_in_order() {
     assert_eq!(
         service,
         [
-            "User=klipper",
-            "ExecStartPre=/usr/local/bin/foci-tune --check",
-            "ExecStart=/usr/local/bin/foci-tune --moonraker-url http://127.0.0.1:7125 \
-             --listen 0.0.0.0:7130",
+            "User=klipper".to_string(),
+            format!("ExecStartPre={launcher} --check"),
+            format!(
+                "ExecStart={launcher} --moonraker-url http://127.0.0.1:7125 --listen 0.0.0.0:7130"
+            ),
         ]
     );
     assert_eq!(mode(&fx.path(UNIT)), 0o644);
@@ -157,7 +159,7 @@ fn install_writes_the_binary_rule_and_unit_and_runs_the_commands_in_order() {
 fn a_second_install_reports_unchanged_rewrites_nothing_and_still_reloads() {
     let fx = Fixture::new(Some("plugdev:x:46:pi"));
     fx.install("pi", &mut Recorder::default()).unwrap();
-    let inodes: Vec<u64> = [BIN, RULE, UNIT]
+    let inodes: Vec<u64> = [RULE, UNIT]
         .iter()
         .map(|p| fs::metadata(fx.path(p)).unwrap().ino())
         .collect();
@@ -165,12 +167,12 @@ fn a_second_install_reports_unchanged_rewrites_nothing_and_still_reloads() {
 
     let out = fx.install("pi", &mut runner).unwrap();
 
-    let after: Vec<u64> = [BIN, RULE, UNIT]
+    let after: Vec<u64> = [RULE, UNIT]
         .iter()
         .map(|p| fs::metadata(fx.path(p)).unwrap().ino())
         .collect();
     assert_eq!(inodes, after);
-    assert_eq!(out.matches("unchanged").count(), 3, "{out}");
+    assert_eq!(out.matches("unchanged").count(), 2, "{out}");
     assert!(out.contains("pi is already in plugdev"), "{out}");
     assert_eq!(
         runner.commands,
@@ -205,29 +207,96 @@ fn a_changed_file_is_replaced_with_the_right_mode_and_no_temp_file_left() {
 }
 
 #[test]
-fn the_binary_is_skipped_when_it_already_runs_from_the_install_path() {
+fn install_writes_the_unit_pointing_at_the_launcher_symlink_not_the_arch_binary() {
     let fx = Fixture::new(Some("plugdev:x:46:pi"));
-    fs::write(fx.path(BIN), b"installed binary").unwrap();
-    let mut out = Vec::new();
 
-    install(
-        &fx.setup(false),
-        "pi",
-        &fx.path(BIN),
-        &mut Recorder::default(),
-        &mut out,
-    )
-    .unwrap();
+    fx.install("pi", &mut Recorder::default()).unwrap();
 
-    assert_eq!(fs::read(fx.path(BIN)).unwrap(), b"installed binary");
-    let out = String::from_utf8(out).unwrap();
-    assert!(
-        out.contains(&format!(
-            "install {} (mode 0755) (skip: already running from there): skipped",
-            fx.path(BIN).display()
-        )),
-        "{out}"
+    let unit = fs::read_to_string(fx.path(UNIT)).unwrap();
+    let launcher = fx.path(LAUNCHER).display().to_string();
+    assert!(unit.contains(&format!("ExecStart={launcher} ")), "{unit}");
+    assert!(!unit.contains("foci-tune-aarch64"), "{unit}");
+    assert!(!unit.contains("usr/local/bin"), "{unit}");
+}
+
+#[test]
+fn install_does_not_copy_the_binary_anywhere() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    let before = files_under(&fx.path("home"));
+
+    fx.install("pi", &mut Recorder::default()).unwrap();
+
+    assert_eq!(files_under(&fx.path("home")), before);
+    assert_eq!(fs::read(fx.path(ARCH_BIN)).unwrap(), b"new binary");
+    assert!(!fx.path("usr").exists());
+    assert_eq!(
+        files_under(&fx.path("etc"))
+            .into_iter()
+            .filter(|p| p.starts_with(fx.path("etc/udev")) || p.starts_with(fx.path("etc/systemd")))
+            .collect::<Vec<_>>(),
+        [fx.path(UNIT), fx.path(RULE)]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn a_missing_launcher_symlink_fails_before_anything_is_written_or_run() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fs::remove_file(fx.path(LAUNCHER)).unwrap();
+    let mut runner = Recorder::default();
+
+    let err = fx.install("pi", &mut runner).unwrap_err();
+
+    assert!(matches!(err, SetupError::MissingLauncher(_)), "{err:?}");
+    assert!(!fx.path(RULE).exists());
+    assert!(!fx.path(UNIT).exists());
+    assert!(runner.commands.is_empty());
+}
+
+#[test]
+fn a_launcher_pointing_at_a_different_file_fails_before_anything_is_written_or_run() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fs::write(fx.path("home/pi/foci-tune/foci-tune-armv7"), b"other").unwrap();
+    fs::remove_file(fx.path(LAUNCHER)).unwrap();
+    std::os::unix::fs::symlink("foci-tune-armv7", fx.path(LAUNCHER)).unwrap();
+    let mut runner = Recorder::default();
+
+    let err = fx.install("pi", &mut runner).unwrap_err();
+
+    assert!(matches!(err, SetupError::MissingLauncher(_)), "{err:?}");
+    assert!(!fx.path(RULE).exists());
+    assert!(!fx.path(UNIT).exists());
+    assert!(runner.commands.is_empty());
+}
+
+#[test]
+fn an_install_dir_with_whitespace_or_systemd_specials_is_rejected() {
+    for bad in ["a b", "a%h", "a$b", "a\"b", "a\\b"] {
+        let fx = Fixture::new(Some("plugdev:x:46:pi"));
+        let dir = fx.path("home/pi").join(bad);
+        fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("foci-tune-aarch64");
+        fs::write(&exe, b"bin").unwrap();
+        std::os::unix::fs::symlink("foci-tune-aarch64", dir.join("foci-tune")).unwrap();
+        let mut runner = Recorder::default();
+        let plan = InstallPlan {
+            user: "pi",
+            exe: &exe,
+        };
+
+        let err = install(&fx.setup(false), &plan, &mut runner, &mut Vec::new()).unwrap_err();
+
+        assert!(
+            matches!(err, SetupError::BadInstallDir { .. }),
+            "{bad:?}: {err:?}"
+        );
+        assert!(!fx.path(RULE).exists());
+        assert!(!fx.path(UNIT).exists());
+        assert!(runner.commands.is_empty());
+    }
 }
 
 #[test]
@@ -239,7 +308,6 @@ fn a_missing_plugdev_group_fails_before_anything_is_written_or_run() {
 
     assert!(matches!(err, SetupError::MissingGroup(_)), "{err:?}");
     assert!(err.to_string().contains("plugdev"), "{err}");
-    assert!(!fx.path(BIN).exists());
     assert!(!fx.path(RULE).exists());
     assert!(!fx.path(UNIT).exists());
     assert!(runner.commands.is_empty());
@@ -263,14 +331,16 @@ fn a_dry_run_prints_paths_modes_contents_and_commands_and_changes_nothing() {
     let mut runner = Recorder::default();
     let mut out = Vec::new();
 
-    install(&fx.setup(true), "klipper", &fx.exe, &mut runner, &mut out).unwrap();
+    let plan = InstallPlan {
+        user: "klipper",
+        exe: &fx.exe,
+    };
+    install(&fx.setup(true), &plan, &mut runner, &mut out).unwrap();
 
     let out = String::from_utf8(out).unwrap();
     for expected in [
-        fx.path(BIN).display().to_string(),
         fx.path(RULE).display().to_string(),
         fx.path(UNIT).display().to_string(),
-        "0755".into(),
         "0644".into(),
         "User=klipper".into(),
         "WantedBy=multi-user.target".into(),
@@ -280,7 +350,6 @@ fn a_dry_run_prints_paths_modes_contents_and_commands_and_changes_nothing() {
     ] {
         assert!(out.contains(&expected), "missing {expected:?} in:\n{out}");
     }
-    assert!(files_under(&fx.path("usr")).is_empty());
     assert!(files_under(&fx.path("etc/udev")).is_empty());
     assert!(files_under(&fx.path("etc/systemd")).is_empty());
     assert!(runner.commands.is_empty());
@@ -298,14 +367,11 @@ fn a_real_run_without_root_is_refused_with_a_sudo_hint_before_anything_happens()
     };
     let mut runner = Recorder::default();
 
-    let install_err = install(
-        &setup,
-        "pi",
-        Path::new("/nonexistent"),
-        &mut runner,
-        &mut Vec::new(),
-    )
-    .unwrap_err();
+    let plan = InstallPlan {
+        user: "pi",
+        exe: Path::new("/nonexistent"),
+    };
+    let install_err = install(&setup, &plan, &mut runner, &mut Vec::new()).unwrap_err();
     let remove_err = remove(&setup, &mut runner, &mut Vec::new()).unwrap_err();
 
     assert!(
@@ -328,7 +394,7 @@ fn remove_deletes_exactly_the_installed_files_and_leaves_the_rest() {
     let keep = [
         "etc/udev/rules.d/50-other.rules",
         "etc/systemd/system/moonraker.service",
-        "usr/local/bin/other",
+        "home/pi/foci-tune/foci-tune-aarch64.keep",
         "home/pi/printer_data/config/foci-results/sessions/s1.json",
         "etc/systemd/system/foci-tune.service.d/override.conf",
     ];
@@ -341,7 +407,7 @@ fn remove_deletes_exactly_the_installed_files_and_leaves_the_rest() {
 
     let out = fx.remove(&mut runner).unwrap();
 
-    for p in [BIN, RULE, UNIT] {
+    for p in [RULE, UNIT] {
         assert!(!fx.path(p).exists(), "{p} still present");
     }
     for k in keep {
@@ -379,7 +445,7 @@ fn remove_with_nothing_installed_tolerates_an_unloaded_unit() {
     let out = fx.remove(&mut runner).unwrap();
 
     assert!(out.contains("not loaded"), "{out}");
-    assert_eq!(out.matches("not present").count(), 3, "{out}");
+    assert_eq!(out.matches("not present").count(), 2, "{out}");
     assert_eq!(
         runner.commands,
         [
@@ -399,7 +465,7 @@ fn a_remove_dry_run_changes_nothing() {
 
     remove(&fx.setup(true), &mut runner, &mut out).unwrap();
 
-    for p in [BIN, RULE, UNIT] {
+    for p in [RULE, UNIT] {
         assert!(fx.path(p).exists(), "{p} removed by a dry run");
     }
     assert!(runner.commands.is_empty());
@@ -498,7 +564,7 @@ fn plain_account_names_are_accepted() {
 }
 
 #[test]
-fn a_restart_hint_is_printed_only_when_an_enabled_service_got_a_new_binary_or_unit() {
+fn a_restart_hint_is_printed_only_when_an_enabled_service_got_a_new_unit() {
     let fx = Fixture::new(Some("plugdev:x:46:pi"));
     let hint = "sudo systemctl restart foci-tune";
 
@@ -507,8 +573,7 @@ fn a_restart_hint_is_printed_only_when_an_enabled_service_got_a_new_binary_or_un
     fs::create_dir_all(&wants).unwrap();
     std::os::unix::fs::symlink(fx.path(UNIT), wants.join("foci-tune.service")).unwrap();
     let unchanged = fx.install("pi", &mut Recorder::default()).unwrap();
-    fs::write(&fx.exe, b"newer binary").unwrap();
-    let upgraded = fx.install("pi", &mut Recorder::default()).unwrap();
+    let upgraded = fx.install("klipper", &mut Recorder::default()).unwrap();
 
     assert!(!first.contains(hint), "{first}");
     assert!(!unchanged.contains(hint), "{unchanged}");

@@ -4,7 +4,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use foci_tune::assets;
 use foci_tune::server::{ServeConfig, serve};
-use foci_tune::setup::{self, Host, Runner, Setup, SetupError, SystemRunner, UnexecutedRunner};
+use foci_tune::setup::{
+    self, Host, InstallPlan, Runner, Setup, SetupError, SystemRunner, UnexecutedRunner,
+};
 use foci_tune::verify::{Kind, verify_archive};
 
 #[derive(Parser)]
@@ -46,7 +48,7 @@ enum Command {
         #[arg(required = true)]
         captures: Vec<PathBuf>,
     },
-    /// Install the binary, udev rule and systemd unit and start the service (Linux, root).
+    /// Install the udev rule and systemd unit and start the service (Linux, root).
     Setup {
         /// User the service runs as; added to the plugdev group.
         #[arg(long, default_value = "pi", conflicts_with = "remove")]
@@ -164,5 +166,6 @@ fn run_setup(
         path: PathBuf::from("the running executable"),
         source,
     })?;
-    setup::install(&config, user, &exe, runner.as_mut(), &mut out)
+    let plan = InstallPlan { user, exe: &exe };
+    setup::install(&config, &plan, runner.as_mut(), &mut out)
 }

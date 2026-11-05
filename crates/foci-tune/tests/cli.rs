@@ -107,7 +107,11 @@ async fn the_service_serves_the_api_and_stops_on_sigterm() {
 fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    for d in ["etc/udev/rules.d", "etc/systemd/system", "usr/local/bin"] {
+    for d in [
+        "etc/udev/rules.d",
+        "etc/systemd/system",
+        "home/pi/foci-tune",
+    ] {
         std::fs::create_dir_all(root.join(d)).unwrap();
     }
     std::fs::write(
@@ -117,8 +121,15 @@ fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
     .unwrap();
     std::fs::write(root.join("etc/group"), "pi:x:1000:\nplugdev:x:46:\n").unwrap();
     let unit = root.join("etc/systemd/system/foci-tune.service");
+    let exe = root.join("home/pi/foci-tune/foci-tune-aarch64");
+    std::fs::copy(assert_cmd::cargo::cargo_bin("foci-tune"), &exe).unwrap();
+    std::os::unix::fs::symlink(
+        "foci-tune-aarch64",
+        root.join("home/pi/foci-tune/foci-tune"),
+    )
+    .unwrap();
     let setup = |extra: &[&str]| {
-        let mut cmd = Command::cargo_bin("foci-tune").unwrap();
+        let mut cmd = Command::new(&exe);
         cmd.args(["setup", "--root"]).arg(root).args(extra);
         cmd
     };
@@ -139,6 +150,5 @@ fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
             .unwrap()
             .contains("User=pi\n")
     );
-    assert!(root.join("usr/local/bin/foci-tune").is_file());
     assert!(root.join("etc/udev/rules.d/99-foci-trace.rules").is_file());
 }
