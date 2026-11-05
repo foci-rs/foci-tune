@@ -122,11 +122,28 @@ Update only when no run is active.
 
 Release binaries are `foci-tune-aarch64`, `foci-tune-armv7` and `foci-tune-x86_64`, with a
 `SHA256SUMS` file. To install without the installer, place the binary for the Pi's architecture
-in `~/foci-tune`, create the `foci-tune` symlink to it, and run setup through the symlink:
+in `~/foci-tune`, create the `foci-tune` symlink to it, and run setup through the symlink.
+
+Setup runs the binary as root, so verify it first. In the directory where you downloaded the
+binary and `SHA256SUMS`, check the file under its original name (shown for `armv7`; use your
+architecture's name):
+
+```sh
+grep ' foci-tune-armv7$' SHA256SUMS | sha256sum -c -
+```
+
+On macOS use `shasum -a 256 -c -` in place of `sha256sum -c -`. It must print `foci-tune-armv7: OK`.
+If it does not, delete the download and do not run setup.
 
 ```sh
 sudo ~/foci-tune/foci-tune setup
 ```
+
+Run setup only while the printer is idle: it enables the service and can start it.
+
+A manual install has no Moonraker update-manager integration: setup creates neither
+`release_info.json` nor an `[update_manager foci-tune]` block. To get updates through Moonraker,
+use the installer instead.
 
 `setup` installs the udev rule and the systemd unit, adds the service user to `plugdev`, adds
 `foci-tune` to Moonraker's `moonraker.asvc` and enables the service. It is idempotent. It takes
