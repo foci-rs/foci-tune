@@ -85,38 +85,83 @@ FOCI_TUNE_API=http://printer.local:7130 npm run dev
 The service drives printer motion. The UI requires the operator to start every run, and Kill is
 the red button; keep the printer in view during a run.
 
-Release binaries are named `foci-tune-<target>`; download the one for the Pi's architecture and
-let it install itself:
+On the Pi, as the normal user (not root):
 
 ```sh
-chmod +x foci-tune-aarch64-unknown-linux-musl
-sudo ./foci-tune-aarch64-unknown-linux-musl setup
+curl -sL https://raw.githubusercontent.com/foci-rs/foci-tune/main/install.sh | bash
 ```
 
-`setup` installs the binary, the udev rule and the systemd unit, adds the service user to
-`plugdev` and enables the service. It is idempotent. The options (`--user`, `--dry-run`,
-`--remove`) are described by `foci-tune setup --help`; `--dry-run` shows the plan and the full
-file contents and needs no root. `--remove` keeps the user's `plugdev` membership, the session
-data and any `foci-tune.service.d` drop-in.
+Add `-s -- --version <tag>` after `bash` to install a specific release instead of the latest, for
+example `bash -s -- --version v0.2.0`. The installer needs Klipper and Moonraker already set up,
+refuses to run while a print is active, and checks the download against the release's
+`SHA256SUMS` before touching anything. It then:
 
-Setup never restarts a running service, so it cannot cut off a tuning run. After upgrading, run
-`sudo systemctl restart foci-tune` when no run is active.
+- installs the binary into `~/foci-tune`,
+- runs `sudo ~/foci-tune/foci-tune setup`, which installs the udev rule and the systemd unit,
+  adds the service user to `plugdev`, registers the service in Moonraker's `moonraker.asvc` and
+  enables it,
+- adds an `[update_manager foci-tune]` section to `moonraker.conf` and restarts Moonraker.
+
+An existing `[update_manager foci-tune]` section that the installer did not write makes it stop
+without changing anything. Re-running the installer is safe and never restarts a running
+`foci-tune`; if it replaced the binary, it tells you to run `sudo systemctl restart foci-tune`
+once no run is active.
+
+`~/foci-tune` holds the architecture-specific binary (`foci-tune-aarch64`, `foci-tune-armv7` or
+`foci-tune-x86_64`), a `foci-tune` symlink to it, and `release_info.json`, which Moonraker's
+update manager reads. The service runs from the symlink, so an update replaces the binary without
+rewriting the unit.
+
+### Updating
+
+Update from Moonraker's update manager (Mainsail or Fluidd). Moonraker restarts the `foci-tune`
+service after the update, including while a tuning run is in progress, which cuts that run off.
+Update only when no run is active.
+
+### Manual install
+
+Release binaries are `foci-tune-aarch64`, `foci-tune-armv7` and `foci-tune-x86_64`, with a
+`SHA256SUMS` file. To install without the installer, place the binary for the Pi's architecture
+in `~/foci-tune`, create the `foci-tune` symlink to it, and run setup through the symlink:
+
+```sh
+sudo ~/foci-tune/foci-tune setup
+```
+
+`setup` installs the udev rule and the systemd unit, adds the service user to `plugdev`, adds
+`foci-tune` to Moonraker's `moonraker.asvc` and enables the service. It is idempotent. It takes
+the service user from `SUDO_USER` and refuses to run the service as root. The options are
+described by `foci-tune setup --help`:
+
+- `--dry-run` shows the plan and the full file contents and needs no root.
+- `--remove` stops and disables the service and removes the unit, the udev rule and the
+  `moonraker.asvc` entry. It keeps the user's `plugdev` membership, the session data, any
+  `foci-tune.service.d` drop-in and `~/foci-tune`.
+- `--user <name>` runs the service as another user.
+- `--asvc-path <file>` names Moonraker's `moonraker.asvc` directly; otherwise setup asks Moonraker
+  where it lives.
+- `--moonraker-url <url>` is the Moonraker address used for that lookup (default
+  `http://127.0.0.1:7125`).
+
+Setup never restarts a running service, so it cannot cut off a tuning run. After replacing the
+binary by hand, run `sudo systemctl restart foci-tune` when no run is active.
 
 The unit passes the Moonraker URL and listen address as explicit flags in `ExecStart`. Setup
 rewrites the unit on every run, so if Moonraker needs `--api-key`, add it in a drop-in:
-`sudo systemctl edit foci-tune` and enter
+`sudo systemctl edit foci-tune` and enter, with `<home>` replaced by the absolute path of the
+service user's home directory:
 
 ```ini
 [Service]
 ExecStart=
-ExecStart=/usr/local/bin/foci-tune --moonraker-url http://127.0.0.1:7125 \
+ExecStart=<home>/foci-tune/foci-tune --moonraker-url http://127.0.0.1:7125 \
     --listen 0.0.0.0:7130 --api-key <key>
 ```
 
 The empty `ExecStart=` clears the unit's command before the new one replaces it. The UI is on
-port 7130 of the Pi. Sessions are stored in the
-`foci-results` directory inside Moonraker's `config` root, so the service user must be able to
-write there. A group membership added by setup applies to new logins.
+port 7130 of the Pi. Sessions are stored in the `foci-results` directory inside Moonraker's
+`config` root, so the service user must be able to write there. A group membership added by setup
+applies to new logins.
 
 `foci-tune --check` loads the embedded web assets and exits 0, or non-zero for a build without
 them. The unit runs it before each start.
