@@ -59,7 +59,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 test("the list has one row per session, newest first, with start, stepper, test and run count", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  const table = await screen.findByRole("table");
+  const table = (await screen.findAllByRole("table"))[0];
   const headers = within(table)
     .getAllByRole("columnheader")
     .map((h) => h.textContent);
@@ -90,7 +90,7 @@ function manyLists(sessionCount: number, tuneCount = 0) {
 test("a long list shows 25 sessions a page and pages with numbered links", async () => {
   manyLists(60);
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  const table = await screen.findByRole("table");
+  const table = (await screen.findAllByRole("table"))[0];
   expect(within(table).getAllByRole("row").slice(1)).toHaveLength(25);
   expect(screen.getByText("1–25 of 60")).toBeInTheDocument();
   const pager = screen.getByRole("navigation", { name: "Sessions pages" });
@@ -100,7 +100,7 @@ test("a long list shows 25 sessions a page and pages with numbered links", async
   fireEvent.click(within(pager).getByRole("link", { name: "3" }));
 
   await screen.findByText("51–60 of 60");
-  expect(within(screen.getByRole("table")).getAllByRole("row").slice(1)).toHaveLength(10);
+  expect(within(screen.getAllByRole("table")[0]).getAllByRole("row").slice(1)).toHaveLength(10);
   expect(within(pager).getByRole("link", { name: "3" })).toHaveAttribute("aria-current", "page");
   expect(within(pager).queryByRole("link", { name: "Go to next page" })).toBeNull();
   fireEvent.click(within(pager).getByRole("link", { name: "Go to previous page" }));
@@ -134,7 +134,7 @@ test("the tunes are paged on their own, and paging one list keeps the other's pa
 
 test("a list that fits on one page has no pager", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  await screen.findByRole("table");
+  await screen.findAllByRole("table");
   expect(screen.queryByRole("navigation", { name: "Sessions pages" })).toBeNull();
 });
 
@@ -389,10 +389,19 @@ test("a run that did not run has nothing to accept", async () => {
   expect(within(panel).queryByRole("button", { name: "Use these settings" })).toBeNull();
 });
 
-test("finished and abandoned tunes are listed with a link to open them in the guided tune", async () => {
+test("finished and abandoned tunes are a table of start, stepper and state, each opening in the guided tune", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  const links = await screen.findAllByRole("link", { name: /stepper_y/ });
-  expect(links.map((l) => l.getAttribute("href"))).toEqual(["/tune/guided?tune=t-gone", "/tune/guided?tune=t-done"]);
-  expect(links[0]).toHaveTextContent("Abandoned");
-  expect(links[1]).toHaveTextContent("Done");
+  await screen.findAllByRole("table");
+  const table = screen.getAllByRole("table")[1];
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Started", "Stepper", "State"]);
+  const rows = within(table).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toHaveTextContent(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}stepper_yAbandoned$/);
+  expect(rows[1]).toHaveTextContent(/stepper_yDone$/);
+  expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/tune/guided?tune=t-gone");
+  expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/tune/guided?tune=t-done");
 });

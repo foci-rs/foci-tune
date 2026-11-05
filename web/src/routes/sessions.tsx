@@ -73,21 +73,7 @@ function SessionsPage() {
       </Card>
       {tunes.length > 0 && (
         <Card label="Tunes">
-          <ul className="divide-y text-sm">
-            {tunesPage.items.map((t) => (
-              <li key={t.id}>
-                <Link
-                  to="/tune/guided"
-                  search={{ tune: t.id }}
-                  className="flex items-baseline gap-4 py-1.5 hover:underline"
-                >
-                  <span className="font-mono">{t.stepper}</span>
-                  <span className="text-muted-foreground">{stateText(t.state)}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">{formatStarted(t.created)}</span>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <TuneTable tunes={tunesPage.items} />
           <Pager page={tunesPage} param="tunes" label="Tunes pages" />
         </Card>
       )}
@@ -137,6 +123,35 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
               </tr>
             );
           })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TuneTable({ tunes }: { tunes: TuneSummary[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="text-xs text-muted-foreground">
+          <tr>
+            <th className="py-1 pr-3 font-medium">Started</th>
+            <th className="py-1 pr-3 font-medium">Stepper</th>
+            <th className="py-1 pr-3 font-medium">State</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tunes.map((t) => (
+            <tr key={t.id} className="border-t">
+              <td className="py-1 pr-3 font-mono">
+                <Link to="/tune/guided" search={{ tune: t.id }} title={t.id} className="underline underline-offset-2">
+                  {formatStarted(t.created)}
+                </Link>
+              </td>
+              <td className="py-1 pr-3 font-mono">{t.stepper}</td>
+              <td className="py-1 pr-3">{stateText(t.state)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
