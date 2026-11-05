@@ -174,6 +174,7 @@ fn non_ringing_shapes_report_failure() {
                         | FitError::FrequencyOffBand(_)
                         | FitError::AmplitudeExcessive(_)
                         | FitError::NoConvergence
+                        | FitError::SingularJacobian
                 ),
                 "{name}: {err:?}"
             ),

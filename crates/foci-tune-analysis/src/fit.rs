@@ -99,14 +99,25 @@ impl Problem<'_> {
     }
 
     fn jacobian_at(&self, p: &Vector6<f64>) -> Jacobian {
+        let (a, z, w, phi, b, tau) = (p[0], p[1], p[2], p[3], p[4], p[5]);
+        let root = (1.0 - z * z).max(1e-6).sqrt();
+        let wd = w * root;
+        let d_wd_dz = if 1.0 - z * z > 1e-6 {
+            -w * z / root
+        } else {
+            0.0
+        };
         let mut j = Jacobian::zeros(self.t.len());
-        for c in 0..PARAMS {
-            let h = f64::EPSILON.cbrt() * p[c].abs().max(1e-3);
-            let (mut hi, mut lo) = (*p, *p);
-            hi[c] += h;
-            lo[c] -= h;
-            let column = (self.residuals_at(&hi) - self.residuals_at(&lo)) / (2.0 * h);
-            j.set_column(c, &column);
+        for (row, &t) in self.t.iter().enumerate() {
+            let envelope = (-z * w * t).exp();
+            let (sin, cos) = (wd * t + phi).sin_cos();
+            let decay = (-t / tau).exp();
+            j[(row, 0)] = envelope * cos;
+            j[(row, 1)] = a * envelope * (-w * t * cos - t * d_wd_dz * sin);
+            j[(row, 2)] = a * envelope * (-z * t * cos - t * root * sin);
+            j[(row, 3)] = -a * envelope * sin;
+            j[(row, 4)] = decay;
+            j[(row, 5)] = b * decay * t / (tau * tau);
         }
         j
     }
@@ -401,5 +412,50 @@ mod tests {
             "{}",
             fit.damped_hz
         );
+    }
+
+    impl Problem<'_> {
+        fn jacobian_by_differences(&self, p: &Vector6<f64>) -> Jacobian {
+            let mut j = Jacobian::zeros(self.t.len());
+            for c in 0..PARAMS {
+                let h = f64::EPSILON.cbrt() * p[c].abs().max(1e-3);
+                let (mut hi, mut lo) = (*p, *p);
+                hi[c] += h;
+                lo[c] -= h;
+                let column = (self.residuals_at(&hi) - self.residuals_at(&lo)) / (2.0 * h);
+                j.set_column(c, &column);
+            }
+            j
+        }
+    }
+
+    #[test]
+    fn the_analytic_jacobian_matches_central_differences() {
+        let t: Vec<f64> = (FIT_RANGE.0..FIT_RANGE.1).map(|k| k as f64 * DT).collect();
+        let y = &FLAT_VALLEY[FIT_RANGE.0..FIT_RANGE.1];
+        let problem = Problem {
+            t,
+            y,
+            p: Vector6::zeros(),
+        };
+        let points = [
+            Vector6::new(0.3, 0.06, TAU * 150.0, 0.2, 0.05, 0.02),
+            Vector6::new(-0.8, 0.4, TAU * 90.0, -1.3, -0.2, 0.005),
+            Vector6::new(1.2, 0.01, TAU * 400.0, 3.0, 0.0, 0.05),
+            Vector6::new(0.5, 0.9, TAU * 200.0, -0.4, 0.3, 0.3),
+        ];
+
+        for p in points {
+            let analytic = problem.jacobian_at(&p);
+            let numeric = problem.jacobian_by_differences(&p);
+            for c in 0..PARAMS {
+                let scale = numeric.column(c).amax().max(1e-9);
+                let worst = (analytic.column(c) - numeric.column(c)).amax();
+                assert!(
+                    worst / scale < 1e-5,
+                    "column {c} of {p:?}: {worst} against scale {scale}"
+                );
+            }
+        }
     }
 }
