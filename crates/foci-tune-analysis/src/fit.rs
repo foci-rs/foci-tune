@@ -10,6 +10,7 @@ use crate::probe::{FIT_RANGE, PSD_BAND_HZ};
 
 const MAX_EVALUATIONS: usize = 20_000;
 const PARAMS: usize = 6;
+const SOLVER_TOLERANCE: f64 = 1e-8;
 const OSCILLATORY_PARAMS: usize = 4;
 const AMPLITUDE_SIGNS: [f64; 2] = [1.0, -1.0];
 const START_ZETAS: [f64; 2] = [0.05, 0.1];
@@ -176,9 +177,17 @@ fn starts(peak: f64, b: f64) -> Vec<Vector6<f64>> {
     out
 }
 
+/// Machine-epsilon stopping tolerances make the solver creep along a flat valley for thousands
+/// of evaluations after the fit has settled.
+fn solver() -> LevenbergMarquardt<f64> {
+    LevenbergMarquardt::new()
+        .with_patience(MAX_EVALUATIONS / (PARAMS + 1))
+        .with_ftol(SOLVER_TOLERANCE)
+        .with_xtol(SOLVER_TOLERANCE)
+}
+
 fn solve_from(problem: Problem<'_>, initial: Vector6<f64>, peak: f64) -> SolveOutcome {
-    let solver = LevenbergMarquardt::new().with_patience(MAX_EVALUATIONS / (PARAMS + 1));
-    let (problem, report) = solver.minimize(Problem {
+    let (problem, report) = solver().minimize(Problem {
         p: initial,
         ..problem
     });
@@ -288,4 +297,109 @@ pub fn fit_damped(mean: &[f64], dt_s: f64) -> Result<DampedFit, FitError> {
         residual_rms,
         admissible_starts,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DT: f64 = 0.001000023076922929;
+    const FLAT_VALLEY: [f64; 60] = [
+        -0.04357780869086538,
+        0.2236374699703829,
+        0.6520958851713741,
+        0.32054516476080025,
+        -0.010643736742149358,
+        -0.23101721378885903,
+        -0.23315560667068477,
+        -0.12123554285488404,
+        0.21615516683231797,
+        0.5402467707519574,
+        0.2098609463768197,
+        -0.12499994811779074,
+        -0.33969531567746286,
+        -0.12326544782997517,
+        -0.007926373659334887,
+        -0.024744444358144494,
+        0.11063923829127778,
+        0.21570315890298275,
+        -0.12354121339869771,
+        -0.33975356697845344,
+        -0.2316739846957628,
+        0.10518828357676821,
+        0.2166262906457127,
+        0.09294441511911676,
+        -0.12357365166385913,
+        -0.0010435364061388934,
+        -0.12373582803284712,
+        -0.1165489171304674,
+        -0.014878739588061763,
+        0.323044566089012,
+        0.10561794725820006,
+        -0.12569618694302626,
+        -0.11929578580405828,
+        -0.007554469138032813,
+        0.0889008488086088,
+        -0.012795898831095718,
+        0.10016955673697542,
+        0.10888475700269282,
+        -0.11407225341087862,
+        -0.240459211963808,
+        -0.11618447700083373,
+        0.20944773800817856,
+        -0.016381287950001894,
+        0.0011969590458382603,
+        -0.12266500280040589,
+        -0.12399525834215126,
+        -0.003399814563514762,
+        -0.12342767160376632,
+        -0.008661913552908925,
+        0.20901573376404486,
+        -0.008508003596251177,
+        -0.008114581343101829,
+        -0.12342767160376632,
+        0.09984668894213339,
+        0.10047456952941142,
+        -0.010677875132035473,
+        -0.028389897042671603,
+        0.12141442534997174,
+        -0.02073067228160868,
+        -0.12131681407372209,
+    ];
+
+    #[test]
+    fn a_response_with_a_flat_valley_stops_once_the_fit_has_settled() {
+        let peak = FLAT_VALLEY[..FIT_RANGE.1]
+            .iter()
+            .fold(0.0f64, |m, v| m.max(v.abs()));
+        let t: Vec<f64> = (FIT_RANGE.0..FIT_RANGE.1).map(|k| k as f64 * DT).collect();
+        let y = &FLAT_VALLEY[FIT_RANGE.0..FIT_RANGE.1];
+
+        let worst = starts(peak, FLAT_VALLEY[10])
+            .into_iter()
+            .map(|initial| {
+                let problem = Problem {
+                    t: t.clone(),
+                    y,
+                    p: initial,
+                };
+                solver().minimize(problem).1.number_of_evaluations
+            })
+            .max()
+            .unwrap();
+
+        assert!(worst < 3_000, "a start used {worst} evaluations");
+    }
+
+    #[test]
+    fn the_flat_valley_response_fits_to_its_settled_damping() {
+        let fit = fit_damped(&FLAT_VALLEY, DT).expect("the response fits");
+
+        assert!((fit.zeta - 0.035772069).abs() < 1e-4, "{}", fit.zeta);
+        assert!(
+            (fit.damped_hz - 151.207872).abs() < 1e-3,
+            "{}",
+            fit.damped_hz
+        );
+    }
 }
