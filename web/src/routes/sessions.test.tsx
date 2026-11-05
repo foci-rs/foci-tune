@@ -72,6 +72,50 @@ test("the list has one row per session, newest first, with start, stepper, test 
   expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/sessions/20261029-aaa");
 });
 
+function manySessions(count: number) {
+  const list = Array.from({ length: count }, (_, i) => session(`20261101T0000${String(i).padStart(2, "0")}Z-s${i}`));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (path: string) => {
+      if (path === "/api/sessions") return new Response(JSON.stringify(list));
+      if (path === "/api/tunes") return new Response(JSON.stringify([]));
+      return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
+    }),
+  );
+}
+
+test("a long list shows 25 sessions a page and pages with Next and Previous", async () => {
+  manySessions(30);
+  render(<RouterProvider router={createTestRouter("/sessions")} />);
+  const table = await screen.findByRole("table");
+  expect(within(table).getAllByRole("row").slice(1)).toHaveLength(25);
+  expect(screen.getByText("1–25 of 30")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+
+  fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+  await screen.findByText("26–30 of 30");
+  expect(within(screen.getByRole("table")).getAllByRole("row").slice(1)).toHaveLength(5);
+  expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Previous page" }));
+  await screen.findByText("1–25 of 30");
+});
+
+test("the page is in the address, so opening page 2 shows its sessions and a bad page shows the nearest", async () => {
+  manySessions(30);
+  const { unmount } = render(<RouterProvider router={createTestRouter("/sessions?page=2")} />);
+  await screen.findByText("26–30 of 30");
+  unmount();
+  render(<RouterProvider router={createTestRouter("/sessions?page=99")} />);
+  await screen.findByText("26–30 of 30");
+});
+
+test("a list that fits on one page has no pager", async () => {
+  render(<RouterProvider router={createTestRouter("/sessions")} />);
+  await screen.findByRole("table");
+  expect(screen.queryByRole("button", { name: "Next page" })).toBeNull();
+});
+
 test("an opened session shows its broken runs' reasons and no control that acts on the printer", async () => {
   render(<RouterProvider router={createTestRouter("/sessions/20261030-bbb")} />);
   expect((await screen.findAllByText(/incomplete run directory/)).length).toBe(2);
