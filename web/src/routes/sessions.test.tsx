@@ -57,16 +57,19 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-test("the list shows newest first with each state count and reason", async () => {
+test("the list has one row per session, newest first, with start, stepper, test and run count", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
   const table = await screen.findByRole("table");
+  const headers = within(table)
+    .getAllByRole("columnheader")
+    .map((h) => h.textContent);
+  expect(headers).toEqual(["Started", "Stepper", "Test", "Runs"]);
   const rows = within(table).getAllByRole("row").slice(1);
-  expect(rows[0]).toHaveTextContent("20261030-bbb");
-  expect(rows[1]).toHaveTextContent("20261029-aaa");
-  expect(rows[0]).toHaveTextContent("1 failed");
-  expect(rows[0]).toHaveTextContent("1 skipped");
-  expect(rows[0]).toHaveTextContent("run.json: truncated");
-  expect(rows[0]).toHaveTextContent("n/a");
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toHaveTextContent(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}stepper_xProbe2$/);
+  expect(rows[0]).not.toHaveTextContent(/failed|skipped|n\/a|truncated/);
+  expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/sessions/20261030-bbb");
+  expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/sessions/20261029-aaa");
 });
 
 test("an opened session shows its broken runs' reasons and no control that acts on the printer", async () => {

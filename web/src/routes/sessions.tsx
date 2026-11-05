@@ -4,8 +4,7 @@ import { getSessions, getTunes, type SessionView, type TuneSummary } from "@/api
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { stateText } from "@/guided";
-import { sessionLabel, sortSessions, summarizeSession } from "@/sessions";
-import { formatNumber, stateLabel } from "@/tune";
+import { formatStarted, sessionRow, sortSessions } from "@/sessions";
 import { Route as rootRoute } from "./__root";
 
 export const Route = createRoute({
@@ -77,9 +76,7 @@ function SessionsPage() {
                 >
                   <span className="font-mono">{t.stepper}</span>
                   <span className="text-muted-foreground">{stateText(t.state)}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    {new Date(t.created * 1000).toLocaleString()}
-                  </span>
+                  <span className="ml-auto text-xs text-muted-foreground">{formatStarted(t.created)}</span>
                 </Link>
               </li>
             ))}
@@ -94,60 +91,32 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-xs uppercase tracking-wider text-muted-foreground">
+        <thead className="text-xs text-muted-foreground">
           <tr>
-            <th className="py-1 pr-3 font-medium">Session</th>
-            <th className="py-1 pr-3 font-medium">Setup</th>
+            <th className="py-1 pr-3 font-medium">Started</th>
+            <th className="py-1 pr-3 font-medium">Stepper</th>
+            <th className="py-1 pr-3 font-medium">Test</th>
             <th className="py-1 pr-3 text-right font-medium">Runs</th>
-            <th className="py-1 pr-3 font-medium">Headline</th>
-            <th className="py-1 pr-3 font-medium">States</th>
           </tr>
         </thead>
         <tbody>
           {sessions.map((v) => {
-            const s = summarizeSession(v);
+            const row = sessionRow(v);
             return (
-              <tr key={v.id} className="border-t align-top">
+              <tr key={row.id} className="border-t">
                 <td className="py-1 pr-3 font-mono">
-                  <Link to="/sessions/$id" params={{ id: v.id }} className="underline underline-offset-2">
-                    {v.id}
+                  <Link
+                    to="/sessions/$id"
+                    params={{ id: row.id }}
+                    title={row.id}
+                    className="underline underline-offset-2"
+                  >
+                    {row.started}
                   </Link>
-                  {v.session !== null && <p className="text-xs text-muted-foreground">{v.session.name}</p>}
                 </td>
-                <td className="py-1 pr-3">
-                  {sessionLabel(v)}
-                  {s.error !== null && <p className="text-xs text-red-400">{s.error}</p>}
-                </td>
-                <td className="py-1 pr-3 text-right font-mono">{s.runCount}</td>
-                <td className="py-1 pr-3 font-mono">
-                  {s.headline === null ? (
-                    "n/a"
-                  ) : (
-                    <>
-                      {formatNumber(s.headline.value, s.type === "probe" ? 3 : 1)} {s.headline.unit}
-                      <p className="text-xs text-muted-foreground">{s.headline.note ?? s.headline.label}</p>
-                    </>
-                  )}
-                </td>
-                <td className="py-1 pr-3">
-                  {s.counts.length === 0 ? (
-                    <span className="text-muted-foreground">no runs</span>
-                  ) : (
-                    s.counts.map((c) => (
-                      <span key={c.state} className="mr-3 whitespace-nowrap">
-                        {c.count} {stateLabel(c.state)}
-                      </span>
-                    ))
-                  )}
-                  {s.verificationFailures > 0 && (
-                    <p className="text-xs text-amber-400">{s.verificationFailures} with failed verification</p>
-                  )}
-                  {s.reasons.map((r) => (
-                    <p key={r} className="text-xs text-muted-foreground">
-                      {r}
-                    </p>
-                  ))}
-                </td>
+                <td className="py-1 pr-3 font-mono">{row.stepper}</td>
+                <td className="py-1 pr-3">{row.test}</td>
+                <td className="py-1 pr-3 text-right font-mono">{row.runs}</td>
               </tr>
             );
           })}
