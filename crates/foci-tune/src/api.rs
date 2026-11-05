@@ -430,6 +430,27 @@ pub struct SessionView {
     pub error: Option<String>,
     /// Runs in id order.
     pub runs: Vec<RunEntry>,
+    /// The tune and step the session was made for; absent for a session made by hand.
+    pub tune: Option<TuneRef>,
+}
+
+/// The guided tune and step a session belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TuneRef {
+    /// The tune.
+    pub id: TuneId,
+    /// The step, counted from 1.
+    pub step: usize,
+}
+
+impl SessionView {
+    fn owned_by(mut self, owners: &BTreeMap<SessionId, (TuneId, usize)>) -> Self {
+        self.tune = owners.get(&self.id).map(|(id, step)| TuneRef {
+            id: id.clone(),
+            step: *step,
+        });
+        self
+    }
 }
 
 impl From<SessionSummary> for SessionView {
@@ -447,6 +468,7 @@ impl From<SessionSummary> for SessionView {
                     run: r.run,
                 })
                 .collect(),
+            tune: None,
         }
     }
 }
@@ -1166,8 +1188,16 @@ async fn sessions<M: MoonrakerApi + 'static>(
     State(api): State<App<M>>,
 ) -> ApiResult<Json<Vec<SessionView>>> {
     let store = api.store.clone();
-    let scanned = blocking(move || store.scan()).await?.map_err(io_error)?;
-    Ok(Json(scanned.into_iter().map(SessionView::from).collect()))
+    let (scanned, owners) =
+        blocking(move || Ok::<_, std::io::Error>((store.scan()?, store.tune_sessions()?)))
+            .await?
+            .map_err(io_error)?;
+    Ok(Json(
+        scanned
+            .into_iter()
+            .map(|s| SessionView::from(s).owned_by(&owners))
+            .collect(),
+    ))
 }
 
 async fn session<M: MoonrakerApi + 'static>(
@@ -1177,10 +1207,13 @@ async fn session<M: MoonrakerApi + 'static>(
     let id = session_id(&id)?;
     let store = api.store.clone();
     let lookup = id.clone();
-    blocking(move || store.session_summary(&lookup))
-        .await?
-        .map_err(io_error)?
-        .map(|s| Json(SessionView::from(s)))
+    let (summary, owners) = blocking(move || {
+        Ok::<_, std::io::Error>((store.session_summary(&lookup)?, store.tune_sessions()?))
+    })
+    .await?
+    .map_err(io_error)?;
+    summary
+        .map(|s| Json(SessionView::from(s).owned_by(&owners)))
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("session {id} not found")))
 }
 

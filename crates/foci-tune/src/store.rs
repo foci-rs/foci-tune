@@ -179,6 +179,38 @@ impl Store {
         Ok(tunes)
     }
 
+    /// The tune and step number (from 1) each tune session belongs to. A tune file that cannot
+    /// be read is logged and left out, so its sessions read as belonging to no tune.
+    ///
+    /// # Errors
+    /// I/O errors from listing `tunes/`.
+    pub fn tune_sessions(&self) -> io::Result<BTreeMap<SessionId, (TuneId, usize)>> {
+        let mut owners = BTreeMap::new();
+        for entry in std::fs::read_dir(self.root.join(TUNES_DIR))? {
+            let path = entry?.path();
+            let is_tune = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(TUNE_EXTENSION))
+                .is_some_and(|id| TuneId::parse(id).is_ok());
+            if !is_tune {
+                continue;
+            }
+            match read_json::<Tune>(&path) {
+                Ok(tune) => {
+                    for (i, step) in tune.steps.iter().enumerate() {
+                        let sessions = &step.sessions;
+                        for session in [&sessions.probe, &sessions.tracking, &sessions.standstill] {
+                            owners.insert(session.clone(), (tune.id.clone(), i + 1));
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(file = %path.display(), error = %e, "tune file not read"),
+            }
+        }
+        Ok(owners)
+    }
+
     /// The id of a tune on `stepper` that is not yet terminal, if any.
     ///
     /// # Errors

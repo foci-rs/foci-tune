@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, Request, StatusCode};
 use foci_tune::api::{Api, router};
-use foci_tune::model::{Filters, Gains};
+use foci_tune::model::{Filters, Gains, SessionId};
 use foci_tune::tune::{TuneScheduler, TuneSetup, TuneState};
 use futures_util::StreamExt;
 use rig::*;
@@ -316,6 +316,53 @@ async fn a_prepared_step_submits_nothing_and_a_choice_waits_for_the_step() {
     .await;
     assert_eq!(early.status, StatusCode::CONFLICT);
     assert_eq!(rig.stimuli(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_listed_session_names_the_tune_and_step_it_belongs_to_or_none() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let plan = post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 0)).await;
+    assert_eq!(plan.status, StatusCode::OK, "{}", plan.error());
+    let tune = get(&app, &format!("/api/tunes/{id}")).await.json();
+    let guided: Vec<String> = ["probe", "tracking", "standstill"]
+        .iter()
+        .map(|kind| {
+            tune["steps"][0]["sessions"][kind]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    let template = rig
+        .store
+        .read_session(&SessionId::parse(&guided[0]).unwrap())
+        .unwrap();
+    let manual = rig.store.new_session(&template).unwrap();
+
+    let listed = get(&app, "/api/sessions").await.json();
+    let single = get(&app, &format!("/api/sessions/{}", guided[1]))
+        .await
+        .json();
+
+    for session in &guided {
+        let entry = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == session.as_str())
+            .unwrap();
+        assert_eq!(entry["tune"], json!({"id": id, "step": 1}), "{session}");
+    }
+    let entry = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["id"] == manual.as_str())
+        .unwrap();
+    assert_eq!(entry["tune"], Value::Null);
+    assert_eq!(single["tune"], json!({"id": id, "step": 1}));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
