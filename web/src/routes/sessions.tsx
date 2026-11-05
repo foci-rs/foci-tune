@@ -1,7 +1,8 @@
-import { createRoute, Link } from "@tanstack/react-router";
+import { createRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSessions, getTunes, type SessionView, type TuneSummary } from "@/api";
 import { Pager } from "@/components/Pager";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { stateText } from "@/guided";
@@ -11,16 +12,21 @@ import { Route as rootRoute } from "./__root";
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
-  validateSearch: (search: Record<string, unknown>): { page?: number; tunes?: number } => {
+  validateSearch: (search: Record<string, unknown>): { tab?: "guided"; page?: number; tunes?: number } => {
     const number = (v: unknown) => (Number.isInteger(Number(v)) && Number(v) > 1 ? Number(v) : undefined);
-    return { page: number(search.page), tunes: number(search.tunes) };
+    return {
+      tab: search.tab === "guided" ? "guided" : undefined,
+      page: number(search.page),
+      tunes: number(search.tunes),
+    };
   },
   component: SessionsPage,
 });
 
 function SessionsPage() {
   const { listen } = useFeed();
-  const { page: requested = 1, tunes: tunesRequested = 1 } = Route.useSearch();
+  const { tab = "manual", page: requested = 1, tunes: tunesRequested = 1 } = Route.useSearch();
+  const navigate = useNavigate();
   const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -61,20 +67,39 @@ function SessionsPage() {
     [listen, refresh, loadTunes],
   );
 
+  const manual = sessions?.filter((v) => v.tune === null) ?? null;
+
   return (
     <main className="mx-auto max-w-6xl space-y-4 px-4 py-6">
-      <Card label="Sessions">
-        {error !== null && <p className="text-sm text-red-400">Could not load sessions: {error}</p>}
-        {sessions === null && error === null && <p className="text-sm text-muted-foreground">Loading sessions</p>}
-        {sessions !== null && sessions.length === 0 && (
-          <p className="text-sm text-muted-foreground">No sessions recorded yet.</p>
-        )}
-        {sessions !== null && sessions.length > 0 && <SessionList page={paginate(sessions, requested)} />}
-      </Card>
-      {tunes.length > 0 && (
-        <Card label="Tunes">
-          <TuneTable tunes={tunesPage.items} />
-          <Pager page={tunesPage} param="tunes" label="Tunes pages" />
+      <Tabs
+        value={tab}
+        onValueChange={(next) =>
+          navigate({ to: "/sessions", search: (prev) => ({ ...prev, tab: next === "guided" ? "guided" : undefined }) })
+        }
+      >
+        <TabsList variant="line" aria-label="Kind of tuning">
+          <TabsTrigger value="manual">Manual</TabsTrigger>
+          <TabsTrigger value="guided">Guided</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      {tab === "manual" ? (
+        <Card label="Manual sessions" titleless>
+          {error !== null && <p className="text-sm text-red-400">Could not load sessions: {error}</p>}
+          {manual === null && error === null && <p className="text-sm text-muted-foreground">Loading sessions</p>}
+          {manual !== null && manual.length === 0 && (
+            <p className="text-sm text-muted-foreground">No manual sessions recorded yet.</p>
+          )}
+          {manual !== null && manual.length > 0 && <SessionList page={paginate(manual, requested)} />}
+        </Card>
+      ) : (
+        <Card label="Guided tunes" titleless>
+          {tunes.length === 0 && <p className="text-sm text-muted-foreground">No finished tunes yet.</p>}
+          {tunes.length > 0 && (
+            <>
+              <TuneTable tunes={tunesPage.items} />
+              <Pager page={tunesPage} param="tunes" label="Tunes pages" />
+            </>
+          )}
         </Card>
       )}
     </main>

@@ -10,6 +10,7 @@ const probeKind: RunKind = {
 function view(id: string, created: number | null, runs: RunEntry[] = [], kind: RunKind = probeKind): SessionView {
   return {
     id,
+    tune: null,
     error: created === null ? "session.json: missing" : null,
     session:
       created === null

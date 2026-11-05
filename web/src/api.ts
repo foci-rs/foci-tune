@@ -406,6 +406,7 @@ export interface SessionView {
   session: Session | null;
   error: string | null;
   runs: RunEntry[];
+  tune: { id: TuneId; step: number } | null;
 }
 
 export type TuneId = string;

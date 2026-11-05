@@ -412,6 +412,7 @@ describe("session continuity", () => {
   function view(id: string, stepper: string): SessionView {
     return {
       id,
+      tune: null,
       error: null,
       runs: [],
       session: {

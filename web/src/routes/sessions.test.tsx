@@ -24,6 +24,7 @@ const session = (id: string, over: Partial<SessionView> = {}): SessionView => ({
     pattern: { start: [100, 50], end: [200, 50] },
   } as SessionView["session"],
   runs: [],
+  tune: null,
   ...over,
 });
 
@@ -59,7 +60,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 test("the list has one row per session, newest first, with start, stepper, test and run count", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  const table = (await screen.findAllByRole("table"))[0];
+  const table = await screen.findByRole("table");
   const headers = within(table)
     .getAllByRole("columnheader")
     .map((h) => h.textContent);
@@ -90,7 +91,7 @@ function manyLists(sessionCount: number, tuneCount = 0) {
 test("a long list shows 25 sessions a page and pages with numbered links", async () => {
   manyLists(60);
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  const table = (await screen.findAllByRole("table"))[0];
+  const table = await screen.findByRole("table");
   expect(within(table).getAllByRole("row").slice(1)).toHaveLength(25);
   expect(screen.getByText("1–25 of 60")).toBeInTheDocument();
   const pager = screen.getByRole("navigation", { name: "Sessions pages" });
@@ -100,7 +101,7 @@ test("a long list shows 25 sessions a page and pages with numbered links", async
   fireEvent.click(within(pager).getByRole("link", { name: "3" }));
 
   await screen.findByText("51–60 of 60");
-  expect(within(screen.getAllByRole("table")[0]).getAllByRole("row").slice(1)).toHaveLength(10);
+  expect(within(screen.getByRole("table")).getAllByRole("row").slice(1)).toHaveLength(10);
   expect(within(pager).getByRole("link", { name: "3" })).toHaveAttribute("aria-current", "page");
   expect(within(pager).queryByRole("link", { name: "Go to next page" })).toBeNull();
   fireEvent.click(within(pager).getByRole("link", { name: "Go to previous page" }));
@@ -116,25 +117,76 @@ test("the page is in the address, so opening page 2 shows its sessions and a bad
   await screen.findByText("26–30 of 30");
 });
 
-test("the tunes are paged on their own, and paging one list keeps the other's page", async () => {
-  manyLists(60, 30);
-  render(<RouterProvider router={createTestRouter("/sessions?page=2")} />);
-  await screen.findByText("26–50 of 60");
-  const tuneLinks = () =>
-    screen.getAllByRole("link").filter((l) => l.getAttribute("href")?.startsWith("/tune/guided?tune="));
+const tuneLinks = () =>
+  screen.getAllByRole("link").filter((l) => l.getAttribute("href")?.startsWith("/tune/guided?tune="));
+
+test("the Guided tab pages the tunes 25 at a time", async () => {
+  manyLists(0, 30);
+  render(<RouterProvider router={createTestRouter("/sessions?tab=guided")} />);
+  await screen.findByText("1–25 of 30");
   expect(tuneLinks()).toHaveLength(25);
-  expect(screen.getByText("1–25 of 30")).toBeInTheDocument();
 
   fireEvent.click(within(screen.getByRole("navigation", { name: "Tunes pages" })).getByRole("link", { name: "2" }));
 
   await screen.findByText("26–30 of 30");
   expect(tuneLinks()).toHaveLength(5);
-  expect(screen.getByText("26–50 of 60")).toBeInTheDocument();
+});
+
+const guidedSession = (id: string) => session(id, { tune: { id: "t-done", step: 2 } });
+
+function mixed() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (path: string) => {
+      if (path === "/api/sessions")
+        return new Response(JSON.stringify([session("20261029-aaa"), guidedSession("20261030-guided")]));
+      if (path === "/api/tunes") return new Response(JSON.stringify(tunes));
+      return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
+    }),
+  );
+}
+
+test("the Manual tab is the default and lists only the sessions made by hand", async () => {
+  mixed();
+  render(<RouterProvider router={createTestRouter("/sessions")} />);
+  const table = await screen.findByRole("table");
+  expect(screen.getByRole("tab", { name: "Manual" })).toHaveAttribute("aria-selected", "true");
+  const rows = within(table).getAllByRole("row").slice(1);
+  expect(rows).toHaveLength(1);
+  expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/sessions/20261029-aaa");
+});
+
+test("the Guided tab lists the tunes, not their sessions, and the tab is in the address", async () => {
+  mixed();
+  render(<RouterProvider router={createTestRouter("/sessions")} />);
+  await screen.findByRole("table");
+
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Guided" }));
+
+  await waitFor(() => expect(screen.getByRole("tab", { name: "Guided" })).toHaveAttribute("aria-selected", "true"));
+  const table = screen.getByRole("table");
+  expect(
+    within(table)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent),
+  ).toEqual(["Started", "Stepper", "State"]);
+  expect(tuneLinks().map((l) => l.getAttribute("href"))).toEqual([
+    "/tune/guided?tune=t-gone",
+    "/tune/guided?tune=t-done",
+  ]);
+  expect(screen.queryByText("20261030-guided")).toBeNull();
+});
+
+test("the tables sit in a card without a title", async () => {
+  mixed();
+  render(<RouterProvider router={createTestRouter("/sessions")} />);
+  await screen.findByRole("table");
+  expect(screen.queryByRole("heading")).toBeNull();
 });
 
 test("a list that fits on one page has no pager", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
-  await screen.findAllByRole("table");
+  await screen.findByRole("table");
   expect(screen.queryByRole("navigation", { name: "Sessions pages" })).toBeNull();
 });
 
@@ -387,21 +439,4 @@ test("a run that did not run has nothing to accept", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Details for 100 Hz" }));
   const panel = await screen.findByRole("dialog");
   expect(within(panel).queryByRole("button", { name: "Use these settings" })).toBeNull();
-});
-
-test("finished and abandoned tunes are a table of start, stepper and state, each opening in the guided tune", async () => {
-  render(<RouterProvider router={createTestRouter("/sessions")} />);
-  await screen.findAllByRole("table");
-  const table = screen.getAllByRole("table")[1];
-  expect(
-    within(table)
-      .getAllByRole("columnheader")
-      .map((h) => h.textContent),
-  ).toEqual(["Started", "Stepper", "State"]);
-  const rows = within(table).getAllByRole("row").slice(1);
-  expect(rows).toHaveLength(2);
-  expect(rows[0]).toHaveTextContent(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}stepper_yAbandoned$/);
-  expect(rows[1]).toHaveTextContent(/stepper_yDone$/);
-  expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/tune/guided?tune=t-gone");
-  expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/tune/guided?tune=t-done");
 });
