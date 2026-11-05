@@ -87,8 +87,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          mkdir dist
-          for target in armv7-unknown-linux-musleabihf aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
-            cp "artifacts/foci-tune-${target}/foci-tune" "dist/foci-tune-${target}"
-          done
+          scripts/package-release.sh artifacts dist
           gh release create "$TAG" dist/* --title "$TAG" --generate-notes
