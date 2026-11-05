@@ -4,17 +4,22 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
     commit-message:
       prefix: "ci(deps)"
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "build(deps)"
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "build(deps)"
