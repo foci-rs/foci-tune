@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -58,66 +59,4 @@ jobs:
       - run: bats installer/tests scripts/tests install_test.bats
 
   build:
-    name: build ${{ matrix.arch }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: armv7
-            target: armv7-unknown-linux-musleabihf
-            cc: arm-linux-gnueabihf-gcc
-            apt: gcc-arm-linux-gnueabihf
-          - arch: aarch64
-            target: aarch64-unknown-linux-musl
-            cc: aarch64-linux-gnu-gcc
-            apt: gcc-aarch64-linux-gnu
-          - arch: x86_64
-            target: x86_64-unknown-linux-musl
-            cc: gcc
-            apt: musl-tools
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@1.92
-        with:
-          targets: ${{ matrix.target }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      - run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
-      - name: Build release binary
-        run: |
-          export "CC_$(echo '${{ matrix.target }}' | tr - _)=${{ matrix.cc }}"
-          cargo build --release --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@v7
-        with:
-          name: foci-tune-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/foci-tune
-
-  smoke:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - run: sudo apt-get update && sudo apt-get install -y qemu-user
-      - uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-      - name: armv7 under qemu
-        run: |
-          chmod +x artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune
-          qemu-arm artifacts/foci-tune-armv7-unknown-linux-musleabihf/foci-tune --check
-      - name: aarch64 under qemu
-        run: |
-          chmod +x artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune
-          qemu-aarch64 artifacts/foci-tune-aarch64-unknown-linux-musl/foci-tune --check
-      - name: x86_64 native
-        run: |
-          chmod +x artifacts/foci-tune-x86_64-unknown-linux-musl/foci-tune
-          artifacts/foci-tune-x86_64-unknown-linux-musl/foci-tune --check
+    uses: ./.github/workflows/build.yml
