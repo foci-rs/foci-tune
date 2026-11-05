@@ -65,3 +65,34 @@ export function sessionLabel(v: SessionView): string {
   if (s === null) return "unreadable session";
   return `${s.stepper}, ${runTypeOfKind(s.kind)}, ${point(s.pattern.start)} to ${point(s.pattern.end)}`;
 }
+
+const two = (n: number) => String(n).padStart(2, "0");
+
+/** Local time as `YYYY-MM-DD HH:MM`, 24-hour. */
+export function formatStarted(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+export interface SessionRow {
+  id: string;
+  started: string;
+  stepper: string;
+  test: string;
+  runs: number;
+}
+
+const TEST_NAMES: Record<RunType, string> = { probe: "Probe", tracking: "Tracking", standstill: "Standstill" };
+
+/** What one line of the session list shows. */
+export function sessionRow(v: SessionView): SessionRow {
+  const s = v.session;
+  if (s === null) return { id: v.id, started: "unknown", stepper: "unknown", test: "Unreadable", runs: v.runs.length };
+  return {
+    id: v.id,
+    started: formatStarted(s.created_unix_s),
+    stepper: s.stepper,
+    test: TEST_NAMES[runTypeOfKind(s.kind)],
+    runs: v.runs.length,
+  };
+}

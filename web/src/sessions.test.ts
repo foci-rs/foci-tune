@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { Run, RunEntry, RunKind, SessionView } from "./api";
 import { runTypeOfKind } from "./tune";
-import { sessionLabel, sortSessions, summarizeSession } from "./sessions";
+import { formatStarted, sessionLabel, sessionRow, sortSessions, summarizeSession } from "./sessions";
 
 const probeKind: RunKind = {
   Probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
@@ -123,5 +123,45 @@ describe("labels", () => {
     expect(runTypeOfKind({ Tracking: { speeds_mm_s: [1], strokes: 1 } })).toBe("tracking");
     expect(runTypeOfKind(probeKind)).toBe("probe");
     expect(runTypeOfKind({ Standstill: { rests: 1, dwell_s: 1 } })).toBe("standstill");
+  });
+});
+
+describe("the session list row", () => {
+  const local = (y: number, mo: number, d: number, h: number, mi: number) =>
+    new Date(y, mo - 1, d, h, mi, 30).getTime() / 1000;
+
+  test("the start is the local date and a 24-hour time to the minute", () => {
+    expect(formatStarted(local(2026, 11, 4, 22, 7))).toBe("2026-11-04 22:07");
+    expect(formatStarted(local(2026, 1, 9, 0, 5))).toBe("2026-01-09 00:05");
+    expect(formatStarted(local(2026, 11, 4, 13, 30))).not.toMatch(/[ap]m/i);
+  });
+
+  test("a row names the start, the stepper, the test and the number of runs", () => {
+    const runs = [1, 2, 3].map((n) => ({ id: `r${n}`, state: "failed", reason: "x", run: null }) as RunEntry);
+    const row = sessionRow(view("20261104T222217Z-0r0j", local(2026, 11, 4, 22, 22), runs));
+    expect(row).toEqual({
+      id: "20261104T222217Z-0r0j",
+      started: "2026-11-04 22:22",
+      stepper: "stepper_x",
+      test: "Probe",
+      runs: 3,
+    });
+  });
+
+  test("each kind of run has its own test name", () => {
+    const tracking: RunKind = { Tracking: { speeds_mm_s: [100], strokes: 8 } };
+    const standstill: RunKind = { Standstill: { rests: 8, dwell_s: 3 } };
+    expect(sessionRow(view("a", 1, [], tracking)).test).toBe("Tracking");
+    expect(sessionRow(view("a", 1, [], standstill)).test).toBe("Standstill");
+  });
+
+  test("a session whose file cannot be read still has a row that says so", () => {
+    expect(sessionRow(view("20261030T000000Z-bad1", null))).toEqual({
+      id: "20261030T000000Z-bad1",
+      started: "unknown",
+      stepper: "unknown",
+      test: "Unreadable",
+      runs: 0,
+    });
   });
 });
