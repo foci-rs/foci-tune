@@ -443,6 +443,8 @@ mod tests {
             Vector6::new(-0.8, 0.4, TAU * 90.0, -1.3, -0.2, 0.005),
             Vector6::new(1.2, 0.01, TAU * 400.0, 3.0, 0.0, 0.05),
             Vector6::new(0.5, 0.9, TAU * 200.0, -0.4, 0.3, 0.3),
+            Vector6::new(0.4, 1.2, TAU * 150.0, 0.7, 0.1, 0.02),
+            Vector6::new(-0.6, 3.0, TAU * 120.0, -2.0, -0.05, 0.01),
         ];
 
         for p in points {
@@ -457,5 +459,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_damping_derivative_follows_the_side_of_the_clamp_the_parameter_is_on() {
+        let t: Vec<f64> = (FIT_RANGE.0..FIT_RANGE.1).map(|k| k as f64 * DT).collect();
+        let y = &FLAT_VALLEY[FIT_RANGE.0..FIT_RANGE.1];
+        let problem = Problem {
+            t,
+            y,
+            p: Vector6::zeros(),
+        };
+        let column = |p: &Vector6<f64>| problem.jacobian_at(p).column(1).into_owned();
+        let one_sided = |p: &Vector6<f64>, step: f64| {
+            let mut moved = *p;
+            moved[1] += step;
+            (problem.residuals_at(&moved) - problem.residuals_at(p)) / step
+        };
+        let at = |gap: f64| Vector6::new(0.3, (1.0 - gap).sqrt(), TAU * 150.0, 0.2, 0.05, 0.02);
+
+        let outside = at(0.9e-6);
+        let inside = at(1.1e-6);
+
+        let clamped = (column(&outside) - one_sided(&outside, 1e-10)).amax();
+        assert!(
+            clamped / column(&outside).amax() < 1e-4,
+            "clamped side: {clamped}"
+        );
+        let open = (column(&inside) - one_sided(&inside, -1e-10)).amax();
+        assert!(open / column(&inside).amax() < 1e-3, "open side: {open}");
     }
 }
