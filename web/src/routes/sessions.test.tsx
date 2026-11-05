@@ -72,25 +72,28 @@ test("the list has one row per session, newest first, with start, stepper, test 
   expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/sessions/20261029-aaa");
 });
 
-function manySessions(count: number) {
-  const list = Array.from({ length: count }, (_, i) => session(`20261101T0000${String(i).padStart(2, "0")}Z-s${i}`));
+function manyLists(sessionCount: number, tuneCount = 0) {
+  const list = Array.from({ length: sessionCount }, (_, i) =>
+    session(`20261101T0000${String(i).padStart(2, "0")}Z-s${i}`),
+  );
+  const finished = Array.from({ length: tuneCount }, (_, i) => tune(`t-${i}`, "Done", i + 1));
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string) => {
       if (path === "/api/sessions") return new Response(JSON.stringify(list));
-      if (path === "/api/tunes") return new Response(JSON.stringify([]));
+      if (path === "/api/tunes") return new Response(JSON.stringify(finished));
       return new Response(JSON.stringify({ error: "unexpected" }), { status: 500 });
     }),
   );
 }
 
 test("a long list shows 25 sessions a page and pages with numbered links", async () => {
-  manySessions(60);
+  manyLists(60);
   render(<RouterProvider router={createTestRouter("/sessions")} />);
   const table = await screen.findByRole("table");
   expect(within(table).getAllByRole("row").slice(1)).toHaveLength(25);
   expect(screen.getByText("1–25 of 60")).toBeInTheDocument();
-  const pager = screen.getByRole("navigation", { name: "pagination" });
+  const pager = screen.getByRole("navigation", { name: "Sessions pages" });
   expect(within(pager).getByRole("link", { name: "1" })).toHaveAttribute("aria-current", "page");
   expect(within(pager).queryByRole("link", { name: "Go to previous page" })).toBeNull();
 
@@ -105,7 +108,7 @@ test("a long list shows 25 sessions a page and pages with numbered links", async
 });
 
 test("the page is in the address, so opening page 2 shows its sessions and a bad page shows the nearest", async () => {
-  manySessions(30);
+  manyLists(30);
   const { unmount } = render(<RouterProvider router={createTestRouter("/sessions?page=2")} />);
   await screen.findByText("26–30 of 30");
   unmount();
@@ -113,10 +116,26 @@ test("the page is in the address, so opening page 2 shows its sessions and a bad
   await screen.findByText("26–30 of 30");
 });
 
+test("the tunes are paged on their own, and paging one list keeps the other's page", async () => {
+  manyLists(60, 30);
+  render(<RouterProvider router={createTestRouter("/sessions?page=2")} />);
+  await screen.findByText("26–50 of 60");
+  const tuneLinks = () =>
+    screen.getAllByRole("link").filter((l) => l.getAttribute("href")?.startsWith("/tune/guided?tune="));
+  expect(tuneLinks()).toHaveLength(25);
+  expect(screen.getByText("1–25 of 30")).toBeInTheDocument();
+
+  fireEvent.click(within(screen.getByRole("navigation", { name: "Tunes pages" })).getByRole("link", { name: "2" }));
+
+  await screen.findByText("26–30 of 30");
+  expect(tuneLinks()).toHaveLength(5);
+  expect(screen.getByText("26–50 of 60")).toBeInTheDocument();
+});
+
 test("a list that fits on one page has no pager", async () => {
   render(<RouterProvider router={createTestRouter("/sessions")} />);
   await screen.findByRole("table");
-  expect(screen.queryByRole("navigation", { name: "pagination" })).toBeNull();
+  expect(screen.queryByRole("navigation", { name: "Sessions pages" })).toBeNull();
 });
 
 test("an opened session shows its broken runs' reasons and no control that acts on the printer", async () => {

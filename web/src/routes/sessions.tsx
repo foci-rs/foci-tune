@@ -1,34 +1,26 @@
 import { createRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSessions, getTunes, type SessionView, type TuneSummary } from "@/api";
-import {
-  Pagination,
-  PaginationContent,
-  PaginationEllipsis,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
+import { Pager } from "@/components/Pager";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { stateText } from "@/guided";
-import { formatStarted, type Page, pageLinks, paginate, sessionRow, sortSessions } from "@/sessions";
+import { formatStarted, type Page, paginate, sessionRow, sortSessions } from "@/sessions";
 import { Route as rootRoute } from "./__root";
 
 export const Route = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions",
-  validateSearch: (search: Record<string, unknown>): { page?: number } => {
-    const page = Number(search.page);
-    return Number.isInteger(page) && page > 1 ? { page } : {};
+  validateSearch: (search: Record<string, unknown>): { page?: number; tunes?: number } => {
+    const number = (v: unknown) => (Number.isInteger(Number(v)) && Number(v) > 1 ? Number(v) : undefined);
+    return { page: number(search.page), tunes: number(search.tunes) };
   },
   component: SessionsPage,
 });
 
 function SessionsPage() {
   const { listen } = useFeed();
-  const { page: requested = 1 } = Route.useSearch();
+  const { page: requested = 1, tunes: tunesRequested = 1 } = Route.useSearch();
   const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -49,6 +41,7 @@ function SessionsPage() {
 
   useEffect(refresh, [refresh]);
   const [tunes, setTunes] = useState<TuneSummary[]>([]);
+  const tunesPage = paginate(tunes, tunesRequested);
   const loadTunes = useCallback(() => {
     getTunes().then(
       (list) =>
@@ -81,7 +74,7 @@ function SessionsPage() {
       {tunes.length > 0 && (
         <Card label="Tunes">
           <ul className="divide-y text-sm">
-            {tunes.map((t) => (
+            {tunesPage.items.map((t) => (
               <li key={t.id}>
                 <Link
                   to="/tune/guided"
@@ -95,59 +88,18 @@ function SessionsPage() {
               </li>
             ))}
           </ul>
+          <Pager page={tunesPage} param="tunes" label="Tunes pages" />
         </Card>
       )}
     </main>
   );
 }
 
-const pageSearch = (page: number) => (page > 1 ? { page } : {});
-
 function SessionList({ page }: { page: Page<SessionView> }) {
   return (
     <>
       <SessionTable sessions={page.items} />
-      {page.pages > 1 && (
-        <div className="mt-3 flex items-center justify-between gap-4 text-sm text-muted-foreground">
-          <span>
-            {page.from}–{page.to} of {page.total}
-          </span>
-          <Pagination className="mx-0 w-auto">
-            <PaginationContent>
-              {page.page > 1 && (
-                <PaginationItem>
-                  <PaginationPrevious asChild>
-                    <Link to="/sessions" search={pageSearch(page.page - 1)} />
-                  </PaginationPrevious>
-                </PaginationItem>
-              )}
-              {pageLinks(page.page, page.pages).map((n, i) =>
-                n === "gap" ? (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: the gaps have no identity of their own and never reorder.
-                  <PaginationItem key={`gap-${i}`}>
-                    <PaginationEllipsis />
-                  </PaginationItem>
-                ) : (
-                  <PaginationItem key={n}>
-                    <PaginationLink asChild isActive={n === page.page}>
-                      <Link to="/sessions" search={pageSearch(n)}>
-                        {n}
-                      </Link>
-                    </PaginationLink>
-                  </PaginationItem>
-                ),
-              )}
-              {page.page < page.pages && (
-                <PaginationItem>
-                  <PaginationNext asChild>
-                    <Link to="/sessions" search={pageSearch(page.page + 1)} />
-                  </PaginationNext>
-                </PaginationItem>
-              )}
-            </PaginationContent>
-          </Pagination>
-        </div>
-      )}
+      <Pager page={page} param="page" label="Sessions pages" />
     </>
   );
 }
