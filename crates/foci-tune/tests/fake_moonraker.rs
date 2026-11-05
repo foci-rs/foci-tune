@@ -49,6 +49,7 @@ struct Inner {
     settings_held: watch::Sender<bool>,
     settings_queries: u32,
     config_root: String,
+    logs_root: Option<String>,
     shutdown_on: Option<(String, Duration)>,
     shut_down: bool,
 }
@@ -79,10 +80,20 @@ impl Shared {
     fn call(&self, method: &str, params: &Value) -> Result<Value, String> {
         let mut inner = self.inner.lock().unwrap();
         match method {
-            "server.files.roots" => Ok(json!([
-                {"name": "config", "path": inner.config_root, "permissions": "rw"},
-                {"name": "gcodes", "path": "/home/pi/printer_data/gcodes", "permissions": "rw"},
-            ])),
+            "server.files.roots" => {
+                let mut roots = vec![
+                    json!({"name": "config", "path": inner.config_root, "permissions": "rw"}),
+                    json!({
+                        "name": "gcodes",
+                        "path": "/home/pi/printer_data/gcodes",
+                        "permissions": "rw",
+                    }),
+                ];
+                if let Some(logs) = &inner.logs_root {
+                    roots.push(json!({"name": "logs", "path": logs, "permissions": "r"}));
+                }
+                Ok(Value::Array(roots))
+            }
             "printer.objects.query" => {
                 let status = if params.get("configfile").is_some() {
                     json!({"configfile": {"settings": inner.settings.clone()}})
@@ -305,6 +316,7 @@ impl FakeMoonraker {
                 settings_held: watch::channel(false).0,
                 settings_queries: 0,
                 config_root: "/home/pi/printer_data/config".to_owned(),
+                logs_root: Some("/home/pi/printer_data/logs".to_owned()),
                 shutdown_on: None,
                 shut_down: false,
             }),
@@ -336,6 +348,11 @@ impl FakeMoonraker {
     /// Path reported as the `config` file root.
     pub fn set_config_root(&self, path: &str) {
         self.shared.inner.lock().unwrap().config_root = path.to_owned();
+    }
+
+    /// Path reported as the `logs` file root; `None` leaves the root out of the listing.
+    pub fn set_logs_root(&self, path: Option<&str>) {
+        self.shared.inner.lock().unwrap().logs_root = path.map(str::to_owned);
     }
 
     pub fn set_settings(&self, settings: Value) {

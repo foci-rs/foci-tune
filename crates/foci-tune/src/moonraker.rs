@@ -234,6 +234,27 @@ impl MoonrakerClient {
         Ok(body["result"].clone())
     }
 
+    /// Filesystem path of the `logs` file root; its parent is Moonraker's data directory.
+    pub async fn logs_root(&self) -> Result<PathBuf> {
+        self.file_root("logs").await
+    }
+
+    async fn file_root(&self, name: &str) -> Result<PathBuf> {
+        let roots = Self::result(
+            self.request(reqwest::Method::GET, "/server/files/roots")
+                .timeout(REQUEST_TIMEOUT),
+        )
+        .await?;
+        roots
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|root| root["name"] == name)
+            .and_then(|root| root["path"].as_str())
+            .map(PathBuf::from)
+            .ok_or_else(|| MoonrakerError::Protocol(format!("no {name} file root")))
+    }
+
     async fn action(&self, path: &str) -> Result<()> {
         Self::result(
             self.request(reqwest::Method::POST, path)
@@ -252,19 +273,7 @@ impl Drop for MoonrakerClient {
 
 impl MoonrakerApi for MoonrakerClient {
     async fn config_root(&self) -> Result<PathBuf> {
-        let roots = Self::result(
-            self.request(reqwest::Method::GET, "/server/files/roots")
-                .timeout(REQUEST_TIMEOUT),
-        )
-        .await?;
-        roots
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|root| root["name"] == "config")
-            .and_then(|root| root["path"].as_str())
-            .map(PathBuf::from)
-            .ok_or_else(|| MoonrakerError::Protocol("no config file root".to_owned()))
+        self.file_root("config").await
     }
 
     async fn settings(&self) -> Result<Value> {

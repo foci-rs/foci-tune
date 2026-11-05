@@ -46,6 +46,29 @@ async fn config_root_and_settings_come_from_http() {
 }
 
 #[tokio::test]
+async fn logs_root_is_read_from_the_roots_listing_and_may_differ_in_parent_from_the_config_root() {
+    let fake = FakeMoonraker::start().await;
+    fake.set_config_root("/srv/config");
+    fake.set_logs_root(Some("/var/lib/moonraker/logs"));
+    let client = MoonrakerClient::connect(client_config(fake.url()));
+
+    let logs = client.logs_root().await.unwrap();
+    let config = client.config_root().await.unwrap();
+
+    assert_eq!(logs, PathBuf::from("/var/lib/moonraker/logs"));
+    assert_eq!(config, PathBuf::from("/srv/config"));
+}
+
+#[tokio::test]
+async fn a_listing_without_a_logs_root_is_an_error() {
+    let fake = FakeMoonraker::start().await;
+    fake.set_logs_root(None);
+    let client = MoonrakerClient::connect(client_config(fake.url()));
+
+    assert!(client.logs_root().await.is_err());
+}
+
+#[tokio::test]
 async fn mcu_versions_come_from_the_mcu_objects() {
     let fake = FakeMoonraker::start().await;
     fake.set_status(json!({
