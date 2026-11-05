@@ -58,18 +58,22 @@ jobs:
       - run: bats installer/tests scripts/tests install_test.bats
 
   build:
+    name: build ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: armv7-unknown-linux-musleabihf
+          - arch: armv7
+            target: armv7-unknown-linux-musleabihf
             cc: arm-linux-gnueabihf-gcc
             apt: gcc-arm-linux-gnueabihf
-          - target: aarch64-unknown-linux-musl
+          - arch: aarch64
+            target: aarch64-unknown-linux-musl
             cc: aarch64-linux-gnu-gcc
             apt: gcc-aarch64-linux-gnu
-          - target: x86_64-unknown-linux-musl
+          - arch: x86_64
+            target: x86_64-unknown-linux-musl
             cc: gcc
             apt: musl-tools
     steps:
