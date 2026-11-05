@@ -5,6 +5,6 @@ push = false
 publish = false
 tag-name = "v{{version}}"
 tag-message = "v{{version}}"
-pre-release-commit-message = "chore(release): Prepare v{{version}}"
+pre-release-commit-message = "chore(release): Prepare v{{version}}\n\nBump the workspace crates and Cargo.lock to {{version}} for the release."
 consolidate-commits = true
 shared-version = true
