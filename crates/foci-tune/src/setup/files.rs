@@ -1,7 +1,5 @@
 //! Contents of the udev rule and the systemd unit that `setup` installs.
 
-use std::path::Path;
-
 use foci_trace::usb::{TRACE_PRODUCT_ID, TRACE_VENDOR_ID};
 
 /// Group the udev rule grants access to the trace device.
@@ -41,8 +39,8 @@ pub(crate) fn udev_rule() -> String {
 }
 
 /// The systemd unit running the service as `user` through the `launcher` symlink.
-pub(crate) fn unit(user: &str, launcher: &Path) -> String {
+pub(crate) fn unit(user: &str, launcher: &str) -> String {
     UNIT_TEMPLATE
         .replace(USER_PLACEHOLDER, user)
-        .replace(LAUNCHER_PLACEHOLDER, &launcher.to_string_lossy())
+        .replace(LAUNCHER_PLACEHOLDER, launcher)
 }

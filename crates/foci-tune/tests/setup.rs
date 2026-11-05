@@ -274,7 +274,7 @@ fn a_launcher_pointing_at_a_different_file_fails_before_anything_is_written_or_r
 
 #[test]
 fn an_install_dir_with_whitespace_or_systemd_specials_is_rejected() {
-    for bad in ["a b", "a%h", "a$b", "a\"b", "a\\b"] {
+    for bad in ["a b", "a%h", "a$b", "a'b", "a\"b", "a\\b"] {
         let fx = Fixture::new(Some("plugdev:x:46:pi"));
         let dir = fx.path("home/pi").join(bad);
         fs::create_dir_all(&dir).unwrap();

@@ -505,17 +505,22 @@ fn validate_user(user: &str) -> Result<(), SetupError> {
 
 /// The `foci-tune` symlink beside `exe`, after checking it resolves to `exe` and that its
 /// directory is safe to write into a unit's `ExecStart=` line.
-fn launcher_path(exe: &Path) -> Result<PathBuf, SetupError> {
+fn launcher_path(exe: &Path) -> Result<String, SetupError> {
     let dir = exe.parent().unwrap_or(Path::new("/"));
-    let dir_text = dir.to_string_lossy();
+    let bad_dir = |reason| SetupError::BadInstallDir {
+        path: dir.to_path_buf(),
+        reason,
+    };
+    let dir_text = dir
+        .to_str()
+        .ok_or_else(|| bad_dir("it is not valid UTF-8"))?;
     if dir_text
         .chars()
-        .any(|c| c.is_whitespace() || matches!(c, '%' | '$' | '"' | '\\'))
+        .any(|c| c.is_whitespace() || matches!(c, '%' | '$' | '"' | '\'' | '\\'))
     {
-        return Err(SetupError::BadInstallDir {
-            path: dir.to_path_buf(),
-            reason: "it contains whitespace or a character systemd treats specially",
-        });
+        return Err(bad_dir(
+            "it contains whitespace or a character systemd treats specially",
+        ));
     }
     let launcher = dir.join(LAUNCHER_NAME);
     let is_symlink = fs::symlink_metadata(&launcher).is_ok_and(|m| m.file_type().is_symlink());
@@ -524,7 +529,7 @@ fn launcher_path(exe: &Path) -> Result<PathBuf, SetupError> {
         (Ok(l), Ok(e)) if l == e
     );
     if is_symlink && resolves_to_exe {
-        Ok(launcher)
+        Ok(format!("{dir_text}/{LAUNCHER_NAME}"))
     } else {
         Err(SetupError::MissingLauncher(launcher))
     }
