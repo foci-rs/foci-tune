@@ -47,3 +47,30 @@ export function sessionRow(v: SessionView): SessionRow {
     runs: v.runs.length,
   };
 }
+
+export const PAGE_SIZE = 25;
+
+export interface Page<T> {
+  items: T[];
+  page: number;
+  pages: number;
+  from: number;
+  to: number;
+  total: number;
+}
+
+/** One page of `items`, counted from 1. A page past either end becomes the nearest page. */
+export function paginate<T>(items: readonly T[], page: number, size: number = PAGE_SIZE): Page<T> {
+  const pages = Math.max(1, Math.ceil(items.length / size));
+  const at = Number.isFinite(page) ? Math.min(pages, Math.max(1, Math.trunc(page))) : 1;
+  const start = (at - 1) * size;
+  const shown = items.slice(start, start + size);
+  return {
+    items: shown,
+    page: at,
+    pages,
+    from: shown.length === 0 ? 0 : start + 1,
+    to: start + shown.length,
+    total: items.length,
+  };
+}

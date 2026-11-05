@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import type { RunEntry, RunKind, SessionView } from "./api";
 import { runTypeOfKind } from "./tune";
-import { formatStarted, sessionLabel, sessionRow, sortSessions } from "./sessions";
+import { formatStarted, paginate, sessionLabel, sessionRow, sortSessions } from "./sessions";
 
 const probeKind: RunKind = {
   Probe: { speed_mm_s: 195, high_gain: 1.3, segments_between_toggles: 3, strokes: 8 },
@@ -93,5 +93,28 @@ describe("the session list row", () => {
       test: "Unreadable",
       runs: 0,
     });
+  });
+});
+
+describe("paginate", () => {
+  const items = Array.from({ length: 101 }, (_, i) => i);
+
+  test("a page holds 25 items and says which ones", () => {
+    const first = paginate(items, 1);
+    expect(first.items).toEqual(items.slice(0, 25));
+    expect(first).toMatchObject({ page: 1, pages: 5, from: 1, to: 25, total: 101 });
+    const last = paginate(items, 5);
+    expect(last.items).toEqual([100]);
+    expect(last).toMatchObject({ page: 5, from: 101, to: 101 });
+  });
+
+  test("a page past either end is clamped to the nearest page", () => {
+    expect(paginate(items, 99).page).toBe(5);
+    expect(paginate(items, 0).page).toBe(1);
+    expect(paginate(items, Number.NaN).page).toBe(1);
+  });
+
+  test("an empty list is one empty page", () => {
+    expect(paginate([], 3)).toEqual({ items: [], page: 1, pages: 1, from: 0, to: 0, total: 0 });
   });
 });
