@@ -88,4 +88,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           scripts/package-release.sh artifacts dist
-          gh release create "$TAG" dist/* --title "$TAG" --generate-notes
+          make installer
+          gh release create "$TAG" dist/* build/foci-tune-installer.sh build/foci-tune-installer.sh.sha256 --title "$TAG" --generate-notes
