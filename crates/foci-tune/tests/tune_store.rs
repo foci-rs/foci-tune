@@ -260,3 +260,58 @@ fn a_paused_tune_round_trips() {
 
     assert_eq!(serde_json::from_str::<Tune>(&json).unwrap(), tune);
 }
+
+fn with_step_sessions(step: &mut TuneStep) -> [SessionId; 3] {
+    let ids = [
+        SessionId::generate(SystemTime::now()),
+        SessionId::generate(SystemTime::now()),
+        SessionId::generate(SystemTime::now()),
+    ];
+    step.sessions = StepSessions {
+        probe: ids[0].clone(),
+        tracking: ids[1].clone(),
+        standstill: ids[2].clone(),
+    };
+    ids
+}
+
+#[test]
+fn every_session_of_every_step_is_listed_with_its_step_counted_from_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().to_owned()).unwrap();
+    let mut t = tune("stepper_x", TuneState::Ready);
+    let second = t.steps[0].clone();
+    t.steps.push(second);
+    let first_ids = with_step_sessions(&mut t.steps[0]);
+    let second_ids = with_step_sessions(&mut t.steps[1]);
+    store.write_tune(&t).unwrap();
+
+    let owners = store.tune_sessions().unwrap();
+
+    assert_eq!(owners.len(), 6);
+    for id in &first_ids {
+        assert_eq!(owners[id], (t.id.clone(), 1));
+    }
+    for id in &second_ids {
+        assert_eq!(owners[id], (t.id.clone(), 2));
+    }
+}
+
+#[test]
+fn a_session_in_two_tunes_belongs_to_the_older_tune_every_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().to_owned()).unwrap();
+    let mut older = tune("stepper_x", TuneState::Done);
+    let mut newer = tune("stepper_x", TuneState::Done);
+    older.id = TuneId::parse("20261101T000000Z-aaaa").unwrap();
+    newer.id = TuneId::parse("20261102T000000Z-bbbb").unwrap();
+    let shared = with_step_sessions(&mut older.steps[0]);
+    newer.steps[0].sessions = older.steps[0].sessions.clone();
+    store.write_tune(&newer).unwrap();
+    store.write_tune(&older).unwrap();
+
+    for _ in 0..5 {
+        let owners = store.tune_sessions().unwrap();
+        assert_eq!(owners[&shared[0]], (older.id.clone(), 1));
+    }
+}

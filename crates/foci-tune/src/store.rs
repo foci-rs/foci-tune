@@ -180,12 +180,13 @@ impl Store {
     }
 
     /// The tune and step number (from 1) each tune session belongs to. A tune file that cannot
-    /// be read is logged and left out, so its sessions read as belonging to no tune.
+    /// be read is logged and left out, so its sessions read as belonging to no tune. A session
+    /// that two tunes claim belongs to the older tune, and the claim of the newer one is logged.
     ///
     /// # Errors
     /// I/O errors from listing `tunes/`.
     pub fn tune_sessions(&self) -> io::Result<BTreeMap<SessionId, (TuneId, usize)>> {
-        let mut owners = BTreeMap::new();
+        let mut files = Vec::new();
         for entry in std::fs::read_dir(self.root.join(TUNES_DIR))? {
             let path = entry?.path();
             let is_tune = path
@@ -193,19 +194,33 @@ impl Store {
                 .and_then(|n| n.to_str())
                 .and_then(|n| n.strip_suffix(TUNE_EXTENSION))
                 .is_some_and(|id| TuneId::parse(id).is_ok());
-            if !is_tune {
-                continue;
+            if is_tune {
+                files.push(path);
             }
-            match read_json::<Tune>(&path) {
-                Ok(tune) => {
-                    for (i, step) in tune.steps.iter().enumerate() {
-                        let sessions = &step.sessions;
-                        for session in [&sessions.probe, &sessions.tracking, &sessions.standstill] {
-                            owners.insert(session.clone(), (tune.id.clone(), i + 1));
+        }
+        files.sort();
+        let mut owners: BTreeMap<SessionId, (TuneId, usize)> = BTreeMap::new();
+        for path in files {
+            let tune = match read_json::<Tune>(&path) {
+                Ok(tune) => tune,
+                Err(e) => {
+                    tracing::warn!(file = %path.display(), error = %e, "tune file not read");
+                    continue;
+                }
+            };
+            for (i, step) in tune.steps.iter().enumerate() {
+                let sessions = &step.sessions;
+                for session in [&sessions.probe, &sessions.tracking, &sessions.standstill] {
+                    let claim = (tune.id.clone(), i + 1);
+                    match owners.get(session) {
+                        Some(owner) if *owner != claim => {
+                            tracing::warn!(%session, kept = %owner.0, ignored = %tune.id, "session claimed by two tunes");
+                        }
+                        _ => {
+                            owners.insert(session.clone(), claim);
                         }
                     }
                 }
-                Err(e) => tracing::warn!(file = %path.display(), error = %e, "tune file not read"),
             }
         }
         Ok(owners)
