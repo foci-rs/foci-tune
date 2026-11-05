@@ -1,11 +1,14 @@
 //! `setup`: installs the udev rule and the systemd unit on the Pi, or removes them.
 
+mod asvc;
 mod files;
+
+pub use asvc::asvc_beside_logs;
 
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -159,6 +162,14 @@ pub enum SetupError {
          (sudo groupadd {0}) and run setup again"
     )]
     MissingGroup(String),
+    /// Moonraker's service list cannot be located, read or written.
+    #[error("moonraker.asvc ({}): {reason}", path.display())]
+    Asvc {
+        /// The service list, or the Moonraker URL it could not be looked up through.
+        path: PathBuf,
+        /// What went wrong.
+        reason: String,
+    },
     /// A file operation failed.
     #[error("{}: {source}", path.display())]
     Io {
@@ -194,6 +205,8 @@ pub struct InstallPlan<'a> {
     pub user: &'a str,
     /// The running binary; the launcher symlink `foci-tune` in its directory must resolve to it.
     pub exe: &'a Path,
+    /// Moonraker's `moonraker.asvc`, which must be readable and writable.
+    pub asvc: &'a Path,
 }
 
 enum Step {
@@ -215,6 +228,10 @@ enum Step {
     },
     Remove {
         path: PathBuf,
+    },
+    UpdateAsvc {
+        path: PathBuf,
+        add: bool,
     },
 }
 
@@ -246,6 +263,14 @@ impl fmt::Display for Step {
             }
             Step::RunAs { argv } => f.write_str(&argv.join(" ")),
             Step::Remove { path } => write!(f, "remove {} (if present)", path.display()),
+            Step::UpdateAsvc { path, add } => write!(
+                f,
+                "{} {} {} {}",
+                if *add { "add" } else { "drop" },
+                files::SERVICE,
+                if *add { "to" } else { "from" },
+                path.display()
+            ),
         }
     }
 }
@@ -274,6 +299,7 @@ pub fn install(
     setup.check_host("sudo ~/foci-tune/foci-tune setup")?;
     let launcher = launcher_path(plan.exe)?;
     let member = group_membership(setup, user)?;
+    check_asvc_usable(plan.asvc)?;
 
     let mut steps = Vec::new();
     steps.push(Step::Write {
@@ -281,6 +307,11 @@ pub fn install(
         contents: files::udev_rule(),
         mode: 0o644,
     });
+    steps.push(Step::UpdateAsvc {
+        path: plan.asvc.to_path_buf(),
+        add: true,
+    });
+    let unit_step = steps.len();
     steps.push(Step::Write {
         dest: setup.path(UNIT_PATH),
         contents: files::unit(user, &launcher),
@@ -309,7 +340,7 @@ pub fn install(
     let was_enabled = fs::symlink_metadata(setup.path(ENABLED_LINK_PATH)).is_ok();
     writeln!(out, "foci-tune setup for user {user}:")?;
     let changed = perform(setup, &steps, runner, out)?;
-    if was_enabled && changed.get(1) == Some(&true) {
+    if was_enabled && changed.get(unit_step) == Some(&true) {
         writeln!(
             out,
             "foci-tune was already enabled and keeps running the old unit; run \
@@ -326,25 +357,34 @@ pub fn install(
     Ok(())
 }
 
-/// Stops and disables the service and removes the files [`install`] writes.
+/// Stops and disables the service and removes the files [`install`] writes, including its
+/// entry in `moonraker.asvc`.
 ///
-/// Group membership and the `foci-results` data directory are left in place.
+/// Group membership and the `foci-results` data directory are left in place. `asvc` is `None`
+/// when the service list could not be located.
 ///
 /// # Errors
 ///
-/// See [`SetupError`]. A failing `systemctl disable` (such as a unit that is not loaded) is
-/// reported and tolerated.
+/// See [`SetupError`]. A failing `systemctl disable` (such as a unit that is not loaded) and a
+/// missing or undeterminable service list are reported and tolerated.
 pub fn remove(
     setup: &Setup,
+    asvc: Option<&Path>,
     runner: &mut dyn Runner,
     out: &mut dyn Write,
 ) -> Result<(), SetupError> {
     setup.check_host("sudo ~/foci-tune/foci-tune setup --remove")?;
-    let steps = [
-        Step::Run {
-            argv: vec!["systemctl", "disable", "--now", files::SERVICE],
-            tolerate_failure: true,
-        },
+    let mut steps = vec![Step::Run {
+        argv: vec!["systemctl", "disable", "--now", files::SERVICE],
+        tolerate_failure: true,
+    }];
+    if let Some(path) = asvc {
+        steps.push(Step::UpdateAsvc {
+            path: path.to_path_buf(),
+            add: false,
+        });
+    }
+    steps.extend([
         Step::Remove {
             path: setup.path(UNIT_PATH),
         },
@@ -353,9 +393,15 @@ pub fn remove(
         },
         Step::run(&["systemctl", "daemon-reload"]),
         Step::run(&["udevadm", "control", "--reload"]),
-    ];
+    ]);
 
     writeln!(out, "foci-tune setup --remove:")?;
+    if asvc.is_none() {
+        writeln!(
+            out,
+            "moonraker.asvc could not be located; the service list is left unchanged."
+        )?;
+    }
     perform(setup, &steps, runner, out)?;
     writeln!(
         out,
@@ -424,6 +470,7 @@ fn execute(step: &Step, runner: &mut dyn Runner) -> Result<Outcome, SetupError> 
             let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(runner, &argv, false)
         }
+        Step::UpdateAsvc { path, add } => update_asvc(path, *add),
         Step::Remove { path } => match fs::remove_file(path) {
             Ok(()) => Ok(Outcome::Done),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -432,6 +479,54 @@ fn execute(step: &Step, runner: &mut dyn Runner) -> Result<Outcome, SetupError> 
             Err(e) => Err(io_err(path)(e)),
         },
     }
+}
+
+/// Fails unless `asvc` can be read and opened for writing, so install stops before changing
+/// anything else.
+fn check_asvc_usable(asvc: &Path) -> Result<(), SetupError> {
+    let asvc_err = |e: io::Error| SetupError::Asvc {
+        path: asvc.to_path_buf(),
+        reason: e.to_string(),
+    };
+    fs::read_to_string(asvc).map_err(asvc_err)?;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(asvc)
+        .map(drop)
+        .map_err(asvc_err)
+}
+
+/// Adds or drops the service in `asvc` through the atomic write, keeping the file's mode and
+/// owner. A missing file is tolerated when dropping.
+fn update_asvc(path: &Path, add: bool) -> Result<Outcome, SetupError> {
+    let asvc_err = |e: io::Error| SetupError::Asvc {
+        path: path.to_path_buf(),
+        reason: e.to_string(),
+    };
+    let current = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if !add && e.kind() == io::ErrorKind::NotFound => {
+            return Ok(Outcome::Skipped("not present".into()));
+        }
+        Err(e) => return Err(asvc_err(e)),
+    };
+    let updated = if add {
+        asvc::with_service(&current, files::SERVICE)
+    } else {
+        asvc::without_service(&current, files::SERVICE)
+    };
+    let Some(updated) = updated else {
+        return Ok(Outcome::Unchanged);
+    };
+    let meta = fs::metadata(path).map_err(asvc_err)?;
+    let outcome = write_atomic(path, updated.as_bytes(), meta.mode() & 0o7777).map_err(|e| {
+        SetupError::Asvc {
+            path: path.to_path_buf(),
+            reason: e.to_string(),
+        }
+    })?;
+    std::os::unix::fs::chown(path, Some(meta.uid()), Some(meta.gid())).map_err(asvc_err)?;
+    Ok(outcome)
 }
 
 fn run_command(

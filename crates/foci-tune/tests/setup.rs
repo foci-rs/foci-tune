@@ -10,6 +10,7 @@ use foci_tune::setup::{
 const DIR: &str = "home/pi/foci-tune";
 const ARCH_BIN: &str = "home/pi/foci-tune/foci-tune-aarch64";
 const LAUNCHER: &str = "home/pi/foci-tune/foci-tune";
+const ASVC: &str = "home/pi/printer_data/moonraker.asvc";
 const RULE: &str = "etc/udev/rules.d/99-foci-trace.rules";
 const UNIT: &str = "etc/systemd/system/foci-tune.service";
 const LINUX_ROOT: Host = Host {
@@ -42,7 +43,13 @@ struct Fixture {
 impl Fixture {
     fn new(plugdev: Option<&str>) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        for d in ["etc/udev/rules.d", "etc/systemd/system", DIR, "download"] {
+        for d in [
+            "etc/udev/rules.d",
+            "etc/systemd/system",
+            DIR,
+            "download",
+            "home/pi/printer_data",
+        ] {
             fs::create_dir_all(dir.path().join(d)).unwrap();
         }
         fs::write(
@@ -57,6 +64,7 @@ impl Fixture {
             group.push('\n');
         }
         fs::write(dir.path().join("etc/group"), group).unwrap();
+        fs::write(dir.path().join(ASVC), "klipper\nklipper_mcu\n# note\n").unwrap();
         let exe = dir.path().join(ARCH_BIN);
         fs::write(&exe, b"new binary").unwrap();
         std::os::unix::fs::symlink("foci-tune-aarch64", dir.path().join(LAUNCHER)).unwrap();
@@ -80,10 +88,20 @@ impl Fixture {
     }
 
     fn install(&self, user: &str, runner: &mut Recorder) -> Result<String, SetupError> {
+        self.install_with_asvc(user, &self.path(ASVC), runner)
+    }
+
+    fn install_with_asvc(
+        &self,
+        user: &str,
+        asvc: &Path,
+        runner: &mut Recorder,
+    ) -> Result<String, SetupError> {
         let mut out = Vec::new();
         let plan = InstallPlan {
             user,
             exe: &self.exe,
+            asvc,
         };
         install(&self.setup(false), &plan, runner, &mut out)?;
         Ok(String::from_utf8(out).unwrap())
@@ -91,7 +109,7 @@ impl Fixture {
 
     fn remove(&self, runner: &mut Recorder) -> Result<String, SetupError> {
         let mut out = Vec::new();
-        remove(&self.setup(false), runner, &mut out)?;
+        remove(&self.setup(false), Some(&self.path(ASVC)), runner, &mut out)?;
         Ok(String::from_utf8(out).unwrap())
     }
 }
@@ -172,7 +190,7 @@ fn a_second_install_reports_unchanged_rewrites_nothing_and_still_reloads() {
         .map(|p| fs::metadata(fx.path(p)).unwrap().ino())
         .collect();
     assert_eq!(inodes, after);
-    assert_eq!(out.matches("unchanged").count(), 2, "{out}");
+    assert_eq!(out.matches("unchanged").count(), 3, "{out}");
     assert!(out.contains("pi is already in plugdev"), "{out}");
     assert_eq!(
         runner.commands,
@@ -282,9 +300,11 @@ fn an_install_dir_with_whitespace_or_systemd_specials_is_rejected() {
         fs::write(&exe, b"bin").unwrap();
         std::os::unix::fs::symlink("foci-tune-aarch64", dir.join("foci-tune")).unwrap();
         let mut runner = Recorder::default();
+        let asvc = fx.path(ASVC);
         let plan = InstallPlan {
             user: "pi",
             exe: &exe,
+            asvc: &asvc,
         };
 
         let err = install(&fx.setup(false), &plan, &mut runner, &mut Vec::new()).unwrap_err();
@@ -331,9 +351,11 @@ fn a_dry_run_prints_paths_modes_contents_and_commands_and_changes_nothing() {
     let mut runner = Recorder::default();
     let mut out = Vec::new();
 
+    let asvc = fx.path(ASVC);
     let plan = InstallPlan {
         user: "klipper",
         exe: &fx.exe,
+        asvc: &asvc,
     };
     install(&fx.setup(true), &plan, &mut runner, &mut out).unwrap();
 
@@ -370,9 +392,10 @@ fn a_real_run_without_root_is_refused_with_a_sudo_hint_before_anything_happens()
     let plan = InstallPlan {
         user: "pi",
         exe: Path::new("/nonexistent"),
+        asvc: Path::new("/nonexistent"),
     };
     let install_err = install(&setup, &plan, &mut runner, &mut Vec::new()).unwrap_err();
-    let remove_err = remove(&setup, &mut runner, &mut Vec::new()).unwrap_err();
+    let remove_err = remove(&setup, None, &mut runner, &mut Vec::new()).unwrap_err();
 
     assert!(
         matches!(install_err, SetupError::NotRoot(_)),
@@ -461,7 +484,7 @@ fn a_remove_dry_run_changes_nothing() {
     let mut runner = Recorder::default();
     let mut out = Vec::new();
 
-    remove(&fx.setup(true), &mut runner, &mut out).unwrap();
+    remove(&fx.setup(true), Some(&fx.path(ASVC)), &mut runner, &mut out).unwrap();
 
     for p in [RULE, UNIT] {
         assert!(fx.path(p).exists(), "{p} removed by a dry run");
@@ -614,4 +637,162 @@ fn a_malformed_sudo_user_is_refused() {
         resolve_user(None, Some("pi\nExecStart=/bin/sh")),
         Err(SetupError::InvalidUser(_))
     ));
+}
+
+fn asvc_text(fx: &Fixture) -> String {
+    fs::read_to_string(fx.path(ASVC)).unwrap()
+}
+
+#[test]
+fn install_adds_foci_tune_to_the_asvc_and_keeps_every_other_line() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+
+    fx.install("pi", &mut Recorder::default()).unwrap();
+
+    assert_eq!(asvc_text(&fx), "klipper\nklipper_mcu\n# note\nfoci-tune\n");
+}
+
+#[test]
+fn a_second_install_leaves_the_asvc_byte_identical() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fx.install("pi", &mut Recorder::default()).unwrap();
+    let first = fs::read(fx.path(ASVC)).unwrap();
+    let ino = fs::metadata(fx.path(ASVC)).unwrap().ino();
+
+    fx.install("pi", &mut Recorder::default()).unwrap();
+
+    assert_eq!(fs::read(fx.path(ASVC)).unwrap(), first);
+    assert_eq!(fs::metadata(fx.path(ASVC)).unwrap().ino(), ino);
+}
+
+#[test]
+fn an_asvc_without_a_trailing_newline_is_extended_correctly() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fs::write(fx.path(ASVC), "klipper\nmoonraker").unwrap();
+
+    fx.install("pi", &mut Recorder::default()).unwrap();
+
+    assert_eq!(asvc_text(&fx), "klipper\nmoonraker\nfoci-tune\n");
+}
+
+#[test]
+fn an_empty_asvc_gets_just_the_service() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fs::write(fx.path(ASVC), "").unwrap();
+
+    fx.install("pi", &mut Recorder::default()).unwrap();
+
+    assert_eq!(asvc_text(&fx), "foci-tune\n");
+}
+
+#[test]
+fn the_asvc_keeps_its_mode_when_rewritten() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fs::set_permissions(fx.path(ASVC), fs::Permissions::from_mode(0o640)).unwrap();
+
+    fx.install("pi", &mut Recorder::default()).unwrap();
+
+    assert_eq!(mode(&fx.path(ASVC)), 0o640);
+    assert!(asvc_text(&fx).ends_with("foci-tune\n"));
+}
+
+#[test]
+fn remove_drops_only_foci_tune_from_the_asvc() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fx.install("pi", &mut Recorder::default()).unwrap();
+    fs::write(
+        fx.path(ASVC),
+        "klipper\nfoci-tune\nfoci-tune-extra\n# note\n",
+    )
+    .unwrap();
+
+    fx.remove(&mut Recorder::default()).unwrap();
+
+    assert_eq!(asvc_text(&fx), "klipper\nfoci-tune-extra\n# note\n");
+}
+
+#[test]
+fn an_unwritable_or_missing_asvc_fails_before_the_unit_is_written_or_the_service_enabled() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fs::create_dir(fx.path("home/pi/printer_data/a-directory")).unwrap();
+    for bad in [
+        fx.path("home/pi/printer_data/absent.asvc"),
+        fx.path("home/pi/printer_data/a-directory"),
+    ] {
+        let mut runner = Recorder::default();
+
+        let err = fx.install_with_asvc("pi", &bad, &mut runner).unwrap_err();
+
+        assert!(matches!(err, SetupError::Asvc { .. }), "{err:?}");
+        assert!(!fx.path(UNIT).exists());
+        assert!(!fx.path(RULE).exists());
+        assert!(runner.commands.is_empty());
+    }
+}
+
+#[test]
+fn a_dry_run_reports_the_asvc_change_and_writes_nothing() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    let before = asvc_text(&fx);
+    let asvc = fx.path(ASVC);
+    let plan = InstallPlan {
+        user: "pi",
+        exe: &fx.exe,
+        asvc: &asvc,
+    };
+    let mut out = Vec::new();
+
+    install(&fx.setup(true), &plan, &mut Recorder::default(), &mut out).unwrap();
+
+    assert_eq!(asvc_text(&fx), before);
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains(&asvc.display().to_string()), "{out}");
+}
+
+#[test]
+fn the_asvc_is_updated_after_the_rule_and_before_the_unit_and_enable_is_last() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    let mut runner = Recorder::default();
+
+    let out = fx.install("pi", &mut runner).unwrap();
+
+    let position = |needle: &str| {
+        out.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {out}"))
+    };
+    let asvc = position("moonraker.asvc");
+    assert!(position("99-foci-trace.rules") < asvc);
+    assert!(asvc < position("foci-tune.service (mode"));
+    assert_eq!(
+        runner.commands.last().map(String::as_str),
+        Some("systemctl enable --now foci-tune")
+    );
+}
+
+#[test]
+fn remove_with_no_determinable_asvc_path_still_removes_the_unit_and_rule() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fx.install("pi", &mut Recorder::default()).unwrap();
+    let listed = asvc_text(&fx);
+    let mut out = Vec::new();
+
+    remove(&fx.setup(false), None, &mut Recorder::default(), &mut out).unwrap();
+
+    assert!(!fx.path(UNIT).exists());
+    assert!(!fx.path(RULE).exists());
+    assert_eq!(asvc_text(&fx), listed);
+    assert!(String::from_utf8(out).unwrap().contains("moonraker.asvc"));
+}
+
+#[test]
+fn remove_with_a_missing_asvc_file_tolerates_it() {
+    let fx = Fixture::new(Some("plugdev:x:46:pi"));
+    fx.install("pi", &mut Recorder::default()).unwrap();
+    fs::remove_file(fx.path(ASVC)).unwrap();
+
+    fx.remove(&mut Recorder::default()).unwrap();
+
+    assert!(!fx.path(UNIT).exists());
+    assert!(!fx.path(RULE).exists());
+    assert!(!fx.path(ASVC).exists());
 }

@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use foci_tune::assets;
+use foci_tune::moonraker::{ClientConfig, MoonrakerClient};
 use foci_tune::server::{ServeConfig, serve};
 use foci_tune::setup::{
     self, Host, InstallPlan, Runner, Setup, SetupError, SystemRunner, UnexecutedRunner,
+    asvc_beside_logs,
 };
 use foci_tune::verify::{Kind, verify_archive};
 
@@ -49,20 +52,29 @@ enum Command {
         captures: Vec<PathBuf>,
     },
     /// Install the udev rule and systemd unit and start the service (Linux, root).
-    Setup {
-        /// User the service runs as; added to the plugdev group. Defaults to `SUDO_USER`.
-        #[arg(long, conflicts_with = "remove")]
-        user: Option<String>,
-        /// Print what would be done, including the file contents, and change nothing.
-        #[arg(long)]
-        dry_run: bool,
-        /// Stop and disable the service and remove the installed files.
-        #[arg(long)]
-        remove: bool,
-        /// Place every system path under this directory and run no external commands.
-        #[arg(long, hide = true)]
-        root: Option<PathBuf>,
-    },
+    Setup(SetupArgs),
+}
+
+#[derive(clap::Args)]
+struct SetupArgs {
+    /// User the service runs as; added to the plugdev group. Defaults to `SUDO_USER`.
+    #[arg(long, conflicts_with = "remove")]
+    user: Option<String>,
+    /// Print what would be done, including the file contents, and change nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Stop and disable the service and remove the installed files.
+    #[arg(long)]
+    remove: bool,
+    /// Place every system path under this directory and run no external commands.
+    #[arg(long, hide = true)]
+    root: Option<PathBuf>,
+    /// Path of Moonraker's `moonraker.asvc`; looked up through Moonraker when omitted.
+    #[arg(long)]
+    asvc_path: Option<PathBuf>,
+    /// Moonraker base URL used to locate `moonraker.asvc`.
+    #[arg(long, default_value = "http://127.0.0.1:7125")]
+    moonraker_url: String,
 }
 
 fn main() -> ExitCode {
@@ -93,12 +105,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some(Command::Setup {
-            user,
-            dry_run,
-            remove,
-            root,
-        }) => match run_setup(user.as_deref(), dry_run, remove, root) {
+        Some(Command::Setup(args)) => match run_setup(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -142,35 +149,80 @@ fn main() -> ExitCode {
     }
 }
 
-fn run_setup(
-    user: Option<&str>,
-    dry_run: bool,
-    remove: bool,
-    root: Option<PathBuf>,
-) -> Result<(), SetupError> {
-    let mut runner: Box<dyn Runner> = if root.is_some() {
+fn run_setup(args: SetupArgs) -> Result<(), SetupError> {
+    let mut runner: Box<dyn Runner> = if args.root.is_some() {
         Box::new(UnexecutedRunner)
     } else {
         Box::new(SystemRunner)
     };
     let config = Setup {
-        prefix: root,
-        dry_run,
+        prefix: args.root,
+        dry_run: args.dry_run,
         host: Host::current(),
     };
     let mut out = std::io::stdout().lock();
-    if remove {
-        return setup::remove(&config, runner.as_mut(), &mut out);
+    if args.remove {
+        let asvc = match resolve_asvc(args.asvc_path, &args.moonraker_url) {
+            Ok(path) => Some(path),
+            Err(e) => {
+                eprintln!("warning: {e}");
+                None
+            }
+        };
+        return setup::remove(&config, asvc.as_deref(), runner.as_mut(), &mut out);
     }
     let exe = std::env::current_exe().map_err(|source| SetupError::Io {
         path: PathBuf::from("the running executable"),
         source,
     })?;
     let sudo_user = std::env::var("SUDO_USER").ok();
-    let user = setup::resolve_user(user, sudo_user.as_deref().filter(|u| !u.is_empty()))?;
+    let user = setup::resolve_user(
+        args.user.as_deref(),
+        sudo_user.as_deref().filter(|u| !u.is_empty()),
+    )?;
+    let asvc = resolve_asvc(args.asvc_path, &args.moonraker_url)?;
     let plan = InstallPlan {
         user: &user,
         exe: &exe,
+        asvc: &asvc,
     };
     setup::install(&config, &plan, runner.as_mut(), &mut out)
+}
+
+/// `--asvc-path` when given, else the path found through Moonraker. A runtime is built only
+/// for the lookup.
+fn resolve_asvc(explicit: Option<PathBuf>, moonraker_url: &str) -> Result<PathBuf, SetupError> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| SetupError::Asvc {
+            path: PathBuf::from("moonraker.asvc"),
+            reason: format!("cannot start the async runtime: {e}"),
+        })?;
+    runtime.block_on(locate_asvc(moonraker_url))
+}
+
+/// Asks Moonraker where its `logs` root is and returns the `moonraker.asvc` beside it.
+async fn locate_asvc(moonraker_url: &str) -> Result<PathBuf, SetupError> {
+    let roots_url = format!("{}/server/files/roots", moonraker_url.trim_end_matches('/'));
+    let fail = |reason: String| SetupError::Asvc {
+        path: PathBuf::from(&roots_url),
+        reason,
+    };
+    let client = MoonrakerClient::connect(ClientConfig {
+        url: moonraker_url.to_owned(),
+        api_key: None,
+        backoff_initial: Duration::from_secs(1),
+        backoff_max: Duration::from_secs(1),
+    });
+    let logs = client.logs_root().await.map_err(|e| {
+        fail(format!(
+            "cannot find Moonraker's logs root: {e}; pass --asvc-path"
+        ))
+    })?;
+    asvc_beside_logs(&logs)
+        .ok_or_else(|| fail(format!("{} has no parent directory", logs.display())))
 }

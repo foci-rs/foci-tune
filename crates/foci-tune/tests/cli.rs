@@ -103,54 +103,202 @@ async fn the_service_serves_the_api_and_stops_on_sigterm() {
     assert!(status.success(), "{status:?}");
 }
 
+struct PrefixedRoot {
+    dir: tempfile::TempDir,
+    exe: std::path::PathBuf,
+}
+
+impl PrefixedRoot {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for d in [
+            "etc/udev/rules.d",
+            "etc/systemd/system",
+            "home/pi/foci-tune",
+            "home/pi/printer_data",
+        ] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        std::fs::write(
+            root.join("etc/passwd"),
+            "pi:x:1000:1000::/home/pi:/bin/bash\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("etc/group"), "pi:x:1000:\nplugdev:x:46:\n").unwrap();
+        std::fs::write(
+            root.join("home/pi/printer_data/moonraker.asvc"),
+            "klipper\n",
+        )
+        .unwrap();
+        let exe = root.join("home/pi/foci-tune/foci-tune-aarch64");
+        std::fs::copy(assert_cmd::cargo::cargo_bin("foci-tune"), &exe).unwrap();
+        std::os::unix::fs::symlink(
+            "foci-tune-aarch64",
+            root.join("home/pi/foci-tune/foci-tune"),
+        )
+        .unwrap();
+        Self { dir, exe }
+    }
+
+    fn path(&self, rel: &str) -> std::path::PathBuf {
+        self.dir.path().join(rel)
+    }
+
+    fn asvc(&self) -> std::path::PathBuf {
+        self.path("home/pi/printer_data/moonraker.asvc")
+    }
+
+    fn unit(&self) -> std::path::PathBuf {
+        self.path("etc/systemd/system/foci-tune.service")
+    }
+
+    fn setup(&self, extra: &[&str]) -> std::process::Command {
+        let mut cmd = std::process::Command::new(&self.exe);
+        cmd.args(["setup", "--root"])
+            .arg(self.dir.path())
+            .args(extra);
+        cmd
+    }
+}
+
 #[test]
 fn setup_under_a_root_prefix_dry_runs_then_installs_without_running_commands() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    for d in [
-        "etc/udev/rules.d",
-        "etc/systemd/system",
-        "home/pi/foci-tune",
-    ] {
-        std::fs::create_dir_all(root.join(d)).unwrap();
-    }
-    std::fs::write(
-        root.join("etc/passwd"),
-        "pi:x:1000:1000::/home/pi:/bin/bash\n",
-    )
-    .unwrap();
-    std::fs::write(root.join("etc/group"), "pi:x:1000:\nplugdev:x:46:\n").unwrap();
-    let unit = root.join("etc/systemd/system/foci-tune.service");
-    let exe = root.join("home/pi/foci-tune/foci-tune-aarch64");
-    std::fs::copy(assert_cmd::cargo::cargo_bin("foci-tune"), &exe).unwrap();
-    std::os::unix::fs::symlink(
-        "foci-tune-aarch64",
-        root.join("home/pi/foci-tune/foci-tune"),
-    )
-    .unwrap();
-    let setup = |extra: &[&str]| {
-        let mut cmd = Command::new(&exe);
-        cmd.args(["setup", "--root"]).arg(root).args(extra);
+    let fx = PrefixedRoot::new();
+    let asvc = fx.asvc();
+    let asvc = asvc.to_str().unwrap();
+    let run = |extra: &[&str]| {
+        let mut cmd = Command::from_std(fx.setup(&["--asvc-path", asvc]));
+        cmd.args(extra);
         cmd
     };
 
-    setup(&["--dry-run", "--user", "pi"])
+    run(&["--dry-run", "--user", "pi"])
         .assert()
         .success()
         .stdout(predicates::str::contains("User=pi"))
         .stdout(predicates::str::contains("dry run"));
-    assert!(!unit.exists());
+    assert!(!fx.unit().exists());
 
-    setup(&["--user", "pi"])
+    run(&["--user", "pi"])
         .assert()
         .success()
         .stdout(predicates::str::contains("not executed under --root"));
     assert!(
-        std::fs::read_to_string(&unit)
+        std::fs::read_to_string(fx.unit())
             .unwrap()
             .contains("User=pi\n")
     );
-    assert!(root.join("etc/udev/rules.d/99-foci-trace.rules").is_file());
+    assert!(fx.path("etc/udev/rules.d/99-foci-trace.rules").is_file());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn asvc_path_flag_overrides_the_moonraker_lookup_for_install_and_remove() {
+    let fx = PrefixedRoot::new();
+    let fake = fake_moonraker::FakeMoonraker::start().await;
+    let decoy = fx.path("decoy/logs");
+    fake.set_logs_root(Some(decoy.to_str().unwrap()));
+    let url = fake.url();
+    let asvc = fx.asvc();
+    let run = |extra: Vec<String>| {
+        let mut cmd = fx.setup(&[]);
+        cmd.args(extra);
+        tokio::task::spawn_blocking(move || cmd.output().unwrap())
+    };
+    let flags = |more: &[&str]| -> Vec<String> {
+        [
+            "--asvc-path",
+            asvc.to_str().unwrap(),
+            "--moonraker-url",
+            &url,
+            "--user",
+            "pi",
+        ]
+        .iter()
+        .chain(more)
+        .map(|s| s.to_string())
+        .collect()
+    };
+
+    let installed = run(flags(&[])).await.unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    let after_install = std::fs::read_to_string(&asvc).unwrap();
+    let removed = run(vec![
+        "--remove".into(),
+        "--asvc-path".into(),
+        asvc.to_str().unwrap().into(),
+        "--moonraker-url".into(),
+        url.clone(),
+    ])
+    .await
+    .unwrap();
+
+    assert_eq!(after_install, "klipper\nfoci-tune\n");
+    assert!(removed.status.success(), "{removed:?}");
+    assert_eq!(std::fs::read_to_string(&asvc).unwrap(), "klipper\n");
+    assert!(!decoy.parent().unwrap().exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn setup_locates_the_asvc_beside_the_logs_root_when_no_flag_is_given() {
+    let fx = PrefixedRoot::new();
+    let fake = fake_moonraker::FakeMoonraker::start().await;
+    let logs = fx.path("home/pi/printer_data/logs");
+    fake.set_logs_root(Some(logs.to_str().unwrap()));
+    let mut cmd = fx.setup(&["--user", "pi", "--moonraker-url", &fake.url()]);
+
+    let output = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        std::fs::read_to_string(fx.asvc()).unwrap(),
+        "klipper\nfoci-tune\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn install_fails_with_no_writes_when_the_moonraker_lookup_fails_and_no_asvc_path_is_given() {
+    let fx = PrefixedRoot::new();
+    let fake = fake_moonraker::FakeMoonraker::start().await;
+    fake.set_logs_root(None);
+    let mut cmd = fx.setup(&["--user", "pi", "--moonraker-url", &fake.url()]);
+
+    let output = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(!fx.unit().exists());
+    assert!(!fx.path("etc/udev/rules.d/99-foci-trace.rules").exists());
+    assert_eq!(std::fs::read_to_string(fx.asvc()).unwrap(), "klipper\n");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remove_proceeds_and_reports_the_service_list_unchanged_when_the_lookup_fails() {
+    let fx = PrefixedRoot::new();
+    let asvc = fx.asvc();
+    let installed = fx
+        .setup(&["--user", "pi", "--asvc-path", asvc.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    let fake = fake_moonraker::FakeMoonraker::start().await;
+    fake.set_logs_root(None);
+    let mut cmd = fx.setup(&["--remove", "--moonraker-url", &fake.url()]);
+
+    let output = tokio::task::spawn_blocking(move || cmd.output().unwrap())
+        .await
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    assert!(!fx.unit().exists());
+    assert_eq!(
+        std::fs::read_to_string(&asvc).unwrap(),
+        "klipper\nfoci-tune\n"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("moonraker.asvc"));
 }
 
 #[test]

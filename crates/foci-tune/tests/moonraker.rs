@@ -1,10 +1,11 @@
 mod fake_moonraker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fake_moonraker::FakeMoonraker;
 use foci_tune::moonraker::{ClientConfig, KlippyState, MoonrakerApi, MoonrakerClient};
+use foci_tune::setup::asvc_beside_logs;
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -66,6 +67,22 @@ async fn a_listing_without_a_logs_root_is_an_error() {
     let client = MoonrakerClient::connect(client_config(fake.url()));
 
     assert!(client.logs_root().await.is_err());
+}
+
+#[tokio::test]
+async fn asvc_is_derived_from_the_logs_root_parent_not_the_config_root_parent() {
+    let fake = FakeMoonraker::start().await;
+    fake.set_config_root("/srv/config");
+    fake.set_logs_root(Some("/var/lib/moonraker/logs"));
+    let client = MoonrakerClient::connect(client_config(fake.url()));
+
+    let logs = client.logs_root().await.unwrap();
+
+    assert_eq!(
+        asvc_beside_logs(&logs),
+        Some(PathBuf::from("/var/lib/moonraker/moonraker.asvc"))
+    );
+    assert_eq!(asvc_beside_logs(Path::new("/")), None);
 }
 
 #[tokio::test]
