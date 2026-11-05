@@ -2,8 +2,6 @@ setup() {
   export TEST_DIR="$BATS_TMPDIR/foci-tune-bootstrap-$$"
   mkdir -p "$TEST_DIR"
 
-  # Stub curl and exec so the test never touches the network or replaces
-  # the bats process.
   curl() {
     echo "$*" >> "$TEST_DIR/curl.log"
     case "$*" in
@@ -24,8 +22,6 @@ setup() {
       shift
     done
   }
-  # Only intercept the real "exec bash <installer>" call; shims run by python3
-  # call exec too and must not land in exec.log.
   exec() {
     case "$1" in
       bash)

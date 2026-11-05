@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# foci-tune/install.sh - bootstrap entry point for the foci-tune installer.
-# curl -sL https://raw.githubusercontent.com/foci-rs/foci-tune/main/install.sh | bash
 
 foci_tune_sha256_check() {
     if command -v shasum >/dev/null 2>&1; then
