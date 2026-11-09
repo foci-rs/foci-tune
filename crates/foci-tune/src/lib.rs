@@ -10,6 +10,7 @@ pub mod config_block;
 pub mod devfake;
 pub mod discovery;
 pub mod engine;
+pub mod export;
 pub mod live;
 pub mod model;
 pub mod moonraker;

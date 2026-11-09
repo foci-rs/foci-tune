@@ -27,6 +27,7 @@ futures-util = "0.3.34"
 bytes = "1.11.1"
 nusb = "0.2.3"
 libc = "0.2.191"
+tar = { version = "0.4.46", default-features = false }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

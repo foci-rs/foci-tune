@@ -740,6 +740,44 @@ async fn runs_series_and_capture_are_served_for_a_finished_run() {
     assert_eq!(listed["runs"][0]["state"], "done");
 }
 
+fn bundle_entries(bytes: &[u8]) -> Vec<String> {
+    let decoder = structured_zstd::decoding::StreamingDecoder::new(bytes);
+    tar::Archive::new(decoder)
+        .entries()
+        .unwrap()
+        .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_session_bundle_holds_the_session_and_its_runs_and_an_unknown_one_is_404() {
+    let rig = rig().await;
+    let app = app(&rig);
+    let (session, run) = submit(&app, probe_body()).await;
+    assert_eq!(finish(&rig, &app, &run).await["state"], "done");
+
+    let reply = get(&app, &format!("/api/sessions/{session}/bundle")).await;
+    let missing = get(&app, "/api/sessions/20990101T000000Z-zzzz/bundle").await;
+    let invalid = get(&app, "/api/sessions/bad.id/bundle").await;
+
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.content_type, "application/zstd");
+    let entries = bundle_entries(&reply.body);
+    assert_eq!(entries.last().unwrap(), "manifest.json");
+    for file in [
+        "session.json",
+        &format!("{run}/run.json"),
+        &format!("{run}/capture.bin.zst"),
+    ] {
+        assert!(
+            entries.contains(&format!("{session}/{file}")),
+            "{file} in {entries:?}"
+        );
+    }
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_ui_is_served_with_spa_fallback_and_unknown_api_paths_are_json_404() {
     let rig = rig().await;

@@ -34,6 +34,7 @@ use crate::config_block;
 use crate::engine::{
     CommandError, Engine, LadderRejected, LadderRequest, Precondition, TraceModeCommand,
 };
+use crate::export;
 use crate::live::{LiveState, TraceMode};
 use crate::model::{
     ControlSnapshot, FORMAT_VERSION, Filters, Gains, LadderDef, Run, RunId, RunRequest, RunState,
@@ -985,11 +986,13 @@ pub fn router<M: MoonrakerApi + 'static>(api: Api<M>) -> Router {
         .route("/api/kill", post(kill::<M>))
         .route("/api/sessions", get(sessions::<M>))
         .route("/api/sessions/{id}", get(session::<M>))
+        .route("/api/sessions/{id}/bundle", get(session_bundle::<M>))
         .route("/api/sessions/{id}/revert", post(revert::<M>))
         .route("/api/firmware-restart", post(firmware_restart::<M>))
         .route("/api/home", post(home::<M>))
         .route("/api/tunes", get(list_tunes::<M>).post(create_tune::<M>))
         .route("/api/tunes/{id}", get(read_tune::<M>))
+        .route("/api/tunes/{id}/bundle", get(tune_bundle::<M>))
         .route("/api/tunes/{id}/setup", put(update_tune_setup::<M>))
         .route("/api/tunes/{id}/steps", post(prepare_tune_step::<M>))
         .route(
@@ -1215,6 +1218,42 @@ async fn session<M: MoonrakerApi + 'static>(
     summary
         .map(|s| Json(SessionView::from(s).owned_by(&owners)))
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("session {id} not found")))
+}
+
+fn bundle_response(name: &str, bytes: Vec<u8>) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, export::CONTENT_TYPE.to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}.tar.zst\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+async fn session_bundle<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let id = session_id(&id)?;
+    let store = api.store.clone();
+    let lookup = id.clone();
+    let bytes = blocking(move || export::session_bundle(&store, &lookup)).await??;
+    Ok(bundle_response(&format!("foci-session-{id}"), bytes))
+}
+
+async fn tune_bundle<M: MoonrakerApi + 'static>(
+    State(api): State<App<M>>,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let id = tune_id(&id)?;
+    let store = api.store.clone();
+    let lookup = id.clone();
+    let bytes = blocking(move || export::tune_bundle(&store, &lookup)).await??;
+    Ok(bundle_response(&format!("foci-tune-{id}"), bytes))
 }
 
 async fn revert<M: MoonrakerApi + 'static>(

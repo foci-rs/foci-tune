@@ -128,7 +128,8 @@ impl Store {
         Ok(Self { root })
     }
 
-    fn tune_path(&self, tune: &TuneId) -> PathBuf {
+    /// Where the tune's record lives.
+    pub fn tune_path(&self, tune: &TuneId) -> PathBuf {
         self.root
             .join(TUNES_DIR)
             .join(format!("{tune}{TUNE_EXTENSION}"))
@@ -314,7 +315,8 @@ impl Store {
         Ok(locks)
     }
 
-    fn session_dir(&self, session: &SessionId) -> PathBuf {
+    /// Where the session's directory lives.
+    pub fn session_dir(&self, session: &SessionId) -> PathBuf {
         self.root.join(SESSIONS_DIR).join(session.as_str())
     }
 

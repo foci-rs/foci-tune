@@ -315,3 +315,89 @@ fn a_session_in_two_tunes_belongs_to_the_older_tune_every_time() {
         assert_eq!(owners[&shared[0]], (older.id.clone(), 1));
     }
 }
+
+#[test]
+fn a_tune_bundle_holds_the_record_its_sessions_and_names_the_missing_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().to_owned()).unwrap();
+    let mut t = tune("stepper_x", TuneState::Done);
+    let present = SessionId::generate(SystemTime::now());
+    let gone = SessionId::parse("20990101T000000Z-zzzz").unwrap();
+    t.steps[0].sessions = StepSessions {
+        probe: present.clone(),
+        tracking: present.clone(),
+        standstill: gone.clone(),
+    };
+    store.write_tune(&t).unwrap();
+    let session_dir = store.session_dir(&present);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join("session.json"), b"{}").unwrap();
+
+    let bytes = foci_tune::export::tune_bundle(&store, &t.id).unwrap();
+
+    let decoder = structured_zstd::decoding::StreamingDecoder::new(&bytes[..]);
+    let mut archive = tar::Archive::new(decoder);
+    let mut entries = Vec::new();
+    let mut manifest = String::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        if path == "manifest.json" {
+            std::io::Read::read_to_string(&mut entry, &mut manifest).unwrap();
+        }
+        entries.push(path);
+    }
+    assert_eq!(
+        entries,
+        [
+            format!("{}/tune.json", t.id),
+            format!("{}/sessions/{present}/session.json", t.id),
+            "manifest.json".to_owned(),
+        ]
+    );
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(manifest["kind"], "tune");
+    assert_eq!(
+        manifest["missing_sessions"],
+        serde_json::json!([gone.as_str()])
+    );
+}
+
+#[test]
+fn a_capture_still_being_written_is_left_out_and_named_in_the_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path().to_owned()).unwrap();
+    let session = SessionId::generate(SystemTime::now());
+    let session_dir = store.session_dir(&session);
+    for (run, run_json) in [
+        ("done", r#"{"capture":{"bytes":3}}"#),
+        ("live", r#"{"capture":null}"#),
+    ] {
+        std::fs::create_dir_all(session_dir.join(run)).unwrap();
+        std::fs::write(session_dir.join(run).join("run.json"), run_json).unwrap();
+        std::fs::write(session_dir.join(run).join("capture.bin.zst"), b"zst").unwrap();
+    }
+
+    let bytes = foci_tune::export::session_bundle(&store, &session).unwrap();
+
+    let decoder = structured_zstd::decoding::StreamingDecoder::new(&bytes[..]);
+    let mut archive = tar::Archive::new(decoder);
+    let mut entries = Vec::new();
+    let mut manifest = String::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_string_lossy().into_owned();
+        if path == "manifest.json" {
+            std::io::Read::read_to_string(&mut entry, &mut manifest).unwrap();
+        }
+        entries.push(path);
+    }
+    assert!(entries.contains(&format!("{session}/done/capture.bin.zst")));
+    assert!(entries.contains(&format!("{session}/live/run.json")));
+    assert!(!entries.contains(&format!("{session}/live/capture.bin.zst")));
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    assert_eq!(
+        manifest["unfinished_captures"],
+        serde_json::json!([format!("{session}/live")])
+    );
+}
