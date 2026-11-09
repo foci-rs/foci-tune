@@ -1,6 +1,7 @@
 import { createRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getSession, type SessionView } from "@/api";
+import { getSession, type SessionView, sessionBundleUrl } from "@/api";
+import { BundleDownload } from "@/components/BundleDownload";
 import { Card } from "@/components/ui";
 import { useFeed } from "@/feed";
 import { sessionLabel } from "@/sessions";
@@ -64,6 +65,9 @@ function SessionPage() {
       {view !== null && (
         <>
           <Card label={`Session ${view.id}`}>
+            <div className="float-right">
+              <BundleDownload href={sessionBundleUrl(view.id)} what="session" />
+            </div>
             <p className="font-mono text-sm">{sessionLabel(view)}</p>
             {view.session !== null && (
               <p className="mt-1 text-xs text-muted-foreground">

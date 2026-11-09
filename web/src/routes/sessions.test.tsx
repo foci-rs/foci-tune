@@ -79,13 +79,13 @@ test("the list has one row per session, newest first, with start, stepper, test 
   const headers = within(table)
     .getAllByRole("columnheader")
     .map((h) => h.textContent);
-  expect(headers).toEqual(["Started", "Stepper", "Test", "Runs"]);
+  expect(headers).toEqual(["Started", "Stepper", "Test", "Runs", "Download"]);
   const rows = within(table).getAllByRole("row").slice(1);
   expect(rows).toHaveLength(2);
   expect(rows[0]).toHaveTextContent(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}stepper_xProbe2$/);
   expect(rows[0]).not.toHaveTextContent(/failed|skipped|n\/a|truncated/);
-  expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/sessions/20261030-bbb");
-  expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/sessions/20261029-aaa");
+  expect(within(rows[0]).getByRole("link", { name: /^\d/ })).toHaveAttribute("href", "/sessions/20261030-bbb");
+  expect(within(rows[1]).getByRole("link", { name: /^\d/ })).toHaveAttribute("href", "/sessions/20261029-aaa");
 });
 
 function manyLists(sessionCount: number, tuneCount = 0) {
@@ -168,7 +168,11 @@ test("the Manual tab is the default and lists only the sessions made by hand", a
   expect(screen.getByRole("tab", { name: "Manual" })).toHaveAttribute("aria-selected", "true");
   const rows = within(table).getAllByRole("row").slice(1);
   expect(rows).toHaveLength(1);
-  expect(within(rows[0]).getByRole("link")).toHaveAttribute("href", "/sessions/20261029-aaa");
+  expect(within(rows[0]).getByRole("link", { name: /^\d/ })).toHaveAttribute("href", "/sessions/20261029-aaa");
+  expect(within(rows[0]).getByRole("link", { name: "Download session for support" })).toHaveAttribute(
+    "href",
+    "/api/sessions/20261029-aaa/bundle",
+  );
 });
 
 test("the Guided tab lists the tunes, not their sessions, and the tab is in the address", async () => {
@@ -184,11 +188,16 @@ test("the Guided tab lists the tunes, not their sessions, and the tab is in the 
     within(table)
       .getAllByRole("columnheader")
       .map((h) => h.textContent),
-  ).toEqual(["Started", "Stepper", "State"]);
+  ).toEqual(["Started", "Stepper", "State", "Download"]);
   expect(tuneLinks().map((l) => l.getAttribute("href"))).toEqual([
     "/tune/guided?tune=t-gone",
     "/tune/guided?tune=t-done",
   ]);
+  expect(
+    within(table)
+      .getAllByRole("link", { name: "Download tune for support" })
+      .map((l) => l.getAttribute("href")),
+  ).toEqual(["/api/tunes/t-gone/bundle", "/api/tunes/t-done/bundle"]);
   expect(screen.queryByText("20261030-guided")).toBeNull();
 });
 

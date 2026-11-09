@@ -727,6 +727,12 @@ export const postAbort = (run: RunId) =>
 export const postRevert = (session: SessionId) =>
   request<{ session: SessionId; reverted: true }>("POST", `/api/sessions/${encodeURIComponent(session)}/revert`);
 
+/** URL of the support bundle (`.tar.zst`) for a session; a plain link, the server sets the file name. */
+export const sessionBundleUrl = (id: SessionId) => `/api/sessions/${encodeURIComponent(id)}/bundle`;
+
+/** URL of the support bundle (`.tar.zst`) for a tune and the sessions it owns. */
+export const tuneBundleUrl = (id: TuneId) => `/api/tunes/${encodeURIComponent(id)}/bundle`;
+
 const tunePath = (id: TuneId, tail = "") => `/api/tunes/${encodeURIComponent(id)}${tail}`;
 
 export const postTune = (body: TuneSetup) => request<Tune>("POST", "/api/tunes", body);

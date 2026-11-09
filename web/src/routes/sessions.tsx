@@ -1,6 +1,7 @@
 import { createRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getSessions, getTunes, type SessionView, type TuneSummary } from "@/api";
+import { getSessions, getTunes, type SessionView, sessionBundleUrl, type TuneSummary, tuneBundleUrl } from "@/api";
+import { BundleDownload } from "@/components/BundleDownload";
 import { Pager } from "@/components/Pager";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui";
@@ -129,6 +130,9 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
             <th className="py-1 pr-3 font-medium">Stepper</th>
             <th className="py-1 pr-3 font-medium">Test</th>
             <th className="py-1 pr-3 text-right font-medium">Runs</th>
+            <th className="w-10 py-1">
+              <span className="sr-only">Download</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -149,6 +153,9 @@ function SessionTable({ sessions }: { sessions: SessionView[] }) {
                 <td className="py-1 pr-3 font-mono">{row.stepper}</td>
                 <td className="py-1 pr-3">{row.test}</td>
                 <td className="py-1 pr-3 text-right font-mono">{row.runs}</td>
+                <td className="py-1 text-right">
+                  <BundleDownload href={sessionBundleUrl(row.id)} what="session" />
+                </td>
               </tr>
             );
           })}
@@ -167,6 +174,9 @@ function TuneTable({ tunes }: { tunes: TuneSummary[] }) {
             <th className="py-1 pr-3 font-medium">Started</th>
             <th className="py-1 pr-3 font-medium">Stepper</th>
             <th className="py-1 pr-3 font-medium">State</th>
+            <th className="w-10 py-1">
+              <span className="sr-only">Download</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -179,6 +189,9 @@ function TuneTable({ tunes }: { tunes: TuneSummary[] }) {
               </td>
               <td className="py-1 pr-3 font-mono">{t.stepper}</td>
               <td className="py-1 pr-3">{stateText(t.state)}</td>
+              <td className="py-1 text-right">
+                <BundleDownload href={tuneBundleUrl(t.id)} what="tune" />
+              </td>
             </tr>
           ))}
         </tbody>

@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { ApiRequestError, parseServerMessage, postKill, postTuneChoice, postTuneExtension, postTuneStep } from "./api";
+import {
+  ApiRequestError,
+  parseServerMessage,
+  postKill,
+  sessionBundleUrl,
+  tuneBundleUrl,
+  postTuneChoice,
+  postTuneExtension,
+  postTuneStep,
+} from "./api";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -48,4 +57,9 @@ test("tune requests send the bodies the server decodes", async () => {
 test("the event parser accepts a tune message", () => {
   const message = parseServerMessage('{"type":"tune","tune":{"id":"t1"}}');
   expect(message?.type).toBe("tune");
+});
+
+test("bundle links escape the id", () => {
+  expect(sessionBundleUrl("20261030T174512Z-k3q9")).toBe("/api/sessions/20261030T174512Z-k3q9/bundle");
+  expect(tuneBundleUrl("t 1")).toBe("/api/tunes/t%201/bundle");
 });
