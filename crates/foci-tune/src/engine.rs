@@ -38,7 +38,7 @@ use crate::model::{
 use crate::moonraker::{KlippyState, McuVersion, MoonrakerApi, PrinterState};
 use crate::run_analysis::{AnalysisInput, analyze, decode_capture, stimulus_window};
 use crate::steppers::{BedLimits, Stepper, derive_steppers};
-use crate::stimulus::{RunKind, compose, feedforward_reset_line};
+use crate::stimulus::{RunKind, compose, feedforward_reset_line, velocity_limit_line};
 use crate::store::{Store, build_series};
 use crate::verify_run::{Window, first_failure, verify};
 
@@ -335,6 +335,9 @@ struct Inner {
     ladders: HashMap<u64, LadderTrack>,
     unconfirmed_kill: Option<(SessionId, RunId)>,
     restarts_at_kill: u64,
+    /// A velocity limit that a failed run could not put back, and the Klipper restart count
+    /// when it was left behind. A restart resets the limit, so it ends the obligation.
+    pending_velocity_restore: Option<(f64, u64)>,
     writing: bool,
     locks: HashMap<String, HeldLock>,
 }
@@ -395,6 +398,8 @@ struct RunCtx {
     critical_sent: bool,
     script_sent: bool,
     script_ok: bool,
+    /// The velocity limit to put back when the script carrying a raise did not finish.
+    velocity_restore: Option<f64>,
 }
 
 struct Recorded {
@@ -1926,6 +1931,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         r: &Resolved,
         ctx: &mut RunCtx,
     ) -> Result<(), String> {
+        self.settle_velocity_limit().await?;
         let limits = r
             .limits
             .as_ref()
@@ -1967,11 +1973,41 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
 
         self.set_state(RunState::Recording);
         self.set_state(RunState::Moving);
+        ctx.velocity_restore = stimulus.velocity_raise.map(|r| r.restore_mm_s);
         self.send_stimulus(&stimulus.gcode, ctx).await?;
         ctx.script_ok = true;
         self.set_state(RunState::Draining);
         tokio::time::sleep(self.config.drain).await;
         Ok(())
+    }
+
+    /// Puts back a velocity limit that an earlier run left raised, unless a Klipper restart has
+    /// reset it since. A run does not start while the restore keeps failing.
+    async fn settle_velocity_limit(&self) -> Result<(), String> {
+        let Some((value, left_at)) = lock(&self.inner).pending_velocity_restore else {
+            return Ok(());
+        };
+        if *self.moonraker.klippy_restarts().borrow() == left_at {
+            let line = velocity_limit_line(value);
+            self.gcode_bounded(&line)
+                .await
+                .map_err(|e| format!("velocity limit not restored. Run {line} ({e})"))?;
+        }
+        lock(&self.inner).pending_velocity_restore = None;
+        Ok(())
+    }
+
+    /// Records a velocity limit that could not be put back and returns the text that tells the
+    /// operator how to do it by hand.
+    fn leave_velocity_limit(&self, value: f64) -> String {
+        let restarts = *self.moonraker.klippy_restarts().borrow();
+        lock(&self.inner).pending_velocity_restore = Some((value, restarts));
+        let text = format!(
+            "velocity limit not restored. Run {}",
+            velocity_limit_line(value)
+        );
+        self.note(text.clone());
+        text
     }
 
     async fn send_stimulus(&self, gcode: &str, ctx: &mut RunCtx) -> Result<(), String> {
@@ -2004,12 +2040,19 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
     }
 
     /// G-code after a run that was not killed: the feedforward gain when a script that
-    /// changes it did not finish, then the trace mode when the board was known dormant.
-    /// Nothing is sent to a Klipper that refuses G-code; a firmware restart resets both.
-    async fn cleanup(&self, req: &RunRequest, stepper: &Stepper, ctx: &RunCtx) {
+    /// changes it did not finish, the velocity limit when a script that raised it did not
+    /// finish, then the trace mode when the board was known dormant. Nothing is sent to a
+    /// Klipper that refuses G-code. A firmware restart resets all three.
+    ///
+    /// Returns the text for the run's failure reason when the velocity limit could not be put
+    /// back, which is also kept so the next run retries it.
+    async fn cleanup(&self, req: &RunRequest, stepper: &Stepper, ctx: &RunCtx) -> Option<String> {
+        let velocity = ctx
+            .velocity_restore
+            .filter(|_| ctx.script_sent && !ctx.script_ok);
         if self.klippy_unavailable_for_gcode().is_some() {
             self.note(RESTART_NOTE.to_owned());
-            return;
+            return velocity.map(|v| self.leave_velocity_limit(v));
         }
         let toggles_feedforward = !matches!(req.kind, RunKind::Standstill { .. });
         if ctx.script_sent
@@ -2022,8 +2065,16 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         {
             self.note(format!("feedforward gain not restored to 1.0: {e}"));
         }
+        let mut unrestored = None;
+        if let Some(v) = velocity
+            && !self.kill_engaged()
+            && let Err(e) = self.gcode_bounded(&velocity_limit_line(v)).await
+        {
+            self.note(format!("velocity limit not restored: {e}"));
+            unrestored = Some(self.leave_velocity_limit(v));
+        }
         if !ctx.critical_sent || self.kill_engaged() {
-            return;
+            return unrestored;
         }
         match ctx.prior_mode {
             Some(TraceMode::Dormant) => {
@@ -2039,6 +2090,7 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                 "trace mode left critical: the board's mode before the run was unknown".to_owned(),
             ),
         }
+        unrestored
     }
 
     /// Verification and analysis of a recorded run; returns its final state.
@@ -2247,7 +2299,10 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
                     let reason = self
                         .klippy_unavailable_for_gcode()
                         .map_or(reason, str::to_owned);
-                    self.cleanup(&request, &resolved.stepper, &ctx).await;
+                    let reason = match self.cleanup(&request, &resolved.stepper, &ctx).await {
+                        Some(unrestored) => format!("{reason}. {unrestored}"),
+                        None => reason,
+                    };
                     Some(RunState::Failed(reason))
                 }
             }

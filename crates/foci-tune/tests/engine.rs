@@ -10,7 +10,7 @@ use foci_tune::engine::{
 };
 use foci_tune::model::{DampingOutcome, ProbeRecord, RunId, RunState};
 use foci_tune::moonraker::{KlippyState, MoonrakerApi};
-use foci_tune::stimulus::RunKind;
+use foci_tune::stimulus::{RunKind, velocity_limit_line};
 use foci_tune_analysis::ladder::LadderError;
 use foci_tune_analysis::probe::{EdgeDamping, EdgeDampingError};
 use rig::*;
@@ -815,6 +815,141 @@ async fn a_failed_stimulus_restores_the_feedforward_gain() {
     assert_eq!(
         scripts[stimulus + 1..].to_vec(),
         vec![RESET_FF_LINE.to_owned(), DORMANT_LINE.to_owned()]
+    );
+}
+
+fn raising() -> RunKind {
+    RunKind::Tracking {
+        speeds_mm_s: vec![50.0, 1000.0],
+        strokes: 1,
+    }
+}
+
+fn restore_line() -> String {
+    velocity_limit_line(300.0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_run_restores_the_velocity_limit() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.failures
+            .push(("G90".into(), "!! Must home axis first".into()))
+    });
+
+    let run = rig.run_once(raising()).await;
+
+    assert!(matches!(run.state, RunState::Failed(_)), "{:?}", run.state);
+    let scripts = rig.scripts();
+    let stimulus = scripts.iter().position(|s| s.starts_with("G90")).unwrap();
+    assert_eq!(
+        scripts[stimulus + 1..].to_vec(),
+        vec![
+            RESET_FF_LINE.to_owned(),
+            restore_line(),
+            DORMANT_LINE.to_owned()
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_unconfirmed_restore_is_retried_before_the_next_run() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.failures
+            .push(("G90".into(), "!! Must home axis first".into()));
+        s.failures
+            .push(("SET_VELOCITY_LIMIT".into(), "!! refused".into()));
+    });
+
+    let failed = rig.run_once(raising()).await;
+
+    let RunState::Failed(reason) = &failed.state else {
+        panic!("{:?}", failed.state);
+    };
+    assert!(reason.contains("Must home axis first"), "{reason}");
+    assert!(reason.contains(&restore_line()), "{reason}");
+    rig.a.sim(|s| s.failures.clear());
+    let sent = rig.scripts().len();
+
+    let second = rig.run_once(raising()).await;
+
+    assert!(
+        !matches!(second.state, RunState::Failed(_)),
+        "{:?}",
+        second.state
+    );
+    assert_eq!(rig.scripts()[sent], restore_line());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_next_run_does_not_start_while_the_restore_keeps_failing() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.failures
+            .push(("G90".into(), "!! Must home axis first".into()));
+        s.failures
+            .push(("SET_VELOCITY_LIMIT".into(), "!! refused".into()));
+    });
+    rig.run_once(raising()).await;
+    rig.a
+        .sim(|s| s.failures.retain(|(prefix, _)| prefix != "G90"));
+    let stimuli = rig.stimuli();
+
+    let second = rig.run_once(raising()).await;
+
+    let RunState::Failed(reason) = &second.state else {
+        panic!("{:?}", second.state);
+    };
+    assert!(reason.contains(&restore_line()), "{reason}");
+    assert_eq!(rig.stimuli(), stimuli, "no stimulus was sent");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restore_that_cannot_be_sent_is_still_reported_in_the_failure_reason() {
+    let rig = rig().await;
+    rig.fake.shut_down_on("G90", Duration::from_millis(100));
+
+    let run = rig.run_once(raising()).await;
+
+    let RunState::Failed(reason) = &run.state else {
+        panic!("{:?}", run.state);
+    };
+    assert!(reason.contains("shut down"), "{reason}");
+    assert!(reason.contains(&restore_line()), "{reason}");
+    assert!(
+        rig.scripts().last().unwrap().starts_with("G90"),
+        "nothing was sent after the stimulus"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_klipper_restart_clears_a_pending_restore() {
+    let rig = rig().await;
+    rig.fake.shut_down_on("G90", Duration::from_millis(100));
+    rig.run_once(raising()).await;
+
+    rig.fake.restart_klipper();
+    let mut state = rig.client.state();
+    state
+        .wait_for(|s| s.klippy == KlippyState::Ready)
+        .await
+        .unwrap();
+    let deadline = Instant::now() + WAIT;
+    let second = loop {
+        match rig.engine.submit(rig.request(raising())).await {
+            Err(Precondition::KlippyNotReady) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            other => break other.unwrap(),
+        }
+    };
+    let run = rig.finish(&second).await;
+
+    assert!(!matches!(run.state, RunState::Failed(_)), "{:?}", run.state);
+    assert!(
+        rig.scripts().iter().all(|s| *s != restore_line()),
+        "a restart resets the limit, so no restore is sent"
     );
 }
 

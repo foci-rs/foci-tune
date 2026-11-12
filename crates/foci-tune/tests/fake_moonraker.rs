@@ -401,6 +401,14 @@ impl FakeMoonraker {
     /// Shuts Klipper down from another client when the first script starting with `prefix`
     /// arrives: that script and every later one fail as Moonraker answers them in shutdown,
     /// and the shutdown notice follows on the socket `notice` later.
+    /// Brings Klipper back after a shutdown and sends the notifications Moonraker emits for a
+    /// restart.
+    pub fn restart_klipper(&self) {
+        self.shared.inner.lock().unwrap().shut_down = false;
+        self.push("notify_klippy_disconnected", json!([]));
+        self.push("notify_klippy_ready", json!([]));
+    }
+
     pub fn shut_down_on(&self, prefix: &str, notice: Duration) {
         self.shared.inner.lock().unwrap().shutdown_on = Some((prefix.to_owned(), notice));
     }
