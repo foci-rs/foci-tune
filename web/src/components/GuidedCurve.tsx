@@ -22,7 +22,7 @@ export function GuidedCurve({
   const options = useMemo<PlotOptions>(
     () => ({
       scales: { x: { time: false } },
-      axes: [axis(axisLabel), axis("p99 position error")],
+      axes: [axis(axisLabel), axis("p99 error (μm)")],
       series: [
         { label: axisLabel },
         ...speeds.map((s, i) => ({

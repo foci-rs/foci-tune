@@ -35,11 +35,11 @@ test("choosing a tab switches the graph", () => {
   expect(screen.getByRole("img", { name: "Step-response ensembles, torque" })).toBeInTheDocument();
 });
 
-test("the solid and dashed lines are explained once under the graph", () => {
+test("the caption says what the curves are, what to compare, and that the heights are not micrometres", () => {
   render(<EnsemblePlot runs={runs} />);
   expect(
     screen.getByText(
-      "Solid lines are the measured average, dashed lines the fitted curve. Responses are relative to the size of the step.",
+      "Solid lines are the measured average response to the probe step, dashed lines the fitted curve. foci-tune divides each response by the step size. Compare how far each curve overshoots and how long it takes to settle. The heights are not \u03bcm. The \u03bcm figures in the tables come from the tracking runs.",
     ),
   ).toBeInTheDocument();
 });

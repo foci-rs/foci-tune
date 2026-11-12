@@ -76,8 +76,9 @@ export function EnsemblePlot({ runs }: { runs: OverlayRun<ProbePlot>[] }) {
       <PlotPanel label={`Step-response ensembles, ${signal.replace("_", " ")}`} options={options} data={data} />
       {runs.length > missing.length && (
         <p className="text-xs text-muted-foreground">
-          Solid lines are the measured average, dashed lines the fitted curve. Responses are relative to the size of the
-          step.
+          Solid lines are the measured average response to the probe step, dashed lines the fitted curve. foci-tune
+          divides each response by the step size. Compare how far each curve overshoots and how long it takes to settle.
+          The heights are not μm. The μm figures in the tables come from the tracking runs.
         </p>
       )}
       {missing.length > 0 && (
