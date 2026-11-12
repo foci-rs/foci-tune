@@ -405,7 +405,7 @@ function TuneView({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onSelect={() => run("decide", () => postTuneDecision(id, "continue_all"))}>
-                        Continue, and skip damping pauses for this step
+                        Always Continue
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

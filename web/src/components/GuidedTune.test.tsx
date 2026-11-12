@@ -867,12 +867,12 @@ test.each([
   expect(bodies[0]).toEqual({ decision });
 });
 
-test("a damping pause offers to skip damping pauses for the rest of the step", async () => {
+test("a damping pause offers Always Continue for the rest of the step", async () => {
   current = detail("Paused");
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
   render(<GuidedTune printer={printer} />);
   fireEvent.keyDown(await screen.findByRole("button", { name: "More ways to continue" }), { key: "Enter" });
-  fireEvent.click(screen.getByRole("menuitem", { name: "Continue, and skip damping pauses for this step" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Always Continue" }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
   expect(bodies[0]).toEqual({ decision: "continue_all" });
 });
