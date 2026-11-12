@@ -286,13 +286,19 @@ test("homed tone is full only with x, y and z, partial with any axis", () => {
 test("the home button names the homed axes in its tooltip", async () => {
   respond(printerView({ homed_axes: "xy" }));
   await mount();
-  expect(await screen.findByRole("button", { name: "Home axes" })).toHaveAttribute("title", "Home all axes (homed: xy)");
+  expect(await screen.findByRole("button", { name: "Home axes" })).toHaveAttribute(
+    "title",
+    "Home all axes (homed: xy)",
+  );
 });
 
 test("the home button says nothing is homed", async () => {
   respond(printerView({ homed_axes: "" }));
   await mount();
-  expect(await screen.findByRole("button", { name: "Home axes" })).toHaveAttribute("title", "Home all axes (homed: none)");
+  expect(await screen.findByRole("button", { name: "Home axes" })).toHaveAttribute(
+    "title",
+    "Home all axes (homed: none)",
+  );
 });
 
 const board = (over: Partial<BoardView> = {}): BoardView =>
