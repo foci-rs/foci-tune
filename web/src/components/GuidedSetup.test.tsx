@@ -69,6 +69,45 @@ test("a remembered path that moves the other motor is flagged, held back and can
   expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
 });
 
+const withLimits = (maxVelocity: number, maxAccel: number) =>
+  ({ ...printer, moonraker: { max_velocity: maxVelocity, max_accel: maxAccel } }) as unknown as PrinterView;
+const speedsBox = () => screen.getByRole("textbox", { name: "Test speeds (mm/s)" });
+const RAISE_LINE = "Raising the velocity limit to match the highest speed";
+
+test("the raise line shows only when the highest speed is above the velocity limit", () => {
+  render(<GuidedSetup printer={withLimits(300, 3000)} onCreated={() => undefined} />);
+  expect(screen.queryByText(RAISE_LINE)).toBeNull();
+  fireEvent.change(speedsBox(), { target: { value: "100, 200, 600" } });
+  expect(screen.getByText(RAISE_LINE)).toBeInTheDocument();
+});
+
+test("the raise line stays away while the limit is within reach", () => {
+  render(<GuidedSetup printer={withLimits(600, 3000)} onCreated={() => undefined} />);
+  fireEvent.change(speedsBox(), { target: { value: "100, 200, 600" } });
+  expect(screen.queryByText(RAISE_LINE)).toBeNull();
+});
+
+test("speeds that are short on cruise are listed with their cruise", () => {
+  render(<GuidedSetup printer={withLimits(5000, 2000)} onCreated={() => undefined} />);
+  fireEvent.change(speedsBox(), { target: { value: "100, 800, 1200" } });
+  const note = screen.getByText(/Short on cruise/);
+  expect(note).toHaveTextContent("800 mm/s leaves 123 mm (43%)");
+  expect(note).toHaveTextContent("1200 mm/s leaves 0 mm (0%)");
+  expect(note).not.toHaveTextContent(/\b100 mm\/s/);
+});
+
+test("no cruise note shows when every speed has room", () => {
+  render(<GuidedSetup printer={withLimits(5000, 20000)} onCreated={() => undefined} />);
+  fireEvent.change(speedsBox(), { target: { value: "100, 800, 1200" } });
+  expect(screen.queryByText(/Short on cruise/)).toBeNull();
+});
+
+test("more than three speeds can be run", () => {
+  render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
+  fireEvent.change(speedsBox(), { target: { value: "100, 200, 300, 400, 500" } });
+  expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+});
+
 test("the path starts on the default and offers a custom one", () => {
   render(<GuidedSetup printer={printer} onCreated={() => undefined} />);
   expect(screen.getByRole("combobox", { name: "Path" })).toHaveTextContent("Default");

@@ -19,9 +19,12 @@ import { defaultProbeSpeed, failureText, gatesBody, type GatesForm } from "@/gui
 import {
   bedLimits,
   browserStorage,
+  cruiseAtSpeed,
   DEFAULT_PARAMETERS,
   fallbackPattern,
   loadPattern,
+  MAX_TRACKING_SPEEDS,
+  needsVelocityRaise,
   parseNumberList,
   patternIsolation,
   patternMode,
@@ -137,6 +140,7 @@ export function GuidedSetup({
 
   const speeds = parseNumberList(speedsText, "the speed set");
   const maxAccel = printer.moonraker.max_accel;
+  const maxVelocity = printer.moonraker.max_velocity;
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dependencies are the parsed parts of the inputs, so the default recomputes on a changed value and not on a new object.
   const derived = useMemo(
     () =>
@@ -199,6 +203,17 @@ export function GuidedSetup({
         })
       : null;
 
+  const raisesVelocity =
+    stepper !== undefined &&
+    needsVelocityRaise(speeds.ok ? [...speeds.values, probe.speed_mm_s] : [], stepper.kinematics, maxVelocity);
+  const shortOnCruise =
+    speeds.ok && pattern !== null && stepper !== undefined
+      ? speeds.values.flatMap((v) => {
+          const c = cruiseAtSpeed(pattern, stepper.kinematics, v, maxAccel);
+          return c?.short ? [`${v} mm/s leaves ${c.cruiseMm.toFixed(0)} mm (${(c.share * 100).toFixed(0)}%)`] : [];
+        })
+      : [];
+
   const blocked: string[] = [];
   if (offline) blocked.push("Reconnecting to foci-tune.");
   if (stepper?.unusable) blocked.push(stepper.unusable);
@@ -206,8 +221,8 @@ export function GuidedSetup({
   if (precondition !== undefined && !precondition.ok) blocked.push(...precondition.failing);
   if (limits === null) blocked.push("bed limits need stepper_x and stepper_y in the config");
   if (!speeds.ok) blocked.push(speeds.error);
-  else if (speeds.values.length < 1 || speeds.values.length > 3)
-    blocked.push("a tune needs one to three tracking speeds");
+  else if (speeds.values.length < 1 || speeds.values.length > MAX_TRACKING_SPEEDS)
+    blocked.push(`a tune needs one to ${MAX_TRACKING_SPEEDS} tracking speeds`);
   if (gates.damping_floor >= gates.marginal) blocked.push("the damping stop limit must be below the low-damping limit");
 
   const heldByPattern = patternError !== null || spacingProblem !== null || isolation?.ok === false;
@@ -297,6 +312,16 @@ export function GuidedSetup({
               onSpeedsText={setSpeedsText}
               onSetup={(s) => s.type === "tracking" && setTrackingStrokes(s.parameters.strokes)}
             />
+          )}
+          {raisesVelocity && (
+            <p role="note" className="text-xs text-muted-foreground">
+              Raising the velocity limit to match the highest speed
+            </p>
+          )}
+          {shortOnCruise.length > 0 && (
+            <p role="note" className="rounded border border-amber-500/60 px-2 py-1 text-xs text-amber-300">
+              Short on cruise: {shortOnCruise.join(", ")}
+            </p>
           )}
           <p className="text-sm font-bold text-muted-foreground">Probe</p>
           {probeSetup !== null && (
