@@ -471,17 +471,32 @@ async fn a_decision_waits_for_a_paused_step() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_skip_damping_decision_is_a_known_decision() {
+async fn a_damping_pause_accepts_continue_all_and_records_the_step_marker() {
     let rig = rig().await;
+    rig.a.sim(|s| {
+        let no_edges = Profile {
+            probe_edges: 0,
+            ..Profile::default()
+        };
+        s.profile_by_velocity_p.insert(841, no_edges);
+    });
     let (app, _) = app(&rig);
     let id = create(&app).await;
-    let early = post(
+    post(&app, &format!("/api/tunes/{id}/steps"), step_body(0, 1)).await;
+    post_empty(&app, &format!("/api/tunes/{id}/steps/confirm")).await;
+    wait_state(&app, &id, "Paused").await;
+
+    let reply = post(
         &app,
         &format!("/api/tunes/{id}/decision"),
         json!({"decision": "continue_all"}),
     )
     .await;
-    assert_eq!(early.status, StatusCode::CONFLICT);
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+    let detail = wait_state(&app, &id, "AwaitingChoice").await;
+    assert!(detail["steps"][0]["damping_waived_all"].is_number());
+    assert_eq!(detail["steps"][0]["paused"], Value::Null);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
