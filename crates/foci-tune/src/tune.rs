@@ -1250,16 +1250,16 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     /// standstill gate off) and runs the rungs above it, then the drift check; should the
     /// waiver uncover another pause, the step stays paused on it without running anything.
     /// `ContinueAll` does the same for a damping pause and also waives the damping of every
-    /// later rung of the step, so none of them pauses; it is refused on a standstill baseline
-    /// pause.
+    /// later rung of the step, so none of them pauses. It is refused on a standstill
+    /// baseline pause.
     /// `Rerun` keeps the rung's runs as a superseded attempt and runs the rung again, then the
     /// rungs above it. `Stop` skips the rungs above and ends the step without a drift check,
     /// awaiting the operator's choice.
     ///
     /// # Errors
     /// [`TuneError::OutOfOrder`] unless the tune is paused (and, for `ContinueAll`, paused on
-    /// damping), [`TuneError::Precondition`] when a
-    /// run could not start now, and store errors.
+    /// damping), [`TuneError::Precondition`] when a run
+    /// could not start now, and store errors.
     pub async fn decide(&self, tune: &TuneId, decision: PauseDecision) -> Result<(), TuneError> {
         let s = &self.shared;
         let _held = s.hold_tune(tune).await?;
