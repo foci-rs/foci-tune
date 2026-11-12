@@ -471,6 +471,20 @@ async fn a_decision_waits_for_a_paused_step() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_skip_damping_decision_is_a_known_decision() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let id = create(&app).await;
+    let early = post(
+        &app,
+        &format!("/api/tunes/{id}/decision"),
+        json!({"decision": "continue_all"}),
+    )
+    .await;
+    assert_eq!(early.status, StatusCode::CONFLICT);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_paused_tune_accepts_stop_and_awaits_a_choice() {
     let rig = rig().await;
     rig.a.sim(|s| {

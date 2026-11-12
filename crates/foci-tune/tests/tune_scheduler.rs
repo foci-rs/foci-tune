@@ -1957,3 +1957,119 @@ async fn a_rerun_drops_the_rungs_damping_waiver() {
     );
     assert_eq!(tune.steps[0].rungs[0].waived, None);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_all_runs_the_remaining_rungs_without_pausing() {
+    let rig = rig().await;
+    no_edges_at(&rig, 1060);
+    let sched = scheduler(&rig);
+    let id = paused_tune(&rig, &sched).await;
+
+    sched.decide(&id, PauseDecision::ContinueAll).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    let step = &tune.steps[0];
+    assert!(step.damping_waived_all.is_some());
+    assert!(step.rungs[1].waived.is_some());
+    assert_eq!(step.paused, None);
+    let a = step.assessment.as_ref().unwrap();
+    assert_eq!(a.verdicts[1].unscored, Some(UnscoredReason::DampingWaived));
+    assert_eq!(a.verdicts[2].unscored, Some(UnscoredReason::DampingWaived));
+    assert!(written_velocity_p(&rig).contains(&1060));
+    assert!(
+        tune.notes
+            .iter()
+            .any(|n| n.text.contains("skipped damping"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_ladder_of_waived_rungs_lets_the_operator_pick_a_rung() {
+    let rig = rig().await;
+    for raw in [668, 841, 1060] {
+        no_edges_at(&rig, raw);
+    }
+    let sched = scheduler(&rig);
+    let id = sched.create(setup(&[50.0])).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::Paused).await;
+
+    sched.decide(&id, PauseDecision::ContinueAll).await.unwrap();
+    wait_state(&rig, &id, TuneState::AwaitingChoice).await;
+
+    assert!(matches!(
+        sched.choose(&id, Choice::Recommended).await,
+        Err(TuneError::InvalidRequest(_))
+    ));
+    assert_eq!(
+        rig.store.read_tune(&id).unwrap().state,
+        TuneState::AwaitingChoice
+    );
+    sched.choose(&id, Choice::Rung(0)).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn continue_all_is_refused_on_a_standstill_baseline_pause() {
+    let rig = rig_with(Options::default()).await;
+    tracking_lag(&rig);
+    rig.a.sim(|s| {
+        let dropped = Profile {
+            drop_flag: true,
+            ..Profile::default()
+        };
+        s.profile_by_script.push(("G4 P200".into(), dropped));
+    });
+    let sched = scheduler(&rig);
+    let id = sched.create(gated_setup()).await.unwrap();
+    sched.prepare_step(&id, step(0, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    let paused = wait_state(&rig, &id, TuneState::Paused).await;
+    assert_eq!(
+        paused.steps[0].paused.as_ref().map(|p| p.reason),
+        Some(Pause::StandstillBaselineUnassessable)
+    );
+
+    let refused = sched.decide(&id, PauseDecision::ContinueAll).await;
+
+    assert!(
+        matches!(refused, Err(TuneError::OutOfOrder(_))),
+        "{refused:?}"
+    );
+    let tune = rig.store.read_tune(&id).unwrap();
+    assert_eq!(tune.state, TuneState::Paused);
+    assert_eq!(tune.steps[0].damping_waived_all, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_rerun_after_continue_all_keeps_the_step_wide_waiver() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        let dropped = Profile {
+            probe_edges: 0,
+            drop_flag: true,
+            ..Profile::default()
+        };
+        s.profile_by_velocity_p.insert(668, dropped);
+    });
+    let sched = scheduler(&rig);
+    let id = sched.create(gated_setup()).await.unwrap();
+    sched.prepare_step(&id, step(-1, 1, 1)).await.unwrap();
+    sched.confirm_step(&id).await.unwrap();
+    wait_state(&rig, &id, TuneState::Paused).await;
+    sched.decide(&id, PauseDecision::ContinueAll).await.unwrap();
+    let before = rig.store.read_tune(&id).unwrap();
+    assert_eq!(
+        before.steps[0].paused.as_ref().map(|p| (p.rung, p.reason)),
+        Some((0, Pause::StandstillBaselineUnassessable))
+    );
+
+    sched.decide(&id, PauseDecision::Rerun).await.unwrap();
+    let tune = wait_state(&rig, &id, TuneState::Paused).await;
+
+    assert!(tune.steps[0].damping_waived_all.is_some());
+    assert_eq!(
+        tune.steps[0].paused.as_ref().map(|p| (p.rung, p.reason)),
+        Some((0, Pause::StandstillBaselineUnassessable))
+    );
+}

@@ -96,6 +96,7 @@ fn tune(stepper: &str, state: TuneState) -> Tune {
             }],
             paused: None,
             standstill_gate_off: None,
+            damping_waived_all: None,
             chosen: Some(1500),
             chosen_shown: Some(1500.0),
             starts: 1,
@@ -212,6 +213,7 @@ fn a_tune_record_without_the_pause_fields_loads_with_defaults() {
     let step = &mut v["steps"][0];
     step.as_object_mut().unwrap().remove("paused");
     step.as_object_mut().unwrap().remove("standstill_gate_off");
+    step.as_object_mut().unwrap().remove("damping_waived_all");
     for rung in step["rungs"].as_array_mut().unwrap() {
         rung.as_object_mut().unwrap().remove("waived");
         rung.as_object_mut().unwrap().remove("superseded");
@@ -230,6 +232,7 @@ fn a_tune_record_without_the_pause_fields_loads_with_defaults() {
 
     assert_eq!(tune.steps[0].paused, None);
     assert_eq!(tune.steps[0].standstill_gate_off, None);
+    assert_eq!(tune.steps[0].damping_waived_all, None);
     assert!(
         tune.steps[0]
             .rungs

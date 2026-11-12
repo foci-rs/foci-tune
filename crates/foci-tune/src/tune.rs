@@ -155,6 +155,9 @@ pub struct PauseRecord {
 pub enum PauseDecision {
     /// Continue past the unassessable result.
     Continue,
+    /// Continue past an unassessable damping result and skip every later damping pause of the
+    /// step. Refused on any other pause.
+    ContinueAll,
     /// Run the rung again.
     Rerun,
     /// End the step here.
@@ -254,6 +257,10 @@ pub struct TuneStep {
     /// UNIX epoch.
     #[serde(default)]
     pub standstill_gate_off: Option<u64>,
+    /// When the operator chose to skip the step's damping pauses, milliseconds since the UNIX
+    /// epoch.
+    #[serde(default)]
+    pub damping_waived_all: Option<u64>,
 }
 
 /// Where a tune is in its life cycle.
@@ -630,7 +637,7 @@ fn waivers(step: &TuneStep) -> Waivers {
             })
             .collect(),
         standstill_gate_off: step.standstill_gate_off.is_some(),
-        ..Waivers::default()
+        damping_waived_all: step.damping_waived_all.is_some(),
     }
 }
 
@@ -1011,6 +1018,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             run_count: None,
             paused: None,
             standstill_gate_off: None,
+            damping_waived_all: None,
         };
         let per_repeat = runs_per_repeat(&record.setup);
         let ladder_runs = step.rungs.len() * request.repeats as usize * per_repeat;
@@ -1241,12 +1249,16 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     /// `Continue` waives the paused rung (a standstill baseline waiver also turns the step's
     /// standstill gate off) and runs the rungs above it, then the drift check; should the
     /// waiver uncover another pause, the step stays paused on it without running anything.
+    /// `ContinueAll` does the same for a damping pause and also waives the damping of every
+    /// later rung of the step, so none of them pauses; it is refused on a standstill baseline
+    /// pause.
     /// `Rerun` keeps the rung's runs as a superseded attempt and runs the rung again, then the
     /// rungs above it. `Stop` skips the rungs above and ends the step without a drift check,
     /// awaiting the operator's choice.
     ///
     /// # Errors
-    /// [`TuneError::OutOfOrder`] unless the tune is paused, [`TuneError::Precondition`] when a
+    /// [`TuneError::OutOfOrder`] unless the tune is paused (and, for `ContinueAll`, paused on
+    /// damping), [`TuneError::Precondition`] when a
     /// run could not start now, and store errors.
     pub async fn decide(&self, tune: &TuneId, decision: PauseDecision) -> Result<(), TuneError> {
         let s = &self.shared;
@@ -1268,10 +1280,19 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
             ));
         };
         let order = match decision {
-            PauseDecision::Continue => {
+            PauseDecision::Continue | PauseDecision::ContinueAll => {
+                let skip_damping = decision == PauseDecision::ContinueAll;
+                if skip_damping && paused.reason != Pause::DampingUnassessable {
+                    return Err(TuneError::OutOfOrder(
+                        "skipping damping pauses needs a damping pause".to_owned(),
+                    ));
+                }
                 s.engine.check(&record.setup.stepper).await?;
                 let unix_ms = now_ms();
                 let step = step_mut(&mut record, index)?;
+                if skip_damping {
+                    step.damping_waived_all = Some(unix_ms);
+                }
                 let rung = rung_mut(step, paused.rung)?;
                 let damping_waiver_stands =
                     paused.reason == Pause::StandstillBaselineUnassessable && rung.waived.is_some();
@@ -1291,6 +1312,11 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
                     paused.rung + 1,
                     pause_text(paused.reason)
                 )));
+                if skip_damping {
+                    record.notes.push(TuneNote::now(
+                        "operator skipped damping pauses for this step".to_owned(),
+                    ));
+                }
                 let setup = record.setup.clone();
                 let assessment = assess(&record.steps[index], &setup);
                 step_mut(&mut record, index)?.assessment = Some(assessment.clone());
