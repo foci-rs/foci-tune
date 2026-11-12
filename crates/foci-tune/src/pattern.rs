@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::steppers::BedLimits;
 
-const SPAN_MM: f64 = 100.0;
+/// Longest stroke proposed, as toolhead path length in mm.
+const DEFAULT_STROKE_MM: f64 = 200.0;
+/// Shortest stroke worth proposing. Below it the probe finds too few clean edges.
+const MIN_STROKE_MM: f64 = 50.0;
 const MARGIN_MM: f64 = 10.0;
 const MIN_LENGTH_MM: f64 = 1.0;
 
@@ -26,6 +29,11 @@ pub enum PatternError {
     /// Only `stepper_x` and `stepper_y` have a known isolating direction.
     #[error("stepper `{0}` has no known isolating direction")]
     UnsupportedStepper(String),
+    /// The axis limits minus the margins leave no room for the shortest stroke.
+    #[error(
+        "the bed leaves less than {MIN_STROKE_MM} mm for a stroke inside the {MARGIN_MM} mm margins"
+    )]
+    BedTooSmall,
     /// A point lies outside the axis limits minus the margin.
     #[error("pattern lies outside the bed limits minus the {MARGIN_MM} mm margin")]
     OutsideLimits,
@@ -34,10 +42,14 @@ pub enum PatternError {
     ZeroLength,
 }
 
-/// Proposes a centred 100 mm pattern along the stepper's isolating direction.
+/// Proposes a centred stroke of up to 200 mm along the stepper's isolating direction, shortened
+/// to fit inside the axis limits minus the margins.
+///
+/// A corexy diagonal moves both axes by the same distance, so the usable travel of the smaller
+/// axis sets its length. A cartesian stroke runs along the stepper's own axis only.
 ///
 /// # Errors
-/// Refuses other kinematics or steppers, and beds too small for the span plus margins.
+/// Refuses other kinematics or steppers, and beds that leave less than 50 mm for a stroke.
 pub fn propose_pattern(
     kinematics: &str,
     stepper: &str,
@@ -48,9 +60,27 @@ pub fn propose_pattern(
         "cartesian" => false,
         other => return Err(PatternError::UnsupportedKinematics(other.to_owned())),
     };
+    if stepper != "stepper_x" && stepper != "stepper_y" {
+        return Err(PatternError::UnsupportedStepper(stepper.to_owned()));
+    }
     let centre = |(lo, hi): (f64, f64)| (lo + hi) / 2.0;
+    let usable = |(lo, hi): (f64, f64)| (hi - lo - 2.0 * MARGIN_MM).floor();
     let (cx, cy) = (centre(limits.x), centre(limits.y));
-    let h = SPAN_MM / 2.0;
+    let (tx, ty) = (usable(limits.x), usable(limits.y));
+    let (delta, stroke_per_delta) = match (corexy, stepper) {
+        (true, _) => (
+            tx.min(ty)
+                .min((DEFAULT_STROKE_MM / std::f64::consts::SQRT_2).floor()),
+            std::f64::consts::SQRT_2,
+        ),
+        (false, "stepper_x") if ty >= 0.0 => (tx.min(DEFAULT_STROKE_MM), 1.0),
+        (false, "stepper_y") if tx >= 0.0 => (ty.min(DEFAULT_STROKE_MM), 1.0),
+        (false, _) => return Err(PatternError::BedTooSmall),
+    };
+    if delta * stroke_per_delta < MIN_STROKE_MM {
+        return Err(PatternError::BedTooSmall);
+    }
+    let h = delta / 2.0;
     let pattern = match (stepper, corexy) {
         ("stepper_x", true) => Pattern {
             start: (cx - h, cy - h),
@@ -64,11 +94,10 @@ pub fn propose_pattern(
             start: (cx - h, cy),
             end: (cx + h, cy),
         },
-        ("stepper_y", false) => Pattern {
+        _ => Pattern {
             start: (cx, cy - h),
             end: (cx, cy + h),
         },
-        (other, _) => return Err(PatternError::UnsupportedStepper(other.to_owned())),
     };
     validate_pattern(&pattern, limits)?;
     Ok(pattern)

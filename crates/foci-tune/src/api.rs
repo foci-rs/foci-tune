@@ -671,9 +671,10 @@ fn stimulus_error(e: StimulusError) -> ApiError {
         StimulusError::Pattern(p @ PatternError::UnsupportedStepper(_)) => {
             ApiError::new(StatusCode::CONFLICT, p.to_string())
         }
-        StimulusError::Pattern(p @ (PatternError::OutsideLimits | PatternError::ZeroLength)) => {
-            ApiError::bad_field("pattern", p.to_string())
-        }
+        StimulusError::Pattern(
+            p
+            @ (PatternError::OutsideLimits | PatternError::ZeroLength | PatternError::BedTooSmall),
+        ) => ApiError::bad_field("pattern", p.to_string()),
         e @ StimulusError::InvalidParameter(_) => ApiError::bad_field("parameters", e.to_string()),
         e @ (StimulusError::TooLarge { parameter, .. }
         | StimulusError::TooSlow { parameter, .. }

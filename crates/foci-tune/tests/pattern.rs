@@ -14,8 +14,8 @@ fn corexy_stepper_x_proposes_the_positive_diagonal() {
     assert_eq!(
         p,
         Pattern {
-            start: (100.5, 100.5),
-            end: (200.5, 200.5)
+            start: (80.0, 80.0),
+            end: (221.0, 221.0)
         }
     );
 }
@@ -26,8 +26,8 @@ fn corexy_stepper_y_proposes_the_anti_diagonal() {
     assert_eq!(
         p,
         Pattern {
-            start: (100.5, 200.5),
-            end: (200.5, 100.5)
+            start: (80.0, 221.0),
+            end: (221.0, 80.0)
         }
     );
 }
@@ -38,16 +38,16 @@ fn cartesian_moves_one_axis_at_bed_centre_of_the_other() {
     assert_eq!(
         x,
         Pattern {
-            start: (100.5, 150.5),
-            end: (200.5, 150.5)
+            start: (50.5, 150.5),
+            end: (250.5, 150.5)
         }
     );
     let y = propose_pattern("cartesian", "stepper_y", &bed()).unwrap();
     assert_eq!(
         y,
         Pattern {
-            start: (150.5, 100.5),
-            end: (150.5, 200.5)
+            start: (150.5, 50.5),
+            end: (150.5, 250.5)
         }
     );
 }
@@ -89,16 +89,83 @@ fn pattern_ending_inside_the_margin_is_rejected() {
     assert_eq!(validate_pattern(&ok, &bed()), Ok(()));
 }
 
+fn square(max: f64) -> BedLimits {
+    BedLimits {
+        x: (0.0, max),
+        y: (0.0, max),
+    }
+}
+
 #[test]
-fn bed_too_small_for_the_span_is_rejected() {
-    let small = BedLimits {
-        x: (0.0, 110.0),
-        y: (0.0, 110.0),
+fn a_120_mm_corexy_bed_proposes_the_full_inner_diagonal() {
+    let p = propose_pattern("corexy", "stepper_x", &square(120.0)).unwrap();
+    assert_eq!(
+        p,
+        Pattern {
+            start: (10.0, 10.0),
+            end: (110.0, 110.0)
+        }
+    );
+}
+
+#[test]
+fn a_bed_slightly_under_120_mm_shrinks_the_stroke_to_fit() {
+    let p = propose_pattern("corexy", "stepper_x", &square(117.0)).unwrap();
+    assert_eq!(
+        p,
+        Pattern {
+            start: (10.0, 10.0),
+            end: (107.0, 107.0)
+        }
+    );
+}
+
+#[test]
+fn a_small_cartesian_bed_shrinks_along_the_steppers_own_axis() {
+    let p = propose_pattern("cartesian", "stepper_x", &square(120.0)).unwrap();
+    assert_eq!(
+        p,
+        Pattern {
+            start: (10.0, 60.0),
+            end: (110.0, 60.0)
+        }
+    );
+}
+
+#[test]
+fn a_bed_too_small_for_the_minimum_stroke_is_refused_with_its_own_reason() {
+    assert_eq!(
+        propose_pattern("corexy", "stepper_x", &square(50.0)),
+        Err(PatternError::BedTooSmall)
+    );
+    let thin = BedLimits {
+        x: (0.0, 300.0),
+        y: (0.0, 15.0),
     };
     assert_eq!(
-        propose_pattern("corexy", "stepper_x", &small),
-        Err(PatternError::OutsideLimits)
+        propose_pattern("cartesian", "stepper_x", &thin),
+        Err(PatternError::BedTooSmall)
     );
+}
+
+#[test]
+fn every_proposal_is_valid_and_at_least_the_minimum_stroke() {
+    for kinematics in ["corexy", "cartesian"] {
+        for stepper in ["stepper_x", "stepper_y"] {
+            for tenths in 600..=3200 {
+                let limits = square(f64::from(tenths) / 10.0);
+                if let Ok(p) = propose_pattern(kinematics, stepper, &limits) {
+                    assert_eq!(
+                        validate_pattern(&p, &limits),
+                        Ok(()),
+                        "{kinematics} {limits:?}"
+                    );
+                    let stroke = (p.end.0 - p.start.0).hypot(p.end.1 - p.start.1);
+                    assert!(stroke >= 50.0 - 1e-9, "{kinematics} {limits:?} {stroke}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
