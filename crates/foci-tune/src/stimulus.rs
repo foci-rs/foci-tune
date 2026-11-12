@@ -63,14 +63,25 @@ pub enum RunKind {
     },
 }
 
-/// A composed script and the speeds that were reduced to `max_velocity`.
+/// A temporary rise of the toolhead velocity limit that a script carries so it can run at the
+/// requested speeds. Both values are path speeds in mm/s.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocityRaise {
+    /// The velocity the script sets at its start, which is the highest path speed it uses.
+    pub to_mm_s: f64,
+    /// The limit Klipper reported when the script was composed, set again at the script's end.
+    pub restore_mm_s: f64,
+}
+
+/// A composed script and the velocity raise it carries, if any.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stimulus {
     /// G-code lines joined by newlines.
     pub gcode: String,
-    /// `(requested, applied)` mm/s for every speed that was clamped.
-    pub clamped_speeds: Vec<(f64, f64)>,
-    /// Applied stepper speeds in script block order, slowest first, duplicates kept.
+    /// The raise of the velocity limit the script performs; `None` when every path speed is
+    /// within the limit and for standstill runs.
+    pub velocity_raise: Option<VelocityRaise>,
+    /// Stepper speeds in script block order, slowest first, duplicates kept.
     pub applied_speeds: Vec<f64>,
     /// Predicted script duration in seconds: the strokes at their sent feed, the settle dwells
     /// and the rests. The approach to the pattern is not counted.
@@ -102,7 +113,7 @@ pub enum StimulusError {
     TooSlow {
         /// Parameter name as in [`RunKind`].
         parameter: &'static str,
-        /// The speed, after clamping to `max_velocity`.
+        /// The requested speed.
         speed_mm_s: f64,
     },
     /// The predicted script duration exceeds [`MAX_SCRIPT_S`].
@@ -211,28 +222,29 @@ fn positive(v: f64, what: &'static str) -> Result<f64, StimulusError> {
     }
 }
 
-fn clamp_speed(
-    speed: f64,
-    max_velocity: f64,
-    ratio: f64,
-    parameter: &'static str,
-    clamped: &mut Vec<(f64, f64)>,
-) -> Result<f64, StimulusError> {
+fn check_speed(speed: f64, ratio: f64, parameter: &'static str) -> Result<f64, StimulusError> {
     positive(speed, "speed must be finite and positive")?;
-    let limit = max_velocity / ratio;
-    let applied = if speed > limit {
-        clamped.push((speed, limit));
-        limit
-    } else {
-        speed
-    };
-    if applied < MIN_SPEED_MM_S || feed_mm_min(applied, ratio) < f64::from(MIN_FEED_MM_MIN) {
+    if speed < MIN_SPEED_MM_S || feed_mm_min(speed, ratio) < f64::from(MIN_FEED_MM_MIN) {
         return Err(StimulusError::TooSlow {
             parameter,
-            speed_mm_s: applied,
+            speed_mm_s: speed,
         });
     }
-    Ok(applied)
+    Ok(speed)
+}
+
+/// The raise a script needs, from its highest path speed against the limit Klipper reported.
+fn velocity_raise_for(applied: &[f64], ratio: f64, max_velocity: f64) -> Option<VelocityRaise> {
+    let top = applied.iter().copied().fold(0.0, f64::max) * ratio;
+    (top > max_velocity).then_some(VelocityRaise {
+        to_mm_s: top,
+        restore_mm_s: max_velocity,
+    })
+}
+
+/// The line that sets the toolhead velocity limit, in path mm/s. Acceleration is left alone.
+pub fn velocity_limit_line(path_mm_s: f64) -> String {
+    format!("SET_VELOCITY_LIMIT VELOCITY={}", num(path_mm_s))
 }
 
 struct Script<'a> {
@@ -272,8 +284,11 @@ impl<'a> Script<'a> {
         self.push(format!("G1 X{} Y{} F{feed}", num(x), num(y)));
     }
 
-    fn finish(mut self) -> String {
+    fn finish(mut self, restore_velocity_mm_s: Option<f64>) -> String {
         self.gain("1.0");
+        if let Some(v) = restore_velocity_mm_s {
+            self.push(velocity_limit_line(v));
+        }
         self.push("M400");
         self.gain("1.0");
         self.lines.join("\n")
@@ -302,8 +317,10 @@ impl<'a> Script<'a> {
 /// Composes the script for `kind`.
 ///
 /// Speeds are stepper (motor) linear speeds. The feed sent to Klipper is the path speed, which
-/// on the corexy isolating diagonal is `1/sqrt(2)` of the stepper speed, and speeds are clamped
-/// so the path speed stays within `max_velocity` before the script is built.
+/// on the corexy isolating diagonal is `1/sqrt(2)` of the stepper speed. Speeds are not clamped.
+/// When the highest path speed of a tracking or probe run is above `max_velocity`, the script
+/// sets the velocity limit to it at the start and back to `max_velocity` at the end, and
+/// [`Stimulus::velocity_raise`] says so.
 ///
 /// The predicted duration counts the strokes at their sent feed, the settle dwells and, for a
 /// standstill, the rests and the moves between them; the approach from wherever the toolhead
@@ -329,8 +346,8 @@ pub fn compose(
     };
     validate_pattern(pattern, limits)?;
     positive(max_velocity, "max_velocity must be finite and positive")?;
-    let mut clamped = Vec::new();
     let mut applied = Vec::new();
+    let raise;
     let length = (pattern.end.0 - pattern.start.0).hypot(pattern.end.1 - pattern.start.1);
     let mut s = Script::new(stepper, pattern);
     let predicted_s;
@@ -350,13 +367,7 @@ pub fn compose(
             at_most(speeds_mm_s.len(), MAX_SPEEDS, "speeds_mm_s")?;
             at_most(*strokes, MAX_STROKES, "strokes")?;
             for &v in speeds_mm_s {
-                applied.push(clamp_speed(
-                    v,
-                    max_velocity,
-                    ratio,
-                    "speeds_mm_s",
-                    &mut clamped,
-                )?);
+                applied.push(check_speed(v, ratio, "speeds_mm_s")?);
             }
             applied.sort_by(f64::total_cmp);
             let predicted = applied.iter().fold(0.0, |total, &v| {
@@ -365,6 +376,10 @@ pub fn compose(
             within_budget(predicted, "speeds_mm_s")?;
             predicted_s = predicted;
             s.lines.insert(1, feedforward_reset_line(stepper));
+            raise = velocity_raise_for(&applied, ratio, max_velocity);
+            if let Some(r) = raise {
+                s.lines.insert(1, velocity_limit_line(r.to_mm_s));
+            }
             for (i, speed) in applied.iter().enumerate() {
                 if i > 0 {
                     s.push(SETTLE_LINE);
@@ -393,7 +408,7 @@ pub fn compose(
                 ));
             }
             at_most(*strokes, MAX_STROKES, "strokes")?;
-            let speed = clamp_speed(*speed_mm_s, max_velocity, ratio, "speed_mm_s", &mut clamped)?;
+            let speed = check_speed(*speed_mm_s, ratio, "speed_mm_s")?;
             toggles_apart(
                 segment_travel_mm(pattern, length, ratio),
                 *segments_between_toggles,
@@ -407,6 +422,10 @@ pub fn compose(
             let every = *segments_between_toggles;
             let high = format!("{high_gain:?}");
             s.lines.insert(1, feedforward_reset_line(stepper));
+            raise = velocity_raise_for(&applied, ratio, max_velocity);
+            if let Some(r) = raise {
+                s.lines.insert(1, velocity_limit_line(r.to_mm_s));
+            }
             let (mut seg, mut toggles) = (0usize, 0usize);
             for _ in 0..*strokes {
                 s.stroke(&f, &mut |sc| {
@@ -451,15 +470,15 @@ pub fn compose(
             }
             return Ok(Stimulus {
                 gcode: s.lines.join("\n"),
-                clamped_speeds: clamped,
+                velocity_raise: None,
                 applied_speeds: applied,
                 predicted_s: predicted,
             });
         }
     }
     Ok(Stimulus {
-        gcode: s.finish(),
-        clamped_speeds: clamped,
+        gcode: s.finish(raise.map(|r| r.restore_mm_s)),
+        velocity_raise: raise,
         applied_speeds: applied,
         predicted_s,
     })

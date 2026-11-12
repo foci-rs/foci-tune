@@ -71,7 +71,7 @@ async fn a_run_writes_exact_gains_records_and_reaches_done() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_speed_above_max_velocity_is_clamped_in_run_json() {
+async fn a_speed_above_max_velocity_runs_at_the_requested_speed() {
     let rig = rig().await;
 
     let run = rig
@@ -81,11 +81,8 @@ async fn a_speed_above_max_velocity_is_clamped_in_run_json() {
         })
         .await;
 
-    let limit = 300.0 * std::f64::consts::SQRT_2;
-    assert_eq!(run.clamped_speeds.len(), 1);
-    assert_eq!(run.clamped_speeds[0].0, 1000.0);
-    assert!((run.clamped_speeds[0].1 - limit).abs() < 1e-9);
-    assert_eq!(run.applied_speeds.len(), 2);
+    assert!(run.clamped_speeds.is_empty());
+    assert_eq!(run.applied_speeds, vec![50.0, 1000.0]);
     assert!(
         run.predicted_s.is_some_and(|s| s > 0.0),
         "the run keeps the predicted script time: {:?}",

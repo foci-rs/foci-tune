@@ -2,7 +2,7 @@ use foci_tune::pattern::{Pattern, PatternError};
 use foci_tune::steppers::BedLimits;
 use foci_tune::stimulus::{
     MAX_SCRIPT_S, MAX_SPEEDS, MAX_STROKES, MIN_TOGGLE_SPACING_S, REST_OFFSETS_MM, RunKind,
-    Stimulus, StimulusError, compose,
+    Stimulus, StimulusError, VelocityRaise, compose, velocity_limit_line,
 };
 
 const FF: &str = "FOCI_SET_VELOCITY_FEEDFORWARD STEPPER=stepper_x ENABLE=1 GAIN=";
@@ -92,12 +92,50 @@ fn the_predicted_duration_covers_a_probe_and_a_standstill_too() {
 }
 
 #[test]
-fn cartesian_tracking_clamps_to_max_velocity_and_reports_it() {
+fn cartesian_tracking_above_max_velocity_runs_at_the_requested_speed() {
     let st = cartesian(&tracking(&[50.0, 195.0, 600.0], 2));
-    assert_eq!(st.clamped_speeds, vec![(600.0, 500.0)]);
-    assert_eq!(st.applied_speeds, vec![50.0, 195.0, 500.0]);
-    assert!(st.gcode.contains(" F30000"));
-    assert!(!st.gcode.contains("F36000"));
+    assert_eq!(st.applied_speeds, vec![50.0, 195.0, 600.0]);
+    assert!(st.gcode.contains(" F36000"));
+    assert!(!st.gcode.contains("F30000"));
+    assert_eq!(
+        st.velocity_raise,
+        Some(VelocityRaise {
+            to_mm_s: 600.0,
+            restore_mm_s: 500.0
+        })
+    );
+}
+
+#[test]
+fn the_raise_opens_the_script_and_the_restore_closes_it() {
+    let st = cartesian(&tracking(&[50.0, 600.0], 1));
+    let l = lines(&st.gcode);
+    assert_eq!(l[1], velocity_limit_line(600.0));
+    let n = l.len();
+    assert_eq!(
+        &l[n - 4..],
+        [
+            format!("{FF}1.0"),
+            velocity_limit_line(500.0),
+            "M400".to_string(),
+            format!("{FF}1.0")
+        ]
+    );
+}
+
+#[test]
+fn a_speed_at_the_limit_is_not_raised() {
+    let st = cartesian(&tracking(&[50.0, 500.0], 1));
+    assert_eq!(st.velocity_raise, None);
+    assert!(!st.gcode.contains("SET_VELOCITY_LIMIT"));
+}
+
+#[test]
+fn corexy_and_cartesian_raise_to_different_path_speeds() {
+    let corexy_raise = corexy(&tracking(&[1000.0], 1)).velocity_raise.unwrap();
+    let cartesian_raise = cartesian(&tracking(&[1000.0], 1)).velocity_raise.unwrap();
+    assert_eq!(cartesian_raise.to_mm_s, 1000.0);
+    assert!((corexy_raise.to_mm_s - 1000.0 * std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9);
 }
 
 #[test]
@@ -111,23 +149,20 @@ fn corexy_feed_is_stepper_speed_over_root_two_rounded_to_integer() {
         st.gcode.contains(" F8273\n") || st.gcode.ends_with(" F8273"),
         "195 mm/s"
     );
-    assert!(st.clamped_speeds.is_empty());
 }
 
 #[test]
-fn corexy_clamp_bounds_path_speed_at_max_velocity() {
+fn corexy_speed_above_the_limit_raises_to_its_path_speed() {
     let st = corexy(&tracking(&[400.0, 800.0], 1));
-    let limit = 500.0 * std::f64::consts::SQRT_2;
-    assert_eq!(st.clamped_speeds.len(), 1);
-    assert_eq!(st.clamped_speeds[0].0, 800.0);
-    assert!((st.clamped_speeds[0].1 - limit).abs() < 1e-9);
-    assert_eq!(st.applied_speeds[0], 400.0);
-    assert!((st.applied_speeds[1] - limit).abs() < 1e-9);
+    let raise = st.velocity_raise.unwrap();
+    assert_eq!(st.applied_speeds, vec![400.0, 800.0]);
+    assert!((raise.to_mm_s - 800.0 * std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9);
+    assert_eq!(raise.restore_mm_s, 500.0);
     assert!(
-        st.gcode.contains(" F30000"),
-        "path feed is exactly max_velocity"
+        st.gcode.contains(" F33941"),
+        "800 mm/s of stepper speed is sent as its path feed, not cut to max_velocity"
     );
-    assert!(!st.gcode.contains("F33941"));
+    assert!(!st.gcode.contains("F30000"));
 }
 
 #[test]
@@ -173,7 +208,7 @@ fn one_hundred_mm_stroke_is_twenty_segments_each_way() {
 #[test]
 fn tracking_runs_slowest_first_with_dwell_and_keeps_duplicates() {
     let st = cartesian(&tracking(&[195.0, 50.0, 600.0, 700.0], 1));
-    assert_eq!(st.applied_speeds, vec![50.0, 195.0, 500.0, 500.0]);
+    assert_eq!(st.applied_speeds, vec![50.0, 195.0, 600.0, 700.0]);
     let l = lines(&st.gcode);
     let first_fast = l.iter().position(|x| x.ends_with("F11700")).unwrap();
     assert_eq!(l[first_fast - 1], "G4 P500");
@@ -216,11 +251,17 @@ fn probe_ends_with_gain_restored_whatever_the_last_toggle() {
 }
 
 #[test]
-fn probe_speed_is_clamped_and_reported() {
-    let st = cartesian(&probe(700.0, 10));
-    assert_eq!(st.clamped_speeds, vec![(700.0, 500.0)]);
-    assert_eq!(st.applied_speeds, vec![500.0]);
-    assert!(!st.gcode.contains("F42000"));
+fn a_probe_above_the_limit_is_raised_at_its_path_speed() {
+    let st = cartesian(&probe(800.0, 30));
+    assert_eq!(st.applied_speeds, vec![800.0]);
+    assert!(st.gcode.contains("F48000"));
+    assert_eq!(
+        st.velocity_raise,
+        Some(VelocityRaise {
+            to_mm_s: 800.0,
+            restore_mm_s: 500.0
+        })
+    );
 }
 
 fn fmt5(v: f64) -> String {
@@ -563,7 +604,7 @@ fn the_default_probe_keeps_its_toggles_far_enough_apart() {
 }
 
 #[test]
-fn cartesian_toggle_spacing_uses_the_applied_speed() {
+fn cartesian_toggle_spacing_uses_the_requested_speed() {
     let at = |speed, every| {
         compose(
             &probe(speed, every),
@@ -576,10 +617,14 @@ fn cartesian_toggle_spacing_uses_the_applied_speed() {
     };
 
     let (spacing_s, min_segments, _) = too_close(at(500.0, 3));
-    let clamped = at(700.0, 10);
+    let (fast_spacing_s, fast_min_segments, _) = too_close(at(700.0, 10));
 
     assert!((spacing_s - 0.03).abs() < 1e-9, "{spacing_s}");
     assert_eq!(min_segments, 10);
     assert!(at(500.0, 10).is_ok());
-    assert_eq!(clamped.unwrap().applied_speeds, vec![500.0]);
+    assert!(
+        (fast_spacing_s - 50.0 / 700.0).abs() < 1e-9,
+        "{fast_spacing_s}"
+    );
+    assert_eq!(fast_min_segments, 14);
 }

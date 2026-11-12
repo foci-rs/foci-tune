@@ -1940,7 +1940,6 @@ impl<M: MoonrakerApi + 'static> Shared<M> {
         )
         .map_err(|e| format!("stimulus not composed: {e}"))?;
         self.update_run(|run| {
-            run.clamped_speeds = stimulus.clamped_speeds.clone();
             run.applied_speeds = stimulus.applied_speeds.clone();
             run.predicted_s = Some(stimulus.predicted_s);
         });

@@ -787,7 +787,8 @@ pub struct Run {
     pub stream: Option<StreamInfo>,
     /// Start time of each sequence step.
     pub steps: Vec<StepTime>,
-    /// `(requested, applied)` mm/s for every speed reduced to `max_velocity`.
+    /// `(requested, applied)` mm/s for every speed reduced to `max_velocity`. Only runs recorded
+    /// before the velocity limit was raised instead of clamped carry entries.
     pub clamped_speeds: Vec<(f64, f64)>,
     /// Applied stepper speeds in script block order.
     pub applied_speeds: Vec<f64>,
