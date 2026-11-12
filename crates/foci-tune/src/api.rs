@@ -43,7 +43,7 @@ use crate::model::{
 use crate::moonraker::{KlippyState, McuVersion, MoonrakerApi};
 use crate::pattern::{Pattern, PatternError, propose_pattern};
 use crate::steppers::{BedLimits, Stepper};
-use crate::stimulus::{RunKind, StimulusError, compose};
+use crate::stimulus::{MAX_SPEEDS, RunKind, StimulusError, compose};
 use crate::store::{SessionSummary, Store, StoreError};
 use crate::tune::{
     Choice, PauseDecision, StepPlan, StepRequest, Tune, TuneError, TuneId, TuneScheduler, TuneSetup,
@@ -1534,10 +1534,10 @@ async fn parse_tune_setup<M: MoonrakerApi + 'static>(
         .get("speeds_mm_s")
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    if !(1..=3).contains(&speeds) {
+    if !(1..=MAX_SPEEDS).contains(&speeds) {
         return Err(ApiError::bad_field(
             "speeds_mm_s",
-            "a tune needs one to three tracking speeds",
+            format!("a tune needs one to {MAX_SPEEDS} tracking speeds"),
         ));
     }
     if body.pointer("/probe/speed_mm_s").is_none_or(Value::is_null) {

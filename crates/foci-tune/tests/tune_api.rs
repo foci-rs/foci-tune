@@ -139,21 +139,29 @@ async fn wait_state(app: &Router, id: &str, state: &str) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_tune_needs_one_to_three_speeds() {
+async fn a_tune_needs_at_least_one_speed() {
     let rig = rig().await;
     let (app, _) = app(&rig);
 
-    for speeds in [&[][..], &[50.0, 100.0, 150.0, 195.0][..]] {
-        let reply = post(&app, "/api/tunes", setup_body(speeds)).await;
-        assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{speeds:?}");
-        assert_eq!(reply.json()["field"], "speeds_mm_s");
-    }
-    for speeds in [&[50.0][..], &[50.0, 100.0, 150.0][..]] {
-        let reply = post(&app, "/api/tunes", setup_body(speeds)).await;
-        assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
-        let id = reply.json()["id"].as_str().unwrap().to_owned();
-        post_empty(&app, &format!("/api/tunes/{id}/abandon")).await;
-    }
+    let reply = post(&app, "/api/tunes", setup_body(&[])).await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST);
+    assert_eq!(reply.json()["field"], "speeds_mm_s");
+    let reply = post(&app, "/api/tunes", setup_body(&[50.0])).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tune_with_more_than_three_speeds_is_accepted() {
+    let rig = rig().await;
+    let (app, _) = app(&rig);
+    let speeds = [100.0, 200.0, 400.0, 600.0, 800.0];
+
+    let reply = post(&app, "/api/tunes", setup_body(&speeds)).await;
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.error());
+    let id = reply.json()["id"].as_str().unwrap().to_owned();
+    let tune = get(&app, &format!("/api/tunes/{id}")).await.json();
+    assert_eq!(tune["setup"]["speeds_mm_s"], json!(speeds));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

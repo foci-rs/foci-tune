@@ -31,7 +31,7 @@ use crate::model::{
 };
 use crate::moonraker::MoonrakerApi;
 use crate::pattern::Pattern;
-use crate::stimulus::RunKind;
+use crate::stimulus::{MAX_SPEEDS, RunKind};
 use crate::store::{Store, StoreError};
 
 /// Probe run parameters for every step of a tune.
@@ -61,7 +61,7 @@ pub struct StandstillSettings {
 pub struct TuneSetup {
     /// Declared stepper section name.
     pub stepper: String,
-    /// Tracking speeds in mm/s, one to three.
+    /// Tracking speeds in mm/s, at least one and at most [`MAX_SPEEDS`].
     pub speeds_mm_s: Vec<f64>,
     /// Stroke pattern.
     pub pattern: Pattern,
@@ -373,7 +373,6 @@ const AXES: [LadderAxis; 3] = [
     LadderAxis::VelocityICornerHz,
     LadderAxis::PositionP,
 ];
-const MAX_SPEEDS: usize = 3;
 const STORE_POLL: Duration = Duration::from_millis(50);
 const IDLE_WAIT: Duration = Duration::from_secs(10);
 const CHANGE_CAPACITY: usize = 64;
@@ -875,7 +874,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     /// snapshot, written to the store before returning.
     ///
     /// # Errors
-    /// [`TuneError::InvalidRequest`] for a setup without one to three speeds,
+    /// [`TuneError::InvalidRequest`] for a setup without one to [`MAX_SPEEDS`] speeds,
     /// [`TuneError::Precondition`] for a locked stepper or a refused read,
     /// [`TuneError::StepperBusy`] while the stepper has an unfinished tune,
     /// [`TuneError::NoControlState`] when the control state cannot be read, and store errors.
@@ -910,7 +909,7 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
     /// creation time; the stepper cannot change.
     ///
     /// # Errors
-    /// [`TuneError::InvalidRequest`] for a setup without one to three speeds or for another
+    /// [`TuneError::InvalidRequest`] for a setup without one to [`MAX_SPEEDS`] speeds or for another
     /// stepper, [`TuneError::OutOfOrder`] unless the tune is ready with no step prepared,
     /// [`TuneError::Precondition`] for a locked stepper, [`TuneError::NotFound`], and store
     /// errors.
