@@ -335,6 +335,7 @@ fn a_waived_rung_is_unscored_and_assessment_continues_above_it() {
     let waivers = Waivers {
         continued: vec![false, true],
         standstill_gate_off: false,
+        ..Waivers::default()
     };
 
     let a = assess_ladder_with(&rungs, 3, &Gates::default(), false, &waivers);
@@ -356,6 +357,7 @@ fn a_waived_rung_zero_still_provides_the_standstill_baseline() {
     let waivers = Waivers {
         continued: vec![true],
         standstill_gate_off: false,
+        ..Waivers::default()
     };
 
     let a = assess_ladder_with(&rungs, 3, &gated(), false, &waivers);
@@ -377,6 +379,7 @@ fn a_waived_rung_zero_without_a_usable_standstill_still_pauses_for_the_baseline(
     let waivers = Waivers {
         continued: vec![true],
         standstill_gate_off: false,
+        ..Waivers::default()
     };
 
     let a = assess_ladder_with(&rungs, 3, &gated(), false, &waivers);
@@ -411,6 +414,7 @@ fn an_unusable_standstill_baseline_pauses_and_the_disabled_gate_scores_without_o
     let off = Waivers {
         continued: vec![],
         standstill_gate_off: true,
+        ..Waivers::default()
     };
     let a = assess_ladder_with(&rungs, 3, &gated(), false, &off);
     assert_eq!(a.pause, None);
@@ -453,6 +457,7 @@ fn a_later_rung_without_a_standstill_metric_is_scored_when_the_gate_is_off() {
     let off = Waivers {
         continued: vec![],
         standstill_gate_off: true,
+        ..Waivers::default()
     };
 
     let a = assess_ladder_with(&rungs, 3, &gated(), false, &off);
@@ -515,6 +520,7 @@ fn an_absent_factor_and_the_step_waiver_give_the_same_verdicts() {
     let off = Waivers {
         continued: vec![],
         standstill_gate_off: true,
+        ..Waivers::default()
     };
     let by_setup = assess_ladder_with(&rungs, 3, &Gates::default(), false, &Waivers::default());
     let by_waiver = assess_ladder_with(&rungs, 3, &gated(), false, &off);
@@ -761,4 +767,74 @@ fn drift_without_data_is_unassessed_not_steady() {
         drift_verdict(Some(100.0), Some(100.0), None),
         DriftVerdict::Unassessed
     );
+}
+
+fn waived_all() -> Waivers {
+    Waivers {
+        damping_waived_all: true,
+        ..Waivers::default()
+    }
+}
+
+fn ladder_with_unassessable_middle() -> Vec<Vec<RepeatResult>> {
+    let mut middle = rung(0.2, [70.0, 70.0], 1.0, 3);
+    middle[1].zeta = RungOutcome::Unassessable;
+    vec![
+        rung(0.2, [80.0, 80.0], 1.0, 3),
+        middle,
+        rung(0.2, [60.0, 60.0], 1.0, 3),
+    ]
+}
+
+#[test]
+fn damping_waived_all_assesses_past_missing_zeta() {
+    let rungs = ladder_with_unassessable_middle();
+
+    let a = assess_ladder_at(
+        &rungs,
+        3,
+        &[50.0, 400.0],
+        &Gates::default(),
+        false,
+        &waived_all(),
+    );
+
+    assert_eq!(a.pause, None);
+    assert_eq!(a.halt, None);
+    assert_eq!(a.verdicts[1].unscored, Some(UnscoredReason::DampingWaived));
+    assert_eq!(a.verdicts[1].score, None);
+    assert_eq!(a.verdicts[2].score, Some(60.0));
+}
+
+#[test]
+fn damping_waived_all_still_halts_below_floor() {
+    let mut rungs = ladder_with_unassessable_middle();
+    rungs[2] = rung(0.04, [60.0, 60.0], 1.0, 3);
+
+    let a = assess_ladder_at(
+        &rungs,
+        3,
+        &[50.0, 400.0],
+        &Gates::default(),
+        false,
+        &waived_all(),
+    );
+
+    assert_eq!(a.halt, Some((2, Halt::BelowFloor { median: 0.04 })));
+}
+
+#[test]
+fn missing_zeta_without_the_step_wide_waiver_still_pauses() {
+    let rungs = ladder_with_unassessable_middle();
+
+    let a = assess_ladder_at(
+        &rungs,
+        3,
+        &[50.0, 400.0],
+        &Gates::default(),
+        false,
+        &Waivers::default(),
+    );
+
+    assert_eq!(a.pause, Some((1, Pause::DampingUnassessable)));
 }

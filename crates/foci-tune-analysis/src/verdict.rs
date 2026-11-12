@@ -112,6 +112,9 @@ pub struct Waivers {
     /// Per rung index, whether the operator continued past unassessable damping. A missing index
     /// counts as `false`. A waiver covers damping only.
     pub continued: Vec<bool>,
+    /// Treat every rung without a zeta as continued past, so none of them pauses assessment.
+    /// A median zeta below the damping floor still halts.
+    pub damping_waived_all: bool,
     /// Skip the standstill baseline and the `StandstillHigh` gate.
     pub standstill_gate_off: bool,
 }
@@ -305,7 +308,9 @@ pub fn assess_ladder_at(
                 verdicts[i].marginal = zeta < gates.marginal;
                 false
             }
-            None if waivers.continued.get(i).copied().unwrap_or(false) => {
+            None if waivers.damping_waived_all
+                || waivers.continued.get(i).copied().unwrap_or(false) =>
+            {
                 verdicts[i].unscored = Some(UnscoredReason::DampingWaived);
                 true
             }

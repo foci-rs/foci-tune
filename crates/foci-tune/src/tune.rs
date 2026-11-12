@@ -630,6 +630,7 @@ fn waivers(step: &TuneStep) -> Waivers {
             })
             .collect(),
         standstill_gate_off: step.standstill_gate_off.is_some(),
+        ..Waivers::default()
     }
 }
 
