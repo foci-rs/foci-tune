@@ -30,10 +30,11 @@ const MAX_LADDER_REPEATS = 10;
 const MAX_LADDER_RUNS = 60;
 const POSITION_UNITS_PER_REV = 65536;
 
+/** A stroke along X through the bed centre, up to 100 mm and shortened to stay inside the margins. */
 export function fallbackPattern(limits: Limits): Pattern {
   const cx = (limits.x[0] + limits.x[1]) / 2;
   const cy = (limits.y[0] + limits.y[1]) / 2;
-  return { start: [cx - 50, cy], end: [cx + 50, cy] };
+  return { start: clampPoint([cx - 50, cy], limits), end: clampPoint([cx + 50, cy], limits) };
 }
 
 export const DEFAULT_PARAMETERS: { [K in RunType]: Extract<RunSetup, { type: K }>["parameters"] } = {

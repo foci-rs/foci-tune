@@ -20,6 +20,7 @@ import {
   ladderPlotData,
   patternProblem,
   expectedProbeEdges,
+  fallbackPattern,
   patternIsolation,
   patternMode,
   probeEdgeHint,
@@ -986,6 +987,21 @@ describe("sweepRejectionNotes", () => {
     });
     expect(notes).toHaveLength(2);
     expect(notes[1]).toContain("The run at 50 Hz");
+  });
+});
+
+describe("fallbackPattern", () => {
+  const bed = (max: number) => ({ x: [0, max], y: [0, max] }) as { x: [number, number]; y: [number, number] };
+
+  test("on a large bed it is 100 mm along X through the centre", () => {
+    expect(fallbackPattern(bed(300))).toEqual({ start: [100, 150], end: [200, 150] });
+  });
+
+  test("on a small bed it shortens to stay inside the margin, so it raises no warning", () => {
+    const small = bed(70);
+    const p = fallbackPattern(small);
+    expect(patternProblem(p, small)).toBeNull();
+    expect(p).toEqual({ start: [10, 35], end: [60, 35] });
   });
 });
 
