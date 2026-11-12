@@ -396,7 +396,7 @@ describe("defaultProbeSpeed", () => {
     kinematics: "corexy",
     segmentsBetweenToggles: 6,
     strokes: 20,
-    maxVelocity: 500,
+    maxAccel: 0,
   };
   const edges = (speedMmS: number, over: Partial<typeof context> = {}) =>
     expectedProbeEdges({ ...context, ...over, speedMmS });
@@ -435,12 +435,31 @@ describe("defaultProbeSpeed", () => {
     expect(result.warning).not.toMatch(/toggle/i);
   });
 
-  test("judges a speed above max_velocity at the clamped speed, as the probe runs it", () => {
-    const ctx = { ...context, maxVelocity: 300, strokes: 40 };
-    const clamped = expectedProbeEdges({ ...ctx, speedMmS: 600 });
-    expect(clamped).toBe(expectedProbeEdges({ ...ctx, speedMmS: 300 * Math.SQRT2 }));
-    expect(clamped).toBeGreaterThanOrEqual(PROBE_MIN_EDGES);
-    expect(defaultProbeSpeed([600, 195], ctx)).toEqual({ speed: 600, warning: null });
+  test("judges a speed above max_velocity at the requested speed, as the probe runs it", () => {
+    const ctx = { ...context, strokes: 40 };
+    expect(expectedProbeEdges({ ...ctx, speedMmS: 600 })).toBeLessThan(PROBE_MIN_EDGES);
+    expect(expectedProbeEdges({ ...ctx, speedMmS: 300 * Math.SQRT2 })).toBeGreaterThanOrEqual(PROBE_MIN_EDGES);
+    expect(defaultProbeSpeed([600, 195], ctx).speed).toBe(195);
+  });
+
+  const longStroke = {
+    start: [10, 10] as [number, number],
+    end: [151, 151] as [number, number],
+  };
+  const slowAccel = { ...context, pattern: longStroke, segmentsBetweenToggles: 12, strokes: 40, maxAccel: 1000 };
+
+  test("skips a speed that cannot cruise", () => {
+    expect(expectedProbeEdges({ ...slowAccel, speedMmS: 600 })).toBeGreaterThanOrEqual(PROBE_MIN_EDGES);
+    expect(defaultProbeSpeed([300, 600], { ...slowAccel, maxAccel: 0 }).speed).toBe(600);
+    expect(defaultProbeSpeed([300, 600], slowAccel)).toEqual({ speed: 300, warning: null });
+  });
+
+  test("warns about cruise when every speed is short", () => {
+    expect(expectedProbeEdges({ ...slowAccel, speedMmS: 800 })).toBeGreaterThanOrEqual(PROBE_MIN_EDGES);
+    expect(defaultProbeSpeed([600, 800], { ...slowAccel, maxAccel: 0 })).toEqual({ speed: 800, warning: null });
+    const result = defaultProbeSpeed([600, 800], slowAccel);
+    expect(result.speed).toBe(800);
+    expect(result.warning).toMatch(/cruise/i);
   });
 
   test("warns when there is no speed to choose from", () => {

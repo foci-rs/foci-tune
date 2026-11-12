@@ -19,12 +19,14 @@ import {
   ladderMedians,
   ladderPlotData,
   patternProblem,
+  cruiseAtSpeed,
   expectedProbeEdges,
   fallbackPattern,
   patternIsolation,
   patternMode,
   probeEdgeHint,
   suggestedProbeStrokes,
+  needsVelocityRaise,
   probeToggleSpacing,
   segmentTravelMm,
   runStatusLabel,
@@ -525,11 +527,48 @@ describe("pattern helpers", () => {
   });
 });
 
+describe("cruise at a speed", () => {
+  const corexyPattern: Pattern = { start: [10, 10], end: [151, 151] };
+
+  test.each([
+    [100, 197.7, 0.99, false],
+    [400, 172.7, 0.87, false],
+    [800, 92.7, 0.47, true],
+    [1200, 0, 0, true],
+  ])("a 141 mm per axis CoreXY stroke at %d mm/s and 3000 mm/s^2 leaves %d mm of cruise", (speed, mm, share, short) => {
+    const c = cruiseAtSpeed(corexyPattern, "corexy", speed, 3000)!;
+    expect(c.cruiseMm).toBeCloseTo(mm, 1);
+    expect(c.share).toBeCloseTo(share, 2);
+    expect(c.short).toBe(short);
+  });
+
+  test("there is no estimate without a reported acceleration, for other kinematics or without a speed", () => {
+    expect(cruiseAtSpeed(corexyPattern, "corexy", 400, 0)).toBeNull();
+    expect(cruiseAtSpeed(corexyPattern, "delta", 400, 3000)).toBeNull();
+    expect(cruiseAtSpeed(corexyPattern, "corexy", 0, 3000)).toBeNull();
+  });
+});
+
+describe("needsVelocityRaise", () => {
+  test("is true when the highest path speed is above the limit", () => {
+    expect(needsVelocityRaise([100, 800], "corexy", 500)).toBe(true);
+    expect(needsVelocityRaise([100, 800], "corexy", 600)).toBe(false);
+  });
+
+  test("a cartesian speed equal to the limit does not need it", () => {
+    expect(needsVelocityRaise([500], "cartesian", 500)).toBe(false);
+  });
+
+  test("is false while the limit is not known", () => {
+    expect(needsVelocityRaise([100, 800], "corexy", 0)).toBe(false);
+  });
+});
+
 describe("probe toggle spacing", () => {
   const diagonal: Pattern = { start: [100.5, 100.5], end: [200.5, 200.5] };
   const alongX: Pattern = { start: [100.5, 150.5], end: [200.5, 150.5] };
   const at = (speed: number, segments = 3, p = diagonal, kinematics = "corexy") =>
-    probeToggleSpacing(p, kinematics, speed, segments, 500);
+    probeToggleSpacing(p, kinematics, speed, segments);
 
   test("a corexy diagonal segment is 10 mm of stepper travel, a cartesian one 5 mm", () => {
     expect(segmentTravelMm(diagonal, "corexy")).toBeCloseTo(10, 9);
@@ -567,10 +606,11 @@ describe("probe toggle spacing", () => {
     expect(at(401, 4)!.minSegments).toBe(5);
   });
 
-  test("the estimate uses the speed after the max_velocity clamp", () => {
-    const s = probeToggleSpacing(alongX, "cartesian", 700, 10, 500)!;
-    expect(s.speedMmS).toBe(500);
-    expect(s.ok).toBe(true);
+  test("the estimate uses the requested speed, because the run raises the velocity limit", () => {
+    const s = probeToggleSpacing(alongX, "cartesian", 700, 10)!;
+    expect(s.speedMmS).toBe(700);
+    expect(s.spacingS).toBeCloseTo(50 / 700, 9);
+    expect(s.ok).toBe(false);
   });
 
   test("the run is blocked with the spacing, the minimum and the segments to use", () => {
@@ -594,7 +634,6 @@ describe("expected probe edges", () => {
       speedMmS: speed,
       segmentsBetweenToggles: segments,
       strokes,
-      maxVelocity: 500,
     });
 
   test.each([
@@ -605,7 +644,7 @@ describe("expected probe edges", () => {
     ["600 mm/s, 6 segments, 200 mm", 600, 6, diag(200), [6]],
     ["600 mm/s, 10 segments, 200 mm", 600, 10, diag(200), [19]],
     ["600 mm/s, 10 segments, 260 mm", 600, 10, diag(260, 20), [29]],
-    ["800 mm/s clamped, 10 segments, 260 mm", 800, 10, diag(260, 20), [23]],
+    ["707 mm/s (800 requested, cut by the old limit), 10 segments, 260 mm", 500 * Math.SQRT2, 10, diag(260, 20), [23]],
   ])("%s: never above the fewest recorded edges, at most 7 below", (_, speed, segments, p, seen) => {
     const fewest = Math.min(...seen);
     const estimate = edges(speed, segments, p)!;
@@ -660,7 +699,6 @@ describe("probe edge hint", () => {
       speedMmS: speed,
       segmentsBetweenToggles: segments,
       strokes,
-      maxVelocity: 500,
     });
 
   test("40 or more is a neutral note", () => {
@@ -678,7 +716,6 @@ describe("probe edge hint", () => {
       speedMmS: DEFAULT_PARAMETERS.probe.speed_mm_s,
       segmentsBetweenToggles: DEFAULT_PARAMETERS.probe.segments_between_toggles,
       strokes: DEFAULT_PARAMETERS.probe.strokes,
-      maxVelocity: 500,
     })!;
     expect(h.tone).toBe("ok");
   });
@@ -695,7 +732,6 @@ describe("probe edge hint", () => {
         kinematics: "corexy",
         speedMmS: speed,
         segmentsBetweenToggles: segments,
-        maxVelocity: 500,
       };
       const strokes = suggestedProbeStrokes(input)!;
       expect(probeEdgeHint({ ...input, strokes })!.tone).toBe("ok");
@@ -709,7 +745,6 @@ describe("probe edge hint", () => {
       kinematics: "corexy",
       speedMmS: 195,
       segmentsBetweenToggles: 1,
-      maxVelocity: 500,
     };
     expect(suggestedProbeStrokes(input)).toBeNull();
     expect(suggestedProbeStrokes({ ...input, segmentsBetweenToggles: 3, pattern: diag(5) })).toBeNull();

@@ -136,7 +136,7 @@ export function GuidedSetup({
         });
 
   const speeds = parseNumberList(speedsText, "the speed set");
-  const maxVelocity = printer.moonraker.max_velocity;
+  const maxAccel = printer.moonraker.max_accel;
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dependencies are the parsed parts of the inputs, so the default recomputes on a changed value and not on a new object.
   const derived = useMemo(
     () =>
@@ -146,7 +146,7 @@ export function GuidedSetup({
             kinematics: stepper.kinematics,
             segmentsBetweenToggles: probe.segments_between_toggles,
             strokes: probeStrokesTouched ? probe.strokes : DEFAULT_PARAMETERS.probe.strokes,
-            maxVelocity,
+            maxAccel,
           })
         : null,
     [
@@ -159,7 +159,7 @@ export function GuidedSetup({
       probe.segments_between_toggles,
       probeStrokesTouched,
       probe.strokes,
-      maxVelocity,
+      maxAccel,
     ],
   );
   useEffect(() => {
@@ -175,7 +175,6 @@ export function GuidedSetup({
           kinematics: stepper.kinematics,
           speedMmS: probe.speed_mm_s,
           segmentsBetweenToggles: probe.segments_between_toggles,
-          maxVelocity,
         })
       : null;
   useEffect(() => {
@@ -186,7 +185,7 @@ export function GuidedSetup({
 
   const spacing =
     pattern !== null && stepper !== undefined
-      ? probeToggleSpacing(pattern, stepper.kinematics, probe.speed_mm_s, probe.segments_between_toggles, maxVelocity)
+      ? probeToggleSpacing(pattern, stepper.kinematics, probe.speed_mm_s, probe.segments_between_toggles)
       : null;
   const spacingProblem = spacing === null ? null : toggleSpacingProblem(spacing);
   const edgeHint =
@@ -197,7 +196,6 @@ export function GuidedSetup({
           speedMmS: probe.speed_mm_s,
           segmentsBetweenToggles: probe.segments_between_toggles,
           strokes: probe.strokes,
-          maxVelocity,
         })
       : null;
 

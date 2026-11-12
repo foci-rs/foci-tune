@@ -25,6 +25,8 @@ export type OuterGains = RunRequestBody["gains"];
 
 export const PID_GAIN_MAX_RAW = 0x7fff;
 export const PATTERN_MARGIN_MM = 10;
+/** Mirrors `MAX_SPEEDS` in the stimulus composer. */
+export const MAX_TRACKING_SPEEDS = 10;
 const MAX_LADDER_VALUES = 20;
 const MAX_LADDER_REPEATS = 10;
 const MAX_LADDER_RUNS = 60;
@@ -577,9 +579,43 @@ export function segmentTravelMm(p: Pattern, kinematics: string): number | null {
   return Math.hypot(dx, dy) / n / ratio;
 }
 
+/** Share of a stroke that must be cruise for a speed to be measured on it. */
+const MIN_CRUISE_SHARE = 0.5;
+
+export interface Cruise {
+  /** Distance travelled at the requested speed once the stroke has accelerated and before it brakes. */
+  cruiseMm: number;
+  /** `cruiseMm` as a share of the stroke. */
+  share: number;
+  /** Less than half of the stroke is cruise. */
+  short: boolean;
+}
+
+/**
+ * The cruise a stroke leaves at a stepper speed and the toolhead acceleration. It is the stroke
+ * length minus the distance to accelerate and brake, never below zero. Null for other kinematics, a
+ * non-positive speed or acceleration, or an empty stroke.
+ */
+export function cruiseAtSpeed(p: Pattern, kinematics: string, speedMmS: number, maxAccel: number): Cruise | null {
+  const ratio = pathToStepperRatio(kinematics);
+  const length = Math.hypot(p.end[0] - p.start[0], p.end[1] - p.start[1]);
+  if (ratio === null || !(speedMmS > 0) || !(maxAccel > 0) || !(length > 0)) return null;
+  const pathSpeed = speedMmS * ratio;
+  const cruiseMm = Math.max(0, length - (pathSpeed * pathSpeed) / maxAccel);
+  const share = cruiseMm / length;
+  return { cruiseMm, share, short: share < MIN_CRUISE_SHARE };
+}
+
+/** Whether a run at these stepper speeds is sent above the toolhead's velocity limit, so the engine raises it. */
+export function needsVelocityRaise(speedsMmS: number[], kinematics: string, maxVelocity: number): boolean {
+  const ratio = pathToStepperRatio(kinematics);
+  if (ratio === null || !(maxVelocity > 0)) return false;
+  return speedsMmS.some((v) => Number.isFinite(v) && v * ratio > maxVelocity);
+}
+
 export interface ToggleSpacing {
   spacingS: number;
-  /** Stepper speed after the `max_velocity` clamp. */
+  /** The stepper speed the probe runs at. */
   speedMmS: number;
   minSegments: number;
   /** The fewest segments at which the gain changes are far enough apart to give clean step responses. */
@@ -593,14 +629,13 @@ export function probeToggleSpacing(
   kinematics: string,
   speedMmS: number,
   segments: number,
-  maxVelocity: number,
 ): ToggleSpacing | null {
   const ratio = pathToStepperRatio(kinematics);
   const travel = segmentTravelMm(p, kinematics);
   if (ratio === null || travel === null || !(travel > 0) || !(speedMmS > 0) || !(segments >= 1)) {
     return null;
   }
-  const speed = maxVelocity > 0 ? Math.min(speedMmS, maxVelocity / ratio) : speedMmS;
+  const speed = speedMmS;
   const spacingS = (travel * segments) / speed;
   const needed = (MIN_TOGGLE_SPACING_S * speed) / travel - SPACING_TOLERANCE_S;
   return {
@@ -644,11 +679,10 @@ const ESTIMATE_TOLERANCE = 1e-9;
 export interface ProbeEdgeInput {
   pattern: Pattern;
   kinematics: string;
-  /** Requested stepper speed; the `max_velocity` clamp is applied here. */
+  /** Requested stepper speed. The run raises the velocity limit to reach it. */
   speedMmS: number;
   segmentsBetweenToggles: number;
   strokes: number;
-  maxVelocity: number;
 }
 
 interface EdgeModel {
@@ -659,9 +693,9 @@ interface EdgeModel {
 }
 
 function edgeModel(input: ProbeEdgeInput): EdgeModel | null {
-  const { pattern, kinematics, speedMmS, segmentsBetweenToggles, maxVelocity } = input;
+  const { pattern, kinematics, speedMmS, segmentsBetweenToggles } = input;
   const ratio = pathToStepperRatio(kinematics);
-  const spacing = probeToggleSpacing(pattern, kinematics, speedMmS, segmentsBetweenToggles, maxVelocity);
+  const spacing = probeToggleSpacing(pattern, kinematics, speedMmS, segmentsBetweenToggles);
   if (ratio === null || spacing === null) return null;
   const lengthMm = Math.hypot(pattern.end[0] - pattern.start[0], pattern.end[1] - pattern.start[1]);
   const passS = lengthMm / ratio / spacing.speedMmS;

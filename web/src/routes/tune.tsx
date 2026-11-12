@@ -417,13 +417,7 @@ function Workbench({ printer }: { printer: PrinterView }) {
   if (type === "tracking" && !speeds.ok) blocked.push(speeds.error);
   const spacing =
     type === "probe" && pattern !== null && stepper !== undefined
-      ? probeToggleSpacing(
-          pattern,
-          stepper.kinematics,
-          params.probe.speed_mm_s,
-          params.probe.segments_between_toggles,
-          printer.moonraker.max_velocity,
-        )
+      ? probeToggleSpacing(pattern, stepper.kinematics, params.probe.speed_mm_s, params.probe.segments_between_toggles)
       : null;
   const spacingProblem = spacing === null ? null : toggleSpacingProblem(spacing);
   if (spacingProblem !== null) blocked.push(spacingProblem);
@@ -435,7 +429,6 @@ function Workbench({ printer }: { printer: PrinterView }) {
           speedMmS: params.probe.speed_mm_s,
           segmentsBetweenToggles: params.probe.segments_between_toggles,
           strokes: params.probe.strokes,
-          maxVelocity: printer.moonraker.max_velocity,
         })
       : null;
 

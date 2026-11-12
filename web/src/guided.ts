@@ -16,42 +16,62 @@ import type {
   TuneState,
   UnscoredReason,
 } from "./api";
-import { expectedProbeEdges, PID_GAIN_MAX_RAW, PROBE_MIN_EDGES, probeToggleSpacing, type ProbeEdgeInput } from "./tune";
+import {
+  cruiseAtSpeed,
+  expectedProbeEdges,
+  PID_GAIN_MAX_RAW,
+  PROBE_MIN_EDGES,
+  probeToggleSpacing,
+  type ProbeEdgeInput,
+} from "./tune";
 
 export interface ProbeSpeedChoice {
   speed: number;
   warning: string | null;
 }
 
-/** The fastest speed whose toggle spacing is valid and whose edge estimate reaches the minimum. */
-export function defaultProbeSpeed(speeds: number[], context: Omit<ProbeEdgeInput, "speedMmS">): ProbeSpeedChoice {
+const NO_CRUISE_WARNING = "No speed has enough cruise at this acceleration.";
+
+/**
+ * The fastest speed whose toggle spacing is valid and whose edge estimate reaches the minimum,
+ * among the speeds that leave enough cruise. When every speed is short on cruise it keeps the
+ * choice it would make without that check and adds a cruise warning.
+ */
+export function defaultProbeSpeed(
+  speeds: number[],
+  context: Omit<ProbeEdgeInput, "speedMmS"> & { maxAccel: number },
+): ProbeSpeedChoice {
   const fastestFirst = [...speeds].filter(Number.isFinite).sort((a, b) => b - a);
   if (fastestFirst.length === 0) return { speed: 0, warning: "No tracking speed to derive the probe speed from" };
   const spacingOk = (speedMmS: number) =>
-    probeToggleSpacing(
-      context.pattern,
-      context.kinematics,
-      speedMmS,
-      context.segmentsBetweenToggles,
-      context.maxVelocity,
-    )?.ok === true;
+    probeToggleSpacing(context.pattern, context.kinematics, speedMmS, context.segmentsBetweenToggles)?.ok === true;
   const edges = (speedMmS: number) => expectedProbeEdges({ ...context, speedMmS });
+  const cruises = (speedMmS: number) =>
+    cruiseAtSpeed(context.pattern, context.kinematics, speedMmS, context.maxAccel)?.short !== true;
 
-  const valid = fastestFirst.filter(spacingOk);
-  const enough = valid.find((s) => (edges(s) ?? 0) >= PROBE_MIN_EDGES);
-  if (enough !== undefined) return { speed: enough, warning: null };
-  if (valid.length === 0) {
+  const choose = (candidates: number[]): ProbeSpeedChoice => {
+    const valid = candidates.filter(spacingOk);
+    const enough = valid.find((s) => (edges(s) ?? 0) >= PROBE_MIN_EDGES);
+    if (enough !== undefined) return { speed: enough, warning: null };
+    if (valid.length === 0) {
+      return {
+        speed: candidates[0],
+        warning:
+          "No speed leaves enough time between gain changes for the probe fit. Raise Moves between gain changes.",
+      };
+    }
     return {
-      speed: fastestFirst[0],
-      warning: "No speed leaves enough time between gain changes for the probe fit. Raise Moves between gain changes.",
+      speed: valid[0],
+      warning:
+        `No speed gives the probe enough step responses: about ${edges(valid[0]) ?? 0} at ` +
+        `${valid[0]} mm/s, and it needs ${PROBE_MIN_EDGES}. Add strokes or lengthen the pattern.`,
     };
-  }
-  return {
-    speed: valid[0],
-    warning:
-      `No speed gives the probe enough step responses: about ${edges(valid[0]) ?? 0} at ` +
-      `${valid[0]} mm/s, and it needs ${PROBE_MIN_EDGES}. Add strokes or lengthen the pattern.`,
   };
+
+  const cruising = fastestFirst.filter(cruises);
+  if (cruising.length > 0) return choose(cruising);
+  const fallback = choose(fastestFirst);
+  return { speed: fallback.speed, warning: [NO_CRUISE_WARNING, fallback.warning].filter(Boolean).join(" ") };
 }
 
 export type RecommendationKind = "measured" | "interpolated";
