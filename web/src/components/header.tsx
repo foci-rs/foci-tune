@@ -1,4 +1,4 @@
-import { mdiCarBrakeAlert, mdiHome } from "@mdi/js";
+import { mdiAxisArrow, mdiCarBrakeAlert } from "@mdi/js";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ApiRequestError, postHome, type PrinterView } from "@/api";
@@ -196,18 +196,19 @@ export function Header() {
             </Tooltip>
             <button
               type="button"
-              aria-label={homing ? "Homing" : "Home"}
+              aria-label={homing ? "Homing" : "Home axes"}
               title={`Home all axes (homed: ${homedAxes === "" ? "none" : homedAxes})`}
               disabled={homing || klippy !== "ready"}
               onClick={home}
               className={cn(
-                "flex h-9 items-center rounded-md border px-2 transition-colors hover:bg-accent focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50",
+                "flex h-9 items-center gap-2 rounded-md border px-2 transition-colors hover:bg-accent focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50",
                 homedClass,
               )}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true" className="size-6 fill-current">
-                <path d={mdiHome} />
+                <path d={mdiAxisArrow} />
               </svg>
+              <span className="hidden sm:inline">{homing ? "Homing" : "Home axes"}</span>
             </button>
           </div>
         </div>

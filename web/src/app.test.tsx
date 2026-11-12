@@ -87,9 +87,9 @@ test("top bar shows klipper state and kill; the sidebar holds nav and printer st
   expect(status).not.toHaveTextContent("Homed");
   expect(status).toHaveTextContent("Disk Free 3 GB");
   expect(status).toHaveTextContent("Version 0.1.0");
-  expect(within(status).queryByRole("button", { name: "Home" })).toBeNull();
+  expect(within(status).queryByRole("button", { name: "Home axes" })).toBeNull();
   const killButton = within(header).getByRole("button", { name: "Kill" });
-  const homeButton = within(header).getByRole("button", { name: "Home" });
+  const homeButton = within(header).getByRole("button", { name: "Home axes" });
   expect(killButton.compareDocumentPosition(homeButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
@@ -195,23 +195,24 @@ test("home posts once, disables while homing and shows a refusal", async () => {
     path === "/api/home" ? new Promise<Response>((r) => (release = r)) : base(path, init),
   );
   await mount();
-  const button = await screen.findByRole("button", { name: "Home" });
+  const button = await screen.findByRole("button", { name: "Home axes" });
   await act(async () => {
     fireEvent.click(button);
   });
   expect(fetchMock.mock.calls.filter(([p]) => p === "/api/home")).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Homing" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Homing" })).toHaveTextContent("Homing");
   await act(async () => {
     release(new Response(JSON.stringify({ error: "a run is in progress" }), { status: 409 }));
   });
   expect(await screen.findByText("a run is in progress")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Home" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Home axes" })).toBeEnabled();
 });
 
 test("home is offered only while klipper is ready", async () => {
   respond(printerView({ klippy: "disconnected" }));
   await mount();
-  expect(await screen.findByRole("button", { name: "Home" })).toBeDisabled();
+  expect(await screen.findByRole("button", { name: "Home axes" })).toBeDisabled();
 });
 
 test("a home refusal clears once klipper's state changes", async () => {
@@ -224,7 +225,7 @@ test("a home refusal clears once klipper's state changes", async () => {
   );
   await mount();
   await act(async () => {
-    fireEvent.click(await screen.findByRole("button", { name: "Home" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Home axes" }));
   });
   expect(await screen.findByText("Klippy Host not connected")).toBeInTheDocument();
 
@@ -285,13 +286,13 @@ test("homed tone is full only with x, y and z, partial with any axis", () => {
 test("the home button names the homed axes in its tooltip", async () => {
   respond(printerView({ homed_axes: "xy" }));
   await mount();
-  expect(await screen.findByRole("button", { name: "Home" })).toHaveAttribute("title", "Home all axes (homed: xy)");
+  expect(await screen.findByRole("button", { name: "Home axes" })).toHaveAttribute("title", "Home all axes (homed: xy)");
 });
 
 test("the home button says nothing is homed", async () => {
   respond(printerView({ homed_axes: "" }));
   await mount();
-  expect(await screen.findByRole("button", { name: "Home" })).toHaveAttribute("title", "Home all axes (homed: none)");
+  expect(await screen.findByRole("button", { name: "Home axes" })).toHaveAttribute("title", "Home all axes (homed: none)");
 });
 
 const board = (over: Partial<BoardView> = {}): BoardView =>
