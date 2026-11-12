@@ -18,8 +18,14 @@ import {
   type TuneId,
   type TuneSummary,
 } from "@/api";
-import { ArrowRightIcon, PlayIcon, PlusIcon, ZapIcon } from "lucide-react";
+import { ArrowRightIcon, ChevronDownIcon, PlayIcon, PlusIcon, ZapIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
 import {
@@ -238,6 +244,8 @@ function TuneView({
   const offer = choosing && actions.extension && last !== null ? extensionOffer(detail, last) : null;
   const recommended = choosing && last !== null ? recommendedGain(detail, last) : null;
   const deciding = actions.decide && axis !== null && lastAxis === axis;
+  const pausedStep = last === null ? null : detail.steps[last];
+  const dampingPause = (pausedStep?.paused?.reason ?? pausedStep?.assessment?.pause?.[1]) === "DampingUnassessable";
   const starting = announced && actions.start && axis !== null && lastAxis === axis;
   const liveControl = liveControlFor(printer, detail.setup.stepper);
   const prepared = preparing && next !== null ? prepareState(next, prepare, liveControl) : null;
@@ -376,9 +384,33 @@ function TuneView({
               >
                 Rerun
               </UiButton>
-              <UiButton disabled={frozen} onClick={() => run("decide", () => postTuneDecision(id, "continue"))}>
-                Continue
-              </UiButton>
+              <div className="inline-flex">
+                <UiButton
+                  className={dampingPause ? "rounded-r-none" : undefined}
+                  disabled={frozen}
+                  onClick={() => run("decide", () => postTuneDecision(id, "continue"))}
+                >
+                  Continue
+                </UiButton>
+                {dampingPause && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <UiButton
+                        aria-label="More ways to continue"
+                        className="rounded-l-none border-l border-primary-foreground/30 px-2"
+                        disabled={frozen}
+                      >
+                        <ChevronDownIcon />
+                      </UiButton>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => run("decide", () => postTuneDecision(id, "continue_all"))}>
+                        Continue, and skip damping pauses for this step
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
             </>
           )}
           {onward !== null && (

@@ -88,6 +88,7 @@ function detail(state: TuneState, lock: string | null = null, withStep = true): 
             drift: [],
             paused: null,
             standstill_gate_off: null,
+            damping_waived_all: null,
           },
         ]
       : [],
@@ -839,7 +840,7 @@ test("the standstill run of a step reads Measuring while it is in its motion sta
   expect(screen.queryByText(/^Moving/)).toBeNull();
 });
 
-test("the pause decisions are in the bar, after Abandon, with Continue last", async () => {
+test("the pause decisions are in the bar, after Abandon, with Continue and its menu last", async () => {
   current = detail("Paused");
   current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
   render(<GuidedTune printer={printer} />);
@@ -849,7 +850,7 @@ test("the pause decisions are in the bar, after Abandon, with Continue last", as
     within(bar)
       .getAllByRole("button")
       .map((b) => b.textContent),
-  ).toEqual(["Abandon tune", "Stop", "Rerun", "Continue"]);
+  ).toEqual(["Abandon tune", "Stop", "Rerun", "Continue", ""]);
   const card = screen.getByRole("region", { name: "Paused" });
   expect(within(card).queryAllByRole("button")).toHaveLength(0);
 });
@@ -864,6 +865,25 @@ test.each([
   fireEvent.click(await screen.findByRole("button", { name: label }));
   await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
   expect(bodies[0]).toEqual({ decision });
+});
+
+test("a damping pause offers to skip damping pauses for the rest of the step", async () => {
+  current = detail("Paused");
+  current.steps[0].paused = { rung: 0, reason: "DampingUnassessable", unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  fireEvent.keyDown(await screen.findByRole("button", { name: "More ways to continue" }), { key: "Enter" });
+  fireEvent.click(screen.getByRole("menuitem", { name: "Continue, and skip damping pauses for this step" }));
+  await waitFor(() => expect(posts).toEqual(["/api/tunes/t1/decision"]));
+  expect(bodies[0]).toEqual({ decision: "continue_all" });
+});
+
+test("a standstill pause has no skip option and Continue still posts continue", async () => {
+  current = detail("Paused");
+  current.steps[0].paused = { rung: 0, reason: "StandstillBaselineUnassessable", unix_ms: 1 };
+  render(<GuidedTune printer={printer} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(bodies[0]).toEqual({ decision: "continue" }));
+  expect(screen.queryByRole("button", { name: "More ways to continue" })).toBeNull();
 });
 
 test("the tune's event log is not printed above the page: decisions already show in the table", async () => {

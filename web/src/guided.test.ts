@@ -85,6 +85,7 @@ function step(over: Partial<TuneStep> = {}): TuneStep {
     drift: [],
     paused: null,
     standstill_gate_off: null,
+    damping_waived_all: null,
     ...over,
   };
 }

@@ -93,6 +93,7 @@ function pausedTune(reason: Pause = "DampingUnassessable"): Tune {
         drift: [],
         failed: null,
         standstill_gate_off: null,
+        damping_waived_all: null,
       },
     ],
     state: "Paused",

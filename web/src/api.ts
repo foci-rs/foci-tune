@@ -478,7 +478,7 @@ export interface PauseRecord {
   unix_ms: number;
 }
 
-export type TuneDecision = "continue" | "rerun" | "stop";
+export type TuneDecision = "continue" | "continue_all" | "rerun" | "stop";
 
 export type RungNote = { OutOfRange: number } | { RoundedToZero: number } | { Merged: { shown: number; into: number } };
 
@@ -566,6 +566,7 @@ export interface TuneStep {
   drift: TuneDrift[];
   paused: PauseRecord | null;
   standstill_gate_off: number | null;
+  damping_waived_all: number | null;
 }
 
 export type TuneState =
