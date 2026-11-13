@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "foci-tune"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "foci-tune-analysis"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "levenberg-marquardt",
  "nalgebra",
