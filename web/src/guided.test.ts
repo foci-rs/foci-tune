@@ -18,6 +18,7 @@ import {
   gainChecklist,
   resultRows,
   acceptGain,
+  changedGains,
   gainText,
   measuredGains,
   manualProblem,
@@ -1257,6 +1258,26 @@ describe("gainChecklist", () => {
   });
   test("a tune with no step has nothing done", () => {
     expect(gainChecklist(tune("Ready", [])).map((i) => i.done)).toEqual([false, false, false]);
+  });
+});
+
+describe("changedGains", () => {
+  test("a gain is changed only when its step chose a value that differs from the start", () => {
+    const t = tune("Done", [
+      step({ axis: "VelocityP", chosen: 900, chosen_shown: 900 }),
+      step({ axis: "VelocityICornerHz", chosen: 256, chosen_shown: 31.1, pwm_hz: 50000 }),
+      step({ axis: "PositionP", chosen: null }),
+    ]);
+    t.snapshot = [{ velocity_p: 841, velocity_i: 256, position_p: 141, position_i: 0 }, filters];
+    expect(changedGains(t)).toEqual({ VelocityP: true, VelocityICornerHz: false, PositionP: false });
+  });
+
+  test("a tune with no steps has no changed gain", () => {
+    expect(changedGains(tune("Ready", []))).toEqual({
+      VelocityP: false,
+      VelocityICornerHz: false,
+      PositionP: false,
+    });
   });
 });
 

@@ -1,14 +1,21 @@
 import { CheckCircle2Icon, CheckIcon, CopyIcon } from "lucide-react";
 import { Button as UiButton } from "@/components/ui/button";
 import { useState } from "react";
-import type { TuneDetail } from "@/api";
-import { gainChecklist, resultRows, type LiveControl } from "@/guided";
+import type { TuneAxis, TuneDetail } from "@/api";
+import { changedGains, gainChecklist, resultRows, type LiveControl } from "@/guided";
 import { Explained } from "./Explained";
 import { GainChecklist } from "./ResultPlaceholder";
 import { Card } from "./ui";
 
+const BLOCK_KEY_AXIS: Record<string, TuneAxis> = {
+  pid_velocity_p: "VelocityP",
+  pid_velocity_i: "VelocityICornerHz",
+  pid_position_p: "PositionP",
+};
+
 export function ResultView({ tune, block, live }: { tune: TuneDetail; block: string; live: LiveControl | null }) {
   const [copied, setCopied] = useState(false);
+  const changed = changedGains(tune);
   const copy = () => {
     void navigator.clipboard.writeText(block).then(() => {
       setCopied(true);
@@ -57,7 +64,17 @@ export function ResultView({ tune, block, live }: { tune: TuneDetail; block: str
           </UiButton>
         }
       >
-        <pre className="overflow-x-auto font-mono text-xs">{block}</pre>
+        <pre className="overflow-x-auto font-mono text-xs">
+          {(block.match(/[^\n]*\n|[^\n]+$/g) ?? []).map((line, i) => {
+            const axis = BLOCK_KEY_AXIS[line.split(":")[0]];
+            return (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the lines of a fixed block never reorder.
+              <span key={i} className={axis !== undefined && changed[axis] ? "text-emerald-400" : undefined}>
+                {line}
+              </span>
+            );
+          })}
+        </pre>
       </Card>
     </>
   );

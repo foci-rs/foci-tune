@@ -847,6 +847,25 @@ export function gainChecklist(tune: Tune): { label: string; done: boolean }[] {
   }));
 }
 
+/** Which gains the tool changed. A gain counts when its step chose a value that differs from the stepper's starting value. */
+export function changedGains(tune: Tune): Record<TuneAxis, boolean> {
+  const [gains] = tune.snapshot;
+  const start: Record<TuneAxis, number> = {
+    VelocityP: gains.velocity_p,
+    VelocityICornerHz: gains.velocity_i,
+    PositionP: gains.position_p,
+  };
+  const changed = (axis: TuneAxis) => {
+    const chosen = tune.steps.find((s) => s.axis === axis)?.chosen ?? null;
+    return chosen !== null && chosen !== start[axis];
+  };
+  return {
+    VelocityP: changed("VelocityP"),
+    VelocityICornerHz: changed("VelocityICornerHz"),
+    PositionP: changed("PositionP"),
+  };
+}
+
 export interface ResultRow {
   label: string;
   before: string;
