@@ -4,6 +4,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupText } from "@
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cornerText } from "@/units";
 import {
   axisTitle,
   STEP_DIVISIONS,
@@ -48,7 +49,10 @@ function StepSelect({
   );
 }
 
-const shownLive = (live: number, corner: boolean) => (corner ? `${live.toFixed(1)} Hz` : String(Math.round(live)));
+const shownLive = (live: number, liveRaw: number | null, corner: boolean) => {
+  if (!corner) return String(Math.round(live));
+  return liveRaw === null ? `${live.toFixed(1)} Hz` : cornerText(live, liveRaw);
+};
 
 const change = (step: number, divisions: number) => {
   const percent = Math.round((2 ** (step / divisions) - 1) * 100);
@@ -59,7 +63,7 @@ function LadderTable({ preview, corner, divisions }: { preview: LadderPreview; c
   const columns = [
     ...preview.gains.map((g) => ({
       step: g.step,
-      gain: corner ? `${g.shown.toFixed(1)} Hz` : String(g.raw),
+      gain: corner ? cornerText(g.shown, g.raw) : String(g.raw),
       left: false,
     })),
     ...preview.left.map((l) => ({ step: l.step, gain: "left out", left: true })),
@@ -121,6 +125,7 @@ export function NextStepCard({
   form,
   state,
   live,
+  liveRaw,
   runs,
   onForm,
 }: {
@@ -130,6 +135,8 @@ export function NextStepCard({
   state: PrepareState;
   /** The stepper's live value on this axis, to go back to; null when it reports none. */
   live: number | null;
+  /** The stepper's live raw velocity I value when this axis is the corner, to show beside its Hz. Null otherwise. */
+  liveRaw: number | null;
   runs?: number;
   onForm: (form: PrepareForm) => void;
 }) {
@@ -158,7 +165,9 @@ export function NextStepCard({
                   </span>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {live === null ? "No live value is available" : `Use the live value: ${shownLive(live, corner)}`}
+                  {live === null
+                    ? "No live value is available"
+                    : `Use the live value: ${shownLive(live, liveRaw, corner)}`}
                 </TooltipContent>
               </Tooltip>
             </InputGroupAddon>

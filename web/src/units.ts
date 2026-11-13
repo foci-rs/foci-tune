@@ -10,6 +10,11 @@ export function velocityIRaw(cornerHz: number, pwmHz: number): number {
   return Math.round((cornerHz * 2 * Math.PI * POSITION_UNITS_PER_REV) / pwmHz);
 }
 
+/** A corner frequency at one decimal with the raw register value in parentheses, as "12.4 Hz (37)". */
+export function cornerText(hz: number, raw: number): string {
+  return `${hz.toFixed(1)} Hz (${raw})`;
+}
+
 export function pGain(raw: number): string {
   return (raw / P_GAIN_DIVISOR).toFixed(3);
 }

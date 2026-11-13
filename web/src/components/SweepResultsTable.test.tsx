@@ -76,7 +76,7 @@ test("a corner ladder shows its gains in Hz", () => {
     table({ axis: "VelocityICornerHz", label: "Velocity I corner (Hz)", rows: [row(0, { shown: 50.04, raw: 4200 })] }),
   );
   const first = within(screen.getByRole("table", { name: "Velocity I corner (Hz) results" })).getAllByRole("row")[1];
-  expect(within(first).getAllByRole("cell")[1]).toHaveTextContent("50.0 Hz");
+  expect(within(first).getAllByRole("cell")[1]).toHaveTextContent("50.0 Hz (4200)");
 });
 
 test("the score, damping and error headers explain themselves", async () => {

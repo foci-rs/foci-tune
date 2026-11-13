@@ -1037,7 +1037,7 @@ test("the finished Result keeps the checklist and adds a before and after table"
     );
   expect(rows).toEqual([
     ["Velocity P", "1000", "1000", "unchanged", "Active"],
-    ["Velocity I", "6.1 Hz", "6.1 Hz", "unchanged", "Active"],
+    ["Velocity I", "6.1 Hz (50)", "6.1 Hz (50)", "unchanged", "Active"],
     ["Position P", "800", "900", "+13%", "Not active"],
   ]);
 });

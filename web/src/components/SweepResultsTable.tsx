@@ -1,6 +1,7 @@
 import type { TuneAxis } from "@/api";
 import type { RungView } from "@/guided";
 import { cn } from "@/lib/utils";
+import { cornerText } from "@/units";
 import { Explained } from "./Explained";
 
 const fmt = (n: number | null, digits = 3) => (n === null ? "-" : n.toFixed(digits));
@@ -59,7 +60,7 @@ export function SweepResultsTable({
               )}
             >
               <td className="pr-4 text-muted-foreground">{r.index + 1}</td>
-              <td className="pr-4">{corner ? `${r.shown.toFixed(1)} Hz` : r.raw}</td>
+              <td className="pr-4">{corner ? cornerText(r.shown, r.raw) : r.raw}</td>
               <td className="pr-4 font-sans">
                 {r.detail === null ? r.verdict : <Explained tip={r.detail}>{r.verdict}</Explained>}
               </td>

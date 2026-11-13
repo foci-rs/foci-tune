@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { failureMessage } from "@/failure";
 import { useFeed } from "@/feed";
+import { cornerText } from "@/units";
 import {
   announcementOf,
   availableActions,
@@ -303,6 +304,7 @@ function TuneView({
           prepared={prepared}
           runs={runs}
           live={next !== null && liveControl !== null ? liveSeed(next, liveControl) : null}
+          liveRaw={next === "VelocityICornerHz" && liveControl !== null ? liveControl.velocity_i : null}
           onPrepare={setPrepare}
         />
       )}
@@ -492,6 +494,7 @@ function AxisStep({
   prepared,
   runs,
   live,
+  liveRaw,
   onPrepare,
 }: {
   tune: TuneDetail;
@@ -507,6 +510,7 @@ function AxisStep({
   prepared: PrepareState | null;
   runs: number | undefined;
   live: number | null;
+  liveRaw: number | null;
   onPrepare: (form: PrepareForm) => void;
 }) {
   const indices = tune.steps.flatMap((s, i) => (s.axis === axis ? [i] : []));
@@ -544,7 +548,9 @@ function AxisStep({
           {actions.decide && i === last && <PausePanel tune={tune} step={i} />}
         </div>
       ))}
-      {announcing && last !== null && <AnnouncedStep tune={tune} step={tune.steps[last]} live={live} />}
+      {announcing && last !== null && (
+        <AnnouncedStep tune={tune} step={tune.steps[last]} live={live} liveRaw={liveRaw} />
+      )}
       {preparing && prepared !== null && (
         <NextStepCard
           axis={axis}
@@ -552,6 +558,7 @@ function AxisStep({
           form={prepare}
           state={prepared}
           live={live}
+          liveRaw={liveRaw}
           runs={runs}
           onForm={onPrepare}
         />
@@ -564,10 +571,12 @@ function AnnouncedStep({
   tune,
   step,
   live,
+  liveRaw,
 }: {
   tune: TuneDetail;
   step: TuneDetail["steps"][number];
   live: number | null;
+  liveRaw: number | null;
 }) {
   const form = formFromStep(step, live);
   const control = { velocity_p: 0, velocity_i: 0, position_p: 0, pwm_hz: step.pwm_hz };
@@ -579,6 +588,7 @@ function AnnouncedStep({
       form={form}
       state={prepareState(step.axis, form, control)}
       live={live}
+      liveRaw={liveRaw}
       onForm={() => undefined}
       runs={announcement?.runCount}
     />
@@ -638,7 +648,9 @@ function StepCard({ tune, index, extensionText }: { tune: Tune; index: number; e
       {step.chosen_shown !== null && (
         <p className="mb-3 text-sm">
           Chosen gain:{" "}
-          {step.axis === "VelocityICornerHz" ? `${step.chosen_shown.toFixed(1)} Hz` : Math.round(step.chosen_shown)}
+          {step.axis === "VelocityICornerHz" && step.chosen !== null
+            ? cornerText(step.chosen_shown, step.chosen)
+            : Math.round(step.chosen_shown)}
         </p>
       )}
       {summary.failed !== null && <p className="mb-2 text-sm text-amber-400">Stopped: {summary.failed}</p>}

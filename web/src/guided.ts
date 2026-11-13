@@ -1,6 +1,6 @@
 import { ApiRequestError } from "./api";
 import { failureMessage } from "./failure";
-import { cornerHz, velocityIRaw } from "./units";
+import { cornerHz, cornerText, velocityIRaw } from "./units";
 import type {
   Halt,
   PrinterView,
@@ -139,8 +139,12 @@ export interface StepSummary {
 
 export function gainText(rung: TuneStep["rungs"][number] | undefined, axis: TuneAxis): string {
   if (rung === undefined) return "-";
-  return axis === "VelocityICornerHz" ? `${rung.shown.toFixed(1)} Hz` : String(Math.round(rung.shown));
+  return axis === "VelocityICornerHz" ? cornerText(rung.shown, rung.raw) : String(Math.round(rung.shown));
 }
+
+/** A corner in Hz with its raw value, or the Hz alone while the PWM frequency is unknown. */
+const cornerAt = (hz: number, pwmHz: number): string =>
+  pwmHz > 0 ? cornerText(hz, velocityIRaw(hz, pwmHz)) : `${hz.toFixed(1)} Hz`;
 
 const gainAt = (step: TuneStep, index: number): string =>
   step.rungs[index] === undefined ? `${index + 1}` : gainText(step.rungs[index], step.axis);
@@ -698,7 +702,7 @@ export const axisTitle = (axis: TuneAxis): string => GUIDED_STEPS.find((s) => s.
 
 export function stepSentence(step: TuneStep): string {
   const corner = step.axis === "VelocityICornerHz";
-  const gain = (shown: number, raw: number) => (corner ? `${shown.toFixed(1)} Hz` : String(raw));
+  const gain = (shown: number, raw: number) => (corner ? cornerText(shown, raw) : String(raw));
   const first = step.rungs[0];
   const last = step.rungs[step.rungs.length - 1];
   const times = step.repeats === 1 ? "once" : `${step.repeats} times`;
@@ -709,9 +713,14 @@ export function stepSentence(step: TuneStep): string {
       ? SEED_CORNER_HZ
       : (cornerHz(step.seed_raw, step.pwm_hz) ?? SEED_CORNER_HZ)
     : step.seed_raw;
+  const startText = corner
+    ? step.seed_raw === 0 || cornerHz(step.seed_raw, step.pwm_hz) === null
+      ? cornerAt(start, step.pwm_hz)
+      : cornerText(start, step.seed_raw)
+    : String(start);
   const from = gain(first.shown, first.raw);
   const to = gain(last.shown, last.raw);
-  return `${step.rungs.length} gains from ${from} to ${to}, around the starting gain of ${corner ? `${start.toFixed(1)} Hz` : start}, each tested ${times}.`;
+  return `${step.rungs.length} gains from ${from} to ${to}, around the starting gain of ${startText}, each tested ${times}.`;
 }
 
 /**
@@ -777,7 +786,7 @@ export function acceptGain(tune: Tune, index: number): string | null {
   const choice = step.recommendation?.choice;
   if (choice === undefined) return null;
   const text = (shown: number) =>
-    step.axis === "VelocityICornerHz" ? `${shown.toFixed(1)} Hz` : String(Math.round(shown));
+    step.axis === "VelocityICornerHz" ? cornerAt(shown, step.pwm_hz) : String(Math.round(shown));
   if ("Measured" in choice) return gainAt(step, choice.Measured.rung);
   if ("Interpolated" in choice) return text(choice.Interpolated.shown);
   return null;
@@ -820,7 +829,7 @@ export function extensionOffer(tune: Tune, index: number): ExtensionOffer | null
   const below = extend === "Below";
   const k = below ? step.lower_k - 1 : step.upper_k + 1;
   const shown = base * 2 ** (k / step.octave_divisions);
-  const gain = corner ? `${shown.toFixed(1)} Hz` : String(Math.round(shown));
+  const gain = corner ? cornerAt(shown, step.pwm_hz) : String(Math.round(shown));
   const runs = step.repeats * (tune.setup.speeds_mm_s.length + 2);
   return {
     direction: below ? "below" : "above",
@@ -858,12 +867,12 @@ export function resultRows(tune: Tune, live: LiveControl | null): ResultRow[] {
     const step = tune.steps.find((s) => s.axis === axis);
     const corner = axis === "VelocityICornerHz";
     const beforeHz = corner && step !== undefined ? cornerHz(startRaw[axis], step.pwm_hz) : null;
-    const before = corner ? (beforeHz === null ? "-" : `${beforeHz.toFixed(1)} Hz`) : String(startRaw[axis]);
+    const before = corner ? (beforeHz === null ? "-" : cornerText(beforeHz, startRaw[axis])) : String(startRaw[axis]);
     const chosen = step?.chosen ?? null;
     if (step === undefined || chosen === null || step.chosen_shown === null) {
       return { label: axisTitle(axis), before, after: "-", change: "", active: false };
     }
-    const after = corner ? `${step.chosen_shown.toFixed(1)} Hz` : String(chosen);
+    const after = corner ? cornerText(step.chosen_shown, chosen) : String(chosen);
     let change = "changed";
     if (chosen === startRaw[axis]) change = "unchanged";
     else if (startRaw[axis] > 0) {

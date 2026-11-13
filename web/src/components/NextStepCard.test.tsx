@@ -15,6 +15,7 @@ function card(form: PrepareForm = DEFAULT_PREPARE, over: Partial<Parameters<type
         form={form}
         state={prepareState("VelocityP", form, control)}
         live={1000}
+        liveRaw={null}
         onForm={() => {}}
         {...over}
       />
@@ -91,7 +92,7 @@ test("the card no longer counts gains and repeats", () => {
 test("a corner ladder is in Hz", () => {
   const form = { ...DEFAULT_PREPARE, seed: 50, lower: 0, upper: 0 };
   render(card(form, { axis: "VelocityICornerHz", state: prepareState("VelocityICornerHz", form, control) }));
-  expect(within(screen.getByRole("table", { name: "Ladder" })).getByText("50.0 Hz")).toBeInTheDocument();
+  expect(within(screen.getByRole("table", { name: "Ladder" })).getByText(/^50\.0 Hz \(\d+\)$/)).toBeInTheDocument();
   expect(screen.getByText("Hz", { selector: "[data-slot=input-group-addon] *" })).toBeInTheDocument();
 });
 
@@ -181,4 +182,18 @@ test("the percentages follow the step size", () => {
   render(card(form, { state: prepareState("VelocityP", form, control) }));
   expect(screen.getByRole("combobox", { name: "Highest step" })).toHaveTextContent("3 (+41%)");
   expect(screen.getByRole("combobox", { name: "Lowest step" })).toHaveTextContent("-3 (-29%)");
+});
+
+test("the live value tooltip for a corner carries the live raw value, not the seed's", async () => {
+  const form = { ...DEFAULT_PREPARE, seed: 30, lower: 0, upper: 0 };
+  render(
+    card(form, {
+      axis: "VelocityICornerHz",
+      state: prepareState("VelocityICornerHz", form, control),
+      live: 6.07,
+      liveRaw: 50,
+    }),
+  );
+  fireEvent.focus(screen.getByRole("button", { name: "Use the live value" }).parentElement as HTMLElement);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent("Use the live value: 6.1 Hz (50)");
 });

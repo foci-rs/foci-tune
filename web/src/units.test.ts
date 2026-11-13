@@ -1,9 +1,24 @@
 import { describe, expect, test } from "vitest";
-import { cornerHz, diffGains, formatAmps, formatBytes, voltageLimitPercent, formatUm, pGain, quantumUm } from "./units";
+import {
+  cornerHz,
+  cornerText,
+  diffGains,
+  formatAmps,
+  formatBytes,
+  voltageLimitPercent,
+  formatUm,
+  pGain,
+  quantumUm,
+} from "./units";
 
 describe("units", () => {
   test("cornerHz converts the raw integrator gain at the PWM rate", () => {
     expect(cornerHz(412, 50000)).toBeCloseTo(50.03, 2);
+  });
+
+  test("cornerText writes the Hz at one decimal with the raw value in parentheses", () => {
+    expect(cornerText(12.4, 37)).toBe("12.4 Hz (37)");
+    expect(cornerText(50.04, 4200)).toBe("50.0 Hz (4200)");
   });
 
   test("cornerHz is null when the PWM rate is unknown", () => {

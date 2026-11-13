@@ -18,6 +18,7 @@ import {
   gainChecklist,
   resultRows,
   acceptGain,
+  gainText,
   measuredGains,
   manualProblem,
   extensionOffer,
@@ -902,6 +903,19 @@ describe("stepSentence", () => {
   test("a single gain is not a range", () => {
     expect(stepSentence(p([841]))).toBe("1 gain, 841, tested 3 times.");
   });
+  test("with the PWM frequency unknown the 50 Hz fallback start gets no raw value", () => {
+    const corner = step({
+      axis: "VelocityICornerHz",
+      seed_raw: 618,
+      pwm_hz: 0,
+      repeats: 2,
+      rungs: [25, 50, 100].map((shown) => rung(0, { shown, raw: 1 })),
+    });
+    expect(stepSentence(corner)).toBe(
+      "3 gains from 25.0 Hz (1) to 100.0 Hz (1), around the starting gain of 50.0 Hz, each tested 2 times.",
+    );
+  });
+
   test("a corner ladder is in Hz, and a zero seed starts at 50 Hz", () => {
     const corner = step({
       axis: "VelocityICornerHz",
@@ -910,7 +924,7 @@ describe("stepSentence", () => {
       rungs: [25, 50, 100].map((shown) => rung(0, { shown, raw: 1 })),
     });
     expect(stepSentence(corner)).toBe(
-      "3 gains from 25.0 Hz to 100.0 Hz, around the starting gain of 50.0 Hz, each tested 2 times.",
+      "3 gains from 25.0 Hz (1) to 100.0 Hz (1), around the starting gain of 50.0 Hz (412), each tested 2 times.",
     );
   });
 });
@@ -1031,7 +1045,7 @@ describe("paused and stopped rows", () => {
       tie: [],
       spreads: [],
     };
-    expect(stepSummary(t, 0).pause).toBe("Paused at gain 31.5 Hz: the damping could not be measured.");
+    expect(stepSummary(t, 0).pause).toBe("Paused at gain 31.5 Hz (1100): the damping could not be measured.");
   });
 });
 
@@ -1128,7 +1142,19 @@ describe("choosing a gain", () => {
       { Measured: { rung: 0 } },
       { axis: "VelocityICornerHz", rungs: [rung(0, { raw: 4200, shown: 50.04, repeat_values: [done] })] },
     );
-    expect(acceptGain(t, 0)).toBe("50.0 Hz");
+    expect(acceptGain(t, 0)).toBe("50.0 Hz (4200)");
+  });
+  test("an interpolated corner gain carries the raw value it converts to", () => {
+    const t = finished(
+      { Interpolated: { shown: 50.04, between: [0, 1] } },
+      { axis: "VelocityICornerHz", rungs: [rung(0, { raw: 4200, shown: 50.04, repeat_values: [done] })] },
+    );
+    expect(acceptGain(t, 0)).toBe("50.0 Hz (412)");
+  });
+  test("two corner gains that round to the same Hz show different raw values", () => {
+    const a = gainText(rung(0, { shown: 12.41, raw: 37 }), "VelocityICornerHz");
+    const b = gainText(rung(1, { shown: 12.43, raw: 38 }), "VelocityICornerHz");
+    expect([a, b]).toEqual(["12.4 Hz (37)", "12.4 Hz (38)"]);
   });
 
   test("the dropdown lists the gains that finished measuring, by their row", () => {
@@ -1252,7 +1278,7 @@ describe("resultRows", () => {
   test("lists each axis with its gain before and after and how it changed", () => {
     expect(resultRows(finishedTune([841, 406, 141]), null)).toEqual([
       { label: "Velocity P", before: "841", after: "841", change: "unchanged", active: false },
-      { label: "Velocity I", before: "31.1 Hz", after: "49.3 Hz", change: "+59%", active: false },
+      { label: "Velocity I", before: "31.1 Hz (256)", after: "49.3 Hz (406)", change: "+59%", active: false },
       { label: "Position P", before: "141", after: "141", change: "unchanged", active: false },
     ]);
   });
