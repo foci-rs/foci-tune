@@ -1261,13 +1261,23 @@ async fn final_step_produces_the_config_block_with_three_accepted_values() {
     let sched = scheduler(&rig);
     let id = first_step_done(&rig, &sched).await;
     sched.choose(&id, Choice::Rung(0)).await.unwrap();
-    assert_eq!(sched.config_block(&id), None);
+    let first = sched.config_block(&id).unwrap();
+    assert_eq!(block_value(&first, "pid_velocity_p"), 1060);
+    assert_eq!(
+        block_value(&first, "pid_velocity_i"),
+        BASE.0.velocity_i,
+        "an untuned gain keeps the snapshot value\n{first}"
+    );
+    assert_eq!(block_value(&first, "pid_position_p"), BASE.0.position_p);
 
     sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
     sched.confirm_step(&id).await.unwrap();
     wait_state(&rig, &id, TuneState::AwaitingChoice).await;
     sched.choose(&id, Choice::Value(60.0)).await.unwrap();
-    assert_eq!(sched.config_block(&id), None);
+    let second = sched.config_block(&id).unwrap();
+    assert_eq!(block_value(&second, "pid_velocity_p"), 1060);
+    assert_ne!(block_value(&second, "pid_velocity_i"), BASE.0.velocity_i);
+    assert_eq!(block_value(&second, "pid_position_p"), BASE.0.position_p);
 
     sched.prepare_step(&id, step(1, 1, 1)).await.unwrap();
     sched.confirm_step(&id).await.unwrap();
@@ -1302,6 +1312,41 @@ async fn final_step_produces_the_config_block_with_three_accepted_values() {
     assert!(block.contains("Hz corner"), "{block}");
     let after = sched.choose(&id, Choice::Rung(0)).await;
     assert!(matches!(after, Err(TuneError::OutOfOrder(_))));
+}
+
+/// The value on the `key: value` line of a config block.
+fn block_value(block: &str, key: &str) -> i32 {
+    block
+        .lines()
+        .find_map(|l| l.strip_prefix(&format!("{key}: ")))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("{key} missing from\n{block}"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tune_with_no_chosen_value_has_no_block() {
+    let rig = rig().await;
+    let sched = scheduler(&rig);
+    let id = first_step_done(&rig, &sched).await;
+
+    assert_eq!(sched.config_block(&id), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_abandoned_tune_keeps_its_partial_block() {
+    let rig = rig().await;
+    rig.a.sim(|s| {
+        s.lag_by_velocity_p.insert(1060, 40);
+    });
+    let sched = scheduler(&rig);
+    let id = first_step_done(&rig, &sched).await;
+    sched.choose(&id, Choice::Rung(0)).await.unwrap();
+
+    sched.abandon(&id).await.unwrap();
+
+    let block = sched.config_block(&id).unwrap();
+    assert_eq!(block_value(&block, "pid_velocity_p"), 1060);
 }
 
 async fn finished_tune(rig: &Rig, sched: &TuneScheduler<MoonrakerClient>) -> TuneId {

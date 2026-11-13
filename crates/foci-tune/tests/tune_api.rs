@@ -374,7 +374,7 @@ async fn a_listed_session_names_the_tune_and_step_it_belongs_to_or_none() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn omitted_rungs_survive_a_reload_and_the_block_waits_for_all_steps() {
+async fn omitted_rungs_survive_a_reload_and_the_block_follows_the_first_choice() {
     let rig = rig().await;
     let (app, _) = app(&rig);
     let id = create(&app).await;
@@ -400,7 +400,8 @@ async fn omitted_rungs_survive_a_reload_and_the_block_waits_for_all_steps() {
     assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.error());
     let detail = get(&app, &format!("/api/tunes/{id}")).await.json();
     assert_eq!(detail["state"], json!("Ready"));
-    assert_eq!(detail["config_block"], Value::Null);
+    let block = detail["config_block"].as_str().unwrap();
+    assert!(block.starts_with("[foci stepper_x]"), "{block}");
     let listed = get(&app, "/api/tunes").await.json();
     assert_eq!(listed[0]["id"], json!(id));
     assert_eq!(listed[0]["stepper"], "stepper_x");

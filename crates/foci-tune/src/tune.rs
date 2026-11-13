@@ -1500,22 +1500,27 @@ impl<M: MoonrakerApi + 'static> TuneScheduler<M> {
         Ok(recovered)
     }
 
-    /// The `[foci <stepper>]` block with the three chosen values and the snapshot's other
-    /// gains and filters; `None` until every step has a chosen value.
+    /// The `[foci <stepper>]` block with every chosen value laid over the snapshot's gains and
+    /// its filters, so a gain that was not tuned keeps its starting value; `None` until one
+    /// step has a chosen value.
     pub fn config_block(&self, tune: &TuneId) -> Option<String> {
         let record = self.shared.read(tune).ok()?;
-        let [velocity_p, velocity_i, position_p] = match record.steps.as_slice() {
-            [p, i, pos] => [p.chosen?, i.chosen?, pos.chosen?],
-            _ => return None,
-        };
+        if record.steps.iter().all(|step| step.chosen.is_none()) {
+            return None;
+        }
         let (snapshot_gains, filters) = record.snapshot;
-        let gains = Gains {
-            velocity_p,
-            velocity_i,
-            position_p,
-            ..snapshot_gains
-        };
-        let pwm_hz = Some(record.steps[1].pwm_hz).filter(|&hz| hz > 0);
+        let gains = record
+            .steps
+            .iter()
+            .filter_map(|step| step.chosen.map(|raw| (step.axis, raw)))
+            .fold(snapshot_gains, |gains, (axis, raw)| {
+                with_axis(gains, axis, raw)
+            });
+        let pwm_hz = record
+            .steps
+            .iter()
+            .map(|step| step.pwm_hz)
+            .find(|&hz| hz > 0);
         Some(config_block::render(
             &record.setup.stepper,
             &gains,
